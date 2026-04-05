@@ -1,0 +1,27 @@
+from typing import Final, Set, Tuple
+import re
+
+# -------------------------- 高危操作配置 --------------------------
+HIGH_RISK_MODULES: Final[Set[str]] = {
+    "os", "subprocess", "commands", "socket", "requests", "urllib", "sys", "builtins",
+    "multiprocessing", "threading", "shutil", "pwd", "grp", "posix", "importlib", "pty"
+}
+HIGH_RISK_BUILTINS: Final[Set[str]] = {
+    "eval", "exec", "compile", "open", "__import__",
+    "globals", "locals", "vars", "breakpoint",
+    "memoryview", "bytearray"
+} 
+HIGH_RISK_METHODS: Final[Set[Tuple[str, str]]] = {
+    ("os", "system"), ("os", "popen"), ("os", "spawnl"), ("os", "spawnv"),
+    ("os", "remove"), ("os", "unlink"), ("os", "rmdir"), ("os", "removedirs"),
+    ("os", "mkdir"), ("os", "makedirs"), ("os", "rename"), ("os", "replace"),
+    ("os", "chmod"), ("os", "chown"), ("os", "chroot"), ("os", "setuid"),
+    ("os", "setgid"), ("os", "environ"), ("os", "getenv"), ("os", "uname"),
+    ("subprocess", "Popen"), ("subprocess", "run"), ("subprocess", "call"),
+    ("subprocess", "check_call"), ("subprocess", "check_output"),
+    ("shutil", "rmtree"), ("shutil", "copy"), ("shutil", "move"), ("shutil", "chown"),
+    ("importlib", "import_module"), ("importlib", "__import__"),
+}
+
+# 租户id格式
+TENANT_ID_PATTERN: Final[re.Pattern] = re.compile(r"^[a-zA-Z0-9_\-]+$")

@@ -1,0 +1,28 @@
+model_list:
+  - model_name: fast_model
+    litellm_params:
+      model: openai/qwen-turbo
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+      temperature: 0.1
+
+  - model_name: reasoning_model
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+      temperature: 0.2
+
+  - model_name: coder_model
+    litellm_params:
+      model: openai/qwen-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+      temperature: 0.0
+
+  - model_name: embedding_model
+    litellm_params:
+      model: openai/text-embedding-v4
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key: os.environ/DASHSCOPE_API_KEY
+      dimensions: 1536

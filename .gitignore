@@ -1,0 +1,126 @@
+# ==========================================
+# Python build / packaging
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+site/
+downloads/
+sdist/
+var/
+wheels/
+share/python-wheels/
+develop-eggs/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+pip-wheel-metadata/
+*.egg
+*.egg-info/
+.installed.cfg
+MANIFEST
+.codex
+项目二.md
+
+# ==========================================
+# Virtualenv / local Python runtime
+# ==========================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# ==========================================
+# Environment files
+# Keep templates tracked; ignore real local secrets strictly.
+# ==========================================
+.env
+.env.local
+.env.*
+!.env.example
+.envrc
+.direnv/
+
+# ==========================================
+# IDE / editor / OS noise
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Test / coverage / lint / type-check caches
+# ==========================================
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+test-report.xml
+
+# ==========================================
+# Runtime logs / local state / notebooks
+# ==========================================
+*.log
+*.pid
+*.err
+*.tmp
+*.temp
+logs/
+.omx/
+.cache/
+.ipynb_checkpoints/
+
+# ==========================================
+# Local data, databases, and temporary artifacts
+# ==========================================
+data/
+data_test/
+examples/data/
+examples/data_test/
+dbs/
+local_cache/
+tmp/
+temp/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ==========================================
+# Project-local caches / generated JSON artifacts
+# ==========================================
+*_cache.json
+*_cache.jsonl
+vlm_cache.json
+embedding_cache.json
+processed_hashes.json
+page_heavy_data.json
+global_alias_map.json
+sidecar.json
+
+# ==========================================
+# Frontend / misc tool caches
+# ==========================================
+node_modules/
+.streamlit/

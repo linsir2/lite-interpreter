@@ -1,0 +1,154 @@
+"""全局基础配置"""
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from typing import Final, List
+import socket
+load_dotenv()
+
+
+def _env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value if value else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    if not raw:
+        return default
+    return int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    if not raw:
+        return default
+    return float(raw)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    raw = raw.strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+# 项目基础配置
+PROJECT_ROOT = Path(__file__).parent.parent
+LITELLM_CONFIG_PATH = PROJECT_ROOT / "litellm_config.yml"
+HARNESS_POLICY_PATH = PROJECT_ROOT / "config" / "harness_policy.yaml"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+PROMETHEUS_PORT = _env_int("PROMETHEUS_PORT", 8000)
+DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
+LOG_MAX_LENGTH: Final[int] = 10 * 1024 * 1024  # 日志最大长度10MB
+STRICT_PERSISTENCE: Final[bool] = _env_bool("STRICT_PERSISTENCE", False)
+TASK_LEASE_TTL_SECONDS: Final[int] = _env_int("TASK_LEASE_TTL_SECONDS", 60)
+TASK_LEASE_HEARTBEAT_SECONDS: Final[int] = _env_int("TASK_LEASE_HEARTBEAT_SECONDS", 20)
+TASK_SCHEDULER_INSTANCE_ID: Final[str] = _env_str(
+    "TASK_SCHEDULER_INSTANCE_ID",
+    f"{socket.gethostname()}:{os.getpid()}",
+)
+
+# 数据与模型缓存目录 (本地沙箱执行时使用)
+DATA_DIR = PROJECT_ROOT / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
+OUTPUT_DIR = DATA_DIR / "outputs"
+
+# Dynamic engine / DeerFlow integration
+# DeerFlow is expected to be installed as a Python package such as
+# the `deerflow` package built from DeerFlow's official harness source, not
+# vendored into this repository.
+DEERFLOW_CLIENT_MODULE = os.getenv("DEERFLOW_CLIENT_MODULE", "deerflow.client").strip()
+DEERFLOW_RUNTIME_MODE = _env_str("DEERFLOW_RUNTIME_MODE", "auto")
+DEERFLOW_SIDECAR_URL = _env_str("DEERFLOW_SIDECAR_URL", "")
+DEERFLOW_SIDECAR_TIMEOUT = _env_int("DEERFLOW_SIDECAR_TIMEOUT", 300)
+DEERFLOW_CONFIG_PATH = _env_str("DEERFLOW_CONFIG_PATH", "")
+DEERFLOW_MODEL_NAME = _env_str("DEERFLOW_MODEL_NAME", "")
+DEERFLOW_MAX_EVENTS = _env_int("DEERFLOW_MAX_EVENTS", 64)
+DEERFLOW_MAX_STEPS = _env_int("DEERFLOW_MAX_STEPS", 6)
+DEERFLOW_RECURSION_LIMIT = _env_int("DEERFLOW_RECURSION_LIMIT", 32)
+
+# 存储层
+# Postgres 关系型数据库
+POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres123")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = _env_str("POSTGRES_PORT", "5432")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "kag_db")
+POSTGRES_URI = os.getenv(
+    "POSTGRES_URI", 
+    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+
+# Neo4j 图数据库
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password123")
+
+# Qdrant 向量数据库
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = _env_int("QDRANT_PORT", 6333)
+
+# Chunk 切分控制
+CHUNK_SIZE: Final[int] = _env_int("CHUNK_SIZE", 800)
+CHUNK_OVERLAP: Final[int] = _env_int("CHUNK_OVERLAP", 150)
+
+# 向量维度 (依赖于你使用的 Embedding 模型，如 BGE-m3 设为 1024，OpenAI 设为 1536)
+EMBEDDING_DIM: Final[int] = _env_int("EMBEDDING_DIM", 1536)
+
+# Classifier 分流阈值
+# 大概是一个chunk分块的大小，检索得来的文段都会进行compress，而small模式下的单chunk也包含在内
+CLASSIFIER_SMALL_THRESHOLD = _env_int("CLASSIFIER_SMALL_THRESHOLD", 1500)
+CLASSIFIER_MEDIUM_THRESHOLD = _env_int("CLASSIFIER_MEDIUM_THRESHOLD", 50000)
+
+# ==========================================
+# DAG 与执行引擎配置
+# ==========================================
+MAX_RETRIES: Final[int] = _env_int("MAX_RETRIES", 3) # 节点间允许的最大容错回退次数
+CONTEXT_BUDGET_TOKENS: Final[int] = _env_int("CONTEXT_BUDGET_TOKENS", 4000) # 喂给 Coder 的上下文 Token 预算上限
+
+# ==========================================
+# KAG 模块配置
+# ==========================================
+
+# 向量化配置
+MRL_DIMENSION: Final[int] = _env_int("MRL_DIMENSION", 256)  # MRL降维后的向量维度
+EMBEDDING_MODEL_NAME: Final[str] = os.getenv("EMBEDDING_MODEL_NAME", "embedding_model")  # LiteLLM embedding alias
+EMBEDDING_BATCH_SIZE: Final[int] = _env_int("EMBEDDING_BATCH_SIZE", 32)  # 批量处理大小
+
+# 图谱抽取配置
+EXTRACTION_MODEL_NAME: Final[str] = os.getenv("EXTRACTION_MODEL_NAME", "reasoning_model")  # 实体关系抽取模型别名
+GRAPH_TYPES: Final[List[str]] = os.getenv("GRAPH_TYPES", "semantic,temporal,causal,entity").split(",")  # MAGMA图谱类型
+
+# 分块策略配置
+PARENT_CHUNK_SIZE: Final[int] = _env_int("PARENT_CHUNK_SIZE", 2000)  # 父块大小
+
+# Context模块配置
+CONTEXT_MAX_TOKENS: Final[int] = _env_int("CONTEXT_MAX_TOKENS", 4000)  # 上下文最大Token数
+COMPRESSION_RATIO: Final[float] = _env_float("COMPRESSION_RATIO", 0.3)  # 压缩比例
+SELECTION_STRATEGY: Final[str] = os.getenv("SELECTION_STRATEGY", "rrf")  # 选择策略
+FORMAT_TEMPLATE: Final[str] = os.getenv("FORMAT_TEMPLATE", "structured")  # 格式化模板
+CONTEXT_MODEL_NAME: Final[str] = _env_str("CONTEXT_MODEL_NAME", "reasoning_model")
+
+# 检索配置
+BM25_TOP_K: Final[int] = _env_int("BM25_TOP_K", 20)  # BM25召回数量
+VECTOR_TOP_K: Final[int] = _env_int("VECTOR_TOP_K", 20)  # 向量召回数量
+GRAPH_TOP_K: Final[int] = _env_int("GRAPH_TOP_K", 10)  # 图谱召回数量
+HYBRID_RRF_K: Final[int] = _env_int("HYBRID_RRF_K", 60)  # RRF融合数量
+RERANK_TOP_K: Final[int] = _env_int("RERANK_TOP_K", 15)  # 重排序后保留数量
+
+# 监控配置
+LANGFUSE_HOST: Final[str] = os.getenv("LANGFUSE_HOST", "http://localhost:3000")  # Langfuse服务地址
+LANGFUSE_PUBLIC_KEY: Final[str] = os.getenv("LANGFUSE_PUBLIC_KEY", "")  # Langfuse公钥
+LANGFUSE_SECRET_KEY: Final[str] = os.getenv("LANGFUSE_SECRET_KEY", "")  # Langfuse私钥

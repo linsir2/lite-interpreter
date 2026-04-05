@@ -1,0 +1,23 @@
+[project]
+name = "lite-interpreter"
+version = "0.1.0"
+description = "Production-oriented data intelligence agent runtime prototype"
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests", "scripts", "config"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 120
+target-version = ["py312"]

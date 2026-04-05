@@ -1,0 +1,56 @@
+mode: standard
+default_dynamic_profile: researcher
+risk_thresholds:
+  medium: 0.35
+  high: 0.7
+profiles:
+  planner:
+    allowed_tools: []
+    network_access: none
+    host_bash_access: forbidden
+    sandbox_execute: false
+  researcher:
+    allowed_tools:
+      - web_search
+      - web_fetch
+      - knowledge_query
+    network_access: tool-mediated-only
+    host_bash_access: forbidden
+    sandbox_execute: false
+  executor:
+    allowed_tools:
+      - knowledge_query
+      - sandbox_exec
+      - state_sync
+    network_access: tool-mediated-only
+    host_bash_access: forbidden
+    sandbox_execute: true
+  reviewer:
+    allowed_tools:
+      - knowledge_query
+      - state_sync
+    network_access: none
+    host_bash_access: forbidden
+    sandbox_execute: false
+redaction_rules: # 脱敏规则
+  - api_key
+  - access_token
+  - authorization
+dynamic:
+  max_steps: 6
+  allow_unknown_tools: false
+sandbox:
+  require_policy_check: true
+  max_code_chars: 153600
+  deny_patterns:
+    - "__import__('os')"
+    - "subprocess.Popen"
+docling:
+  pdf:
+    enable_ocr_for_scanned: true
+    scanned_text_chars_per_page_threshold: 120
+    scanned_image_count_threshold: 1
+    enable_picture_description: false
+    enable_picture_description_for_image_heavy: true
+    image_heavy_count_threshold: 3
+    generate_picture_images: false
