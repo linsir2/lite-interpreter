@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
 
 
 class KeywordReranker:
@@ -13,7 +12,7 @@ class KeywordReranker:
         return float(sum(lowered_text.count(keyword) for keyword in keywords))
 
 
-def cross_encoder_rerank(query: str, candidates: List[Dict[str, object]], top_k: int = 15) -> List[Dict[str, object]]:
+def cross_encoder_rerank(query: str, candidates: list[dict[str, object]], top_k: int = 15) -> list[dict[str, object]]:
     rescored = []
     for candidate in candidates:
         text = str(candidate.get("text", ""))

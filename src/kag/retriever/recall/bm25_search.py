@@ -1,11 +1,11 @@
 """基于 PG 真相源的稀疏文本召回。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from src.storage.repository.knowledge_repo import KnowledgeRepo
-from .filters import extract_query_terms, normalize_filters
 
+from .filters import extract_query_terms, normalize_filters
 
 DEFAULT_WORKSPACE = "default_ws"
 
@@ -13,10 +13,10 @@ DEFAULT_WORKSPACE = "default_ws"
 def recall(
     query: str,
     tenant_id: str,
-    filters: Optional[Dict[str, Any]] = None,
+    filters: dict[str, Any] | None = None,
     workspace_id: str = DEFAULT_WORKSPACE,
     top_k: int = 20,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     terms = extract_query_terms(query)
     results = KnowledgeRepo.search_text_chunks(
         tenant_id=tenant_id,

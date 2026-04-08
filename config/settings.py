@@ -1,9 +1,12 @@
 """全局基础配置"""
+import json
 import os
-from pathlib import Path
-from dotenv import load_dotenv
-from typing import Final, List
 import socket
+from pathlib import Path
+from typing import Final
+
+from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -35,6 +38,24 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
+def _env_csv(name: str, default: str = "") -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        raw = default
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
+
+
+def _env_json_mapping(name: str) -> dict[str, object]:
+    raw = os.getenv(name)
+    if raw is None:
+        return {}
+    raw = raw.strip()
+    if not raw:
+        return {}
+    payload = json.loads(raw)
+    return payload if isinstance(payload, dict) else {}
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -47,7 +68,12 @@ def _env_bool(name: str, default: bool) -> bool:
 # 项目基础配置
 PROJECT_ROOT = Path(__file__).parent.parent
 LITELLM_CONFIG_PATH = PROJECT_ROOT / "litellm_config.yml"
-HARNESS_POLICY_PATH = PROJECT_ROOT / "config" / "harness_policy.yaml"
+HARNESS_POLICY_PATH = Path(
+    _env_str("HARNESS_POLICY_PATH", str(PROJECT_ROOT / "config" / "harness_policy.yaml"))
+)
+ANALYSIS_RUNTIME_POLICY_PATH = Path(
+    _env_str("ANALYSIS_RUNTIME_POLICY_PATH", str(PROJECT_ROOT / "config" / "analysis_runtime.yaml"))
+)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PROMETHEUS_PORT = _env_int("PROMETHEUS_PORT", 8000)
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -59,6 +85,22 @@ TASK_SCHEDULER_INSTANCE_ID: Final[str] = _env_str(
     "TASK_SCHEDULER_INSTANCE_ID",
     f"{socket.gethostname()}:{os.getpid()}",
 )
+# 任务流执行池大小：
+# - 用于承载整个同步 DAG 链路（data inspector / kag retriever / sandbox exec 等）
+# - 故意与 asyncio 默认线程池隔离，避免重任务把其他轻量 to_thread 回退路径挤满
+TASK_FLOW_MAX_WORKERS: Final[int] = _env_int("TASK_FLOW_MAX_WORKERS", 4)
+API_ALLOW_ORIGINS: Final[list[str]] = _env_csv(
+    "API_ALLOW_ORIGINS",
+    "http://127.0.0.1:8501,http://localhost:8501",
+)
+API_ENABLE_POLICY_API: Final[bool] = _env_bool("API_ENABLE_POLICY_API", False)
+API_ENABLE_DEMO_TRACE: Final[bool] = _env_bool("API_ENABLE_DEMO_TRACE", False)
+API_ENABLE_DIAGNOSTICS: Final[bool] = _env_bool("API_ENABLE_DIAGNOSTICS", False)
+API_AUTH_REQUIRED: Final[bool] = _env_bool("API_AUTH_REQUIRED", False)
+API_AUTH_TOKENS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_TOKENS_JSON")
+API_AUTH_USERS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_USERS_JSON")
+API_SESSION_SECRET: Final[str] = _env_str("API_SESSION_SECRET", "lite-interpreter-dev-session-secret")
+API_SESSION_TTL_SECONDS: Final[int] = _env_int("API_SESSION_TTL_SECONDS", 43200)
 
 # 数据与模型缓存目录 (本地沙箱执行时使用)
 DATA_DIR = PROJECT_ROOT / "data"
@@ -129,7 +171,7 @@ EMBEDDING_BATCH_SIZE: Final[int] = _env_int("EMBEDDING_BATCH_SIZE", 32)  # 批�
 
 # 图谱抽取配置
 EXTRACTION_MODEL_NAME: Final[str] = os.getenv("EXTRACTION_MODEL_NAME", "reasoning_model")  # 实体关系抽取模型别名
-GRAPH_TYPES: Final[List[str]] = os.getenv("GRAPH_TYPES", "semantic,temporal,causal,entity").split(",")  # MAGMA图谱类型
+GRAPH_TYPES: Final[list[str]] = os.getenv("GRAPH_TYPES", "semantic,temporal,causal,entity").split(",")  # MAGMA图谱类型
 
 # 分块策略配置
 PARENT_CHUNK_SIZE: Final[int] = _env_int("PARENT_CHUNK_SIZE", 2000)  # 父块大小

@@ -1,7 +1,6 @@
 """Prompt templates used by the data inspector."""
 from __future__ import annotations
 
-
 DATA_INSPECTOR_SYSTEM_PROMPT = (
     "你是数据文件结构探查助手。"
     "你的职责是根据损坏或复杂的文件头文本，推断真实表结构，并给出可执行的 Pandas 读取建议。"

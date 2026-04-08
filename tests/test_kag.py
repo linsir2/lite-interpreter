@@ -1,16 +1,15 @@
-import tempfile
-from pathlib import Path
 
-from src.common import EvidencePacket
-from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.execution_blackboard import execution_blackboard
+from src.blackboard.global_blackboard import global_blackboard
+from src.blackboard.knowledge_blackboard import knowledge_blackboard
 from src.blackboard.schema import ExecutionData, RetrievalPlan
+from src.common import EvidencePacket
 from src.dag_engine.nodes.context_builder_node import context_builder_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
 from src.kag.builder.classifier import DocProcessClass, DocumentClassifier
 from src.kag.builder.orchestrator import KagBuilderOrchestrator
 from src.kag.builder.parser import DocumentParser
-from src.kag.retriever.query_engine import QueryEngine
+from src.kag.retriever.query_engine import QueryEngine, is_keyword_query
 from src.mcp_gateway.tools.knowledge_query_tool import KnowledgeQueryTool
 from src.storage.schema import ParsedDocument
 
@@ -87,6 +86,10 @@ def test_query_engine_returns_evidence_packet(monkeypatch):
     assert packet.recall_strategies == ["bm25"]
 
 
+def test_is_keyword_query_rejects_long_chinese_question_without_spaces():
+    assert is_keyword_query("马斯克的火星计划是哪一年开始的呀为什么他这么执着") is False
+
+
 def test_knowledge_query_tool_returns_evidence_packet(monkeypatch):
     monkeypatch.setattr(
         "src.kag.retriever.query_engine.QueryEngine.execute_with_evidence",
@@ -130,9 +133,13 @@ def test_context_builder_writes_business_context():
 
     assert result["next_actions"] == ["analyst"]
     assert updated is not None
-    assert updated.business_context["rules"]
-    assert updated.business_context["metrics"]
+    assert updated.knowledge.business_context.rules
+    assert updated.knowledge.business_context.metrics
+    assert updated.knowledge.analysis_brief.business_rules
+    assert updated.knowledge.analysis_brief.business_metrics
     assert result["knowledge_snapshot"]["metadata"]["selected_count"] >= 1
+    assert result["analysis_brief"]["analysis_mode"] == "document_rule_analysis"
+    assert tuple(result["knowledge_snapshot"]["metadata"]["pinned_evidence_refs"]) == ("c1", "c2")
 
 
 def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
@@ -144,7 +151,8 @@ def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
         ExecutionData(
             task_id=task_id,
             tenant_id=tenant_id,
-            knowledge_snapshot={
+            knowledge={
+                "knowledge_snapshot": {
                 "hits": [
                     {
                         "chunk_id": "c9",
@@ -155,6 +163,7 @@ def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
                     }
                 ],
                 "evidence_refs": ["c9"],
+                },
             },
         ),
     )
@@ -185,7 +194,9 @@ def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
     updated = execution_blackboard.read(tenant_id, task_id)
     assert "合同必须上传" in result["refined_context"]
     assert updated is not None
-    assert updated.business_context_refs == ["c9"]
+    assert updated.knowledge.knowledge_snapshot.evidence_refs == ["c9"]
+    assert updated.knowledge.analysis_brief.evidence_refs == ["c9"]
+    assert result["analysis_brief"]["evidence_refs"] == ["c9"]
 
 
 def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
@@ -220,9 +231,113 @@ def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
         }
     )
     updated = execution_blackboard.read(tenant_id, task_id)
+    knowledge_state = knowledge_blackboard.read(tenant_id, task_id)
     assert result["knowledge_snapshot"]["evidence_refs"] == ["chunk-9"]
     assert updated is not None
-    assert updated.knowledge_snapshot["evidence_refs"] == ["chunk-9"]
+    assert updated.knowledge.knowledge_snapshot.evidence_refs == ["chunk-9"]
+    assert knowledge_state is not None
+    assert knowledge_state.latest_retrieval_snapshot.evidence_refs == ["chunk-9"]
+
+
+def test_kag_retriever_persists_document_progress_incrementally(monkeypatch, tmp_path):
+    tenant_id = "tenant_snapshot_incremental"
+    task_id = global_blackboard.create_task(tenant_id, "ws", "规则")
+    first_doc = tmp_path / "rule-a.txt"
+    second_doc = tmp_path / "rule-b.txt"
+    first_doc.write_text("规则A", encoding="utf-8")
+    second_doc.write_text("规则B", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws",
+            inputs={"business_documents": [
+                {"file_name": "rule-a.txt", "path": str(first_doc), "status": "pending"},
+                {"file_name": "rule-b.txt", "path": str(second_doc), "status": "pending"},
+            ]},
+        ),
+    )
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.kag.retriever.query_engine.QueryEngine.execute_with_evidence",
+        lambda *args, **kwargs: EvidencePacket(
+            query="规则",
+            rewritten_query="规则",
+            tenant_id=tenant_id,
+            workspace_id="ws",
+            hits=[],
+            evidence_refs=[],
+            recall_strategies=["bm25", "splade"],
+            metadata={"selected_count": 0},
+        ),
+    )
+
+    call_index = {"value": 0}
+
+    def fake_ingest(doc_paths, tenant_id, workspace_id="default_ws"):
+        call_index["value"] += 1
+        if call_index["value"] == 1:
+            return [{"file_name": "rule-a.txt", "parse_mode": "default", "parser_diagnostics": {}}]
+        raise RuntimeError("second document failed")
+
+    monkeypatch.setattr("src.kag.builder.orchestrator.KagBuilderOrchestrator.ingest_documents", fake_ingest)
+
+    kag_retriever_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws",
+            "input_query": "规则",
+        }
+    )
+
+    updated = execution_blackboard.read(tenant_id, task_id)
+    assert updated is not None
+    assert updated.inputs.business_documents[0].status == "parsed"
+    assert updated.inputs.business_documents[1].status == "pending"
+
+
+def test_kag_retriever_blocks_when_new_document_ingest_fails(monkeypatch, tmp_path):
+    tenant_id = "tenant_snapshot_block"
+    task_id = global_blackboard.create_task(tenant_id, "ws", "规则")
+    failed_doc = tmp_path / "rule-fail.txt"
+    failed_doc.write_text("规则", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws",
+            inputs={"business_documents": [
+                {"file_name": "rule-fail.txt", "path": str(failed_doc), "status": "pending"},
+            ]},
+        ),
+    )
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.kag.builder.orchestrator.KagBuilderOrchestrator.ingest_documents",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ingest failed")),
+    )
+
+    result = kag_retriever_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws",
+            "input_query": "规则",
+        }
+    )
+
+    assert result["blocked"] is True
+    assert result["next_actions"] == ["wait_for_human"]
+    task_state = global_blackboard.get_task_state(task_id)
+    assert task_state.global_status == "waiting_for_human"
+    assert task_state.failure_type == "knowledge_ingestion"
 
 
 def test_context_builder_applies_final_budget_fit(monkeypatch):
@@ -251,6 +366,7 @@ def test_context_builder_applies_final_budget_fit(monkeypatch):
     result = context_builder_node(state)
     assert "规则一" in result["refined_context"]
     assert "规则二" not in result["refined_context"]
+    assert result["knowledge_snapshot"]["metadata"]["dropped_candidate_count"] == 1
 
 
 def test_document_parser_returns_typed_document(tmp_path):

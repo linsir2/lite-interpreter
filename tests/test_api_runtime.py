@@ -4,9 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from starlette.requests import Request
-
 from src.api.routers.runtime_router import get_runtime_capabilities, list_runtimes
+from starlette.requests import Request
 
 
 def _make_request(path: str, runtime_id: str | None = None) -> Request:

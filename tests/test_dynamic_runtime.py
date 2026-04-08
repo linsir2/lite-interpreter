@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.common import CapabilityDomainManifest, RuntimeCapabilityManifest
+from src.dynamic_engine.runtime_backends import build_deerflow_runtime_manifest
 from src.dynamic_engine.runtime_gateway import RuntimeGateway
 from src.dynamic_engine.runtime_registry import RuntimeRegistry
-from src.dynamic_engine.runtime_backends import build_deerflow_runtime_manifest
 from src.dynamic_engine.supervisor import DynamicSupervisor
 from src.dynamic_engine.trace_normalizer import TraceNormalizer
 
@@ -45,6 +45,85 @@ def test_dynamic_supervisor_builds_denied_patch_for_unknown_tools():
     assert plan.governance_decision.allowed is False
     assert denied_patch["dynamic_status"] == "denied"
     assert denied_patch["execution_intent"].intent == "dynamic_flow"
+
+
+def test_dynamic_supervisor_context_prefers_execution_state_snapshot_and_history():
+    plan = DynamicSupervisor.prepare(
+        {
+            "tenant_id": "tenant-context",
+            "task_id": "task-context",
+            "workspace_id": "ws-context",
+            "input_query": "自己找数据并验证结论",
+            "routing_mode": "dynamic",
+        },
+        {
+            "task_envelope": {
+                "task_id": "task-context",
+                "tenant_id": "tenant-context",
+                "workspace_id": "ws-context",
+                "input_query": "自己找数据并验证结论",
+                "governance_profile": "reviewer",
+                "allowed_tools": ["knowledge_query"],
+                "redaction_rules": ["foo@example.com"],
+                "max_dynamic_steps": 9,
+                "metadata": {"routing_mode": "dynamic", "runtime_backend": "deerflow"},
+            },
+            "knowledge_snapshot": {
+                "rewritten_query": "验证 结论",
+                "evidence_refs": ["chunk-9"],
+            },
+            "decision_log": [
+                {
+                    "action": "dynamic_precheck",
+                    "profile": "reviewer",
+                    "mode": "standard",
+                    "allowed": True,
+                    "risk_level": "low",
+                    "risk_score": 0.1,
+                    "reasons": ["previous decision"],
+                    "allowed_tools": ["knowledge_query"],
+                }
+            ],
+        },
+    )
+
+    assert plan.context_envelope is not None
+    assert plan.task_envelope.governance_profile == "reviewer"
+    assert plan.task_envelope.allowed_tools == ["knowledge_query"]
+    assert plan.task_envelope.max_dynamic_steps == 9
+    assert plan.context_envelope.knowledge_snapshot["evidence_refs"] == ["chunk-9"]
+    assert plan.context_envelope.memory_snapshot["task_id"] == "task-context"
+    assert len(plan.context_envelope.constraints["decision_log"]) == 2
+    assert plan.context_envelope.constraints["decision_log"][0]["reasons"] == ["previous decision"]
+
+
+def test_dynamic_supervisor_prefers_router_metadata_over_recomputed_profile():
+    plan = DynamicSupervisor.prepare(
+        {
+            "tenant_id": "tenant-runtime-inherit",
+            "task_id": "task-runtime-inherit",
+            "workspace_id": "ws-runtime-inherit",
+            "input_query": "分析销售数据并总结趋势",
+            "routing_mode": "dynamic",
+        },
+        {
+            "execution_intent": {
+                "intent": "dynamic_flow",
+                "destinations": ["dynamic_swarm"],
+                "metadata": {
+                    "analysis_mode": "dynamic_research_analysis",
+                    "evidence_strategy": "external_research",
+                    "effective_model_alias": "reasoning_model",
+                    "effective_tools": ["web_search"],
+                },
+            }
+        },
+    )
+
+    assert plan.request is not None
+    assert plan.request.metadata["analysis_mode"] == "dynamic_research_analysis"
+    assert plan.request.metadata["evidence_strategy"] == "external_research"
+    assert plan.request.metadata["effective_model_alias"] == "reasoning_model"
 
 
 def test_trace_normalizer_enriches_runtime_event():

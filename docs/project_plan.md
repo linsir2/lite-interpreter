@@ -20,9 +20,9 @@
 - 已形成 `DynamicSupervisor -> RuntimeGateway -> DeerflowBridge` 的动态执行分层
 - 已形成 `HarnessGovernor -> SandboxExecTool -> Docker Executor` 的执行治理边界
 - 已形成 `KAG Builder -> QueryEngine -> ContextBuilder` 的知识链路
-- 已形成 `SkillHarvester -> SkillPromoter -> SkillRepo` 的技能沉淀链路
+- 已形成 `SkillHarvester -> SkillPromoter -> MemoryRepo` 的技能沉淀链路
 - 已形成 `RuntimeCapabilityManifest` + runtime capability API
-- 已形成单一 `ExecutionEvent` 事件层，并移除了旧兼容分支
+- 已形成单一 `ExecutionEvent` 事件层
 - 已形成 execution / artifacts / tool-calls 资源层
 - 已形成 diagnostics / conformance API
 - 前端 `task_console` 已开始消费 executions / tool-calls API

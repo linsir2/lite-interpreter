@@ -4,7 +4,7 @@
 所有子黑板必须继承此类，实现固定接口
 """
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any
 
 
 class BaseSubBlackboard(ABC):
@@ -13,7 +13,7 @@ class BaseSubBlackboard(ABC):
     board_name: str
 
     @abstractmethod
-    def read(self, tenant_id: str, task_id: str) -> Optional[Any]:
+    def read(self, tenant_id: str, task_id: str) -> Any | None:
         """
         读数据，强制带租户ID做隔离
 

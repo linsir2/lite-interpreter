@@ -1,21 +1,22 @@
 """Skill harvesting node for both static and dynamic execution paths."""
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from src.blackboard.global_blackboard import global_blackboard
-from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import get_utc_now
+from src.common.control_plane import task_governance_profile
 from src.mcp_gateway import default_mcp_client
 from src.mcp_gateway.tools.state_sync_tool import StateSyncTool
+from src.memory import MemoryService
 from src.skillnet.skill_harvester import SkillHarvester
 from src.skillnet.skill_promoter import SkillPromoter
 from src.skillnet.skill_retriever import SkillRetriever
-from src.storage.repository.skill_repo import SkillRepo
 
 
-def skill_harvester_node(state: Mapping[str, Any]) -> Dict[str, Any]:
+def skill_harvester_node(state: Mapping[str, Any]) -> dict[str, Any]:
     tenant_id = str(state.get("tenant_id", ""))
     task_id = str(state.get("task_id", ""))
 
@@ -26,14 +27,15 @@ def skill_harvester_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     )
 
     patch = {
-        "dynamic_request": state.get("dynamic_request"),
-        "dynamic_status": state.get("dynamic_status"),
-        "dynamic_summary": state.get("dynamic_summary"),
-        "dynamic_trace": state.get("dynamic_trace"),
-        "dynamic_trace_refs": state.get("dynamic_trace_refs"),
-        "dynamic_artifacts": state.get("dynamic_artifacts"),
-        "recommended_static_skill": state.get("recommended_static_skill"),
-        "return_to_node": state.get("return_to_node"),
+        "dynamic": {
+            "request": state.get("dynamic_request"),
+            "status": state.get("dynamic_status"),
+            "summary": state.get("dynamic_summary"),
+            "trace": state.get("dynamic_trace"),
+            "trace_refs": state.get("dynamic_trace_refs"),
+            "artifacts": state.get("dynamic_artifacts"),
+            "recommended_static_skill": state.get("recommended_static_skill"),
+        }
     }
     execution_data = StateSyncTool.sync_execution_patch(tenant_id, task_id, patch)
     harvested_candidates = SkillHarvester.harvest(execution_data)
@@ -44,8 +46,8 @@ def skill_harvester_node(state: Mapping[str, Any]) -> Dict[str, Any]:
             candidate_copy["authorization"] = default_mcp_client.call_tool(
                 "skill_auth",
                 {
-                    "skill": candidate_copy,
-                    "profile_name": execution_data.governance_profile or "reviewer",
+                "skill": candidate_copy,
+                    "profile_name": task_governance_profile(execution_data.control.task_envelope, "reviewer"),
                 },
                 context={"tenant_id": tenant_id, "task_id": task_id, "workspace_id": execution_data.workspace_id},
             )
@@ -68,20 +70,12 @@ def skill_harvester_node(state: Mapping[str, Any]) -> Dict[str, Any]:
             descriptor.to_payload()
             for descriptor in SkillRetriever.filter_approved(authorized_candidates)
         ]
-        SkillRepo.save_approved_skills(tenant_id, execution_data.workspace_id, approved_skills)
-        execution_data = StateSyncTool.sync_execution_patch(
-            tenant_id,
-            task_id,
-            {
-                "harvested_skill_candidates": authorized_candidates,
-                "approved_skills": approved_skills,
-            },
+        MemoryService.store_harvest_result(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id=execution_data.workspace_id,
+            harvested_candidates=authorized_candidates,
+            approved_skills=approved_skills,
         )
 
-    execution_blackboard.write(tenant_id, task_id, execution_data)
-    execution_blackboard.persist(tenant_id, task_id)
-
-    return {
-        "harvested_skill_candidates": execution_data.harvested_skill_candidates,
-        "approved_skills": execution_data.approved_skills,
-    }
+    return {}

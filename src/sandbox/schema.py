@@ -1,24 +1,27 @@
-from typing import Optional
+
 from pydantic import BaseModel
 
 from src.common.contracts import ExecutionRecord
+
 
 class AuditResult(BaseModel): 
     """审计结果类型注解"""
     safe: bool
     reason: str
-    risk_type: Optional[str] = None
+    risk_type: str | None = None
+    source_layer: str | None = None
+    source_config: str | None = None
     trace_id: str
     duration_seconds: float
 
 class SandboxResult(BaseModel):
     success: bool
-    output: Optional[str] = None
-    error: Optional[str] = None
+    output: str | None = None
+    error: str | None = None
     trace_id: str
     duration_seconds: float
     tenant_id: str
-    artifacts_dir: Optional[str] = None
-    mounted_inputs: Optional[list[dict]] = None
-    governance: Optional[dict] = None
-    execution_record: Optional[ExecutionRecord] = None
+    artifacts_dir: str | None = None
+    mounted_inputs: list[dict] | None = None
+    governance: dict | None = None
+    execution_record: ExecutionRecord | None = None

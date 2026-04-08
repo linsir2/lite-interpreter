@@ -1,7 +1,8 @@
 """Pluggable runtime backend definitions for dynamic execution."""
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable, Any, Callable
+from collections.abc import Callable
+from typing import Any, Protocol, runtime_checkable
 
 from src.common import CapabilityDomainManifest, CapabilityOperation, RuntimeCapabilityManifest
 from src.dynamic_engine.deerflow_bridge import DeerflowBridge, DeerflowRuntimeConfig

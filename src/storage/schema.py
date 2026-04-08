@@ -4,10 +4,13 @@ src/storage/schema.py
 
 职责：规定上层业务实体必须转化为以下标准结构，才能交由 Storage 层入库。
 """
-from typing import Dict, Any, List, Optional
-from src.common import get_utc_now
-from pydantic import BaseModel, Field
 from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from src.common.utils import get_utc_now
+
 
 # 文本块存储模型，存入postgres，vectordb只存向量与metadata，专门负责检索，postgres负责存储文本
 class DocChunk(BaseModel):
@@ -16,7 +19,7 @@ class DocChunk(BaseModel):
     content: str = Field(description="纯文本切片内容")
     
     created_at: datetime = Field(default_factory=get_utc_now, description="入库时间戳")
-    metadata: Dict[str, Any] = Field(
+    metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="必须包含: file_name, upload_batch_id, author 等用于后续 Filter 过滤的溯源信息"
     )
@@ -48,7 +51,7 @@ class EntityNode(BaseModel):
     """图谱实体节点模型"""
     id: str = Field(description="实体的业务主键")
     label: str = Field(description="实体类型/标签")
-    properties: Dict[str, Any] = Field(default_factory=dict) # chunk_id啥的都在这里面
+    properties: dict[str, Any] = Field(default_factory=dict) # chunk_id啥的都在这里面
     created_at: datetime = Field(default_factory=get_utc_now)
 
 class KnowledgeTriple(BaseModel):
@@ -58,7 +61,7 @@ class KnowledgeTriple(BaseModel):
     relation: str 
     tail: str 
     tail_label: str 
-    properties: Dict[str, Any] = Field(default_factory=dict, description="边的属性")
+    properties: dict[str, Any] = Field(default_factory=dict, description="边的属性")
     # 🚀 【你的优化1】：图谱边也必须有时间戳，支持图谱的时间旅行查询（Temporal Graph）
     created_at: datetime = Field(default_factory=get_utc_now)
 
@@ -68,13 +71,13 @@ class StructuredDatasetMeta(BaseModel):
     original_file_name: str = Field(description="用户上传的原始文件名 (如 sales.csv)")
     db_table_name: str = Field(description="在数据库中实际映射的表名 (如 tenant_1_sales_20260327)")
     is_persisted: bool = Field(default=False, description="用户是否授权将其永久存入数据库")
-    expires_at: Optional[datetime] = Field(description="如果是临时数据，24小时后清理")
-    columns: List[str] = Field(description="表头字段名列表")
+    expires_at: datetime | None = Field(description="如果是临时数据，24小时后清理")
+    columns: list[str] = Field(description="表头字段名列表")
     created_at: datetime = Field(default_factory=get_utc_now)
 
     semantic_summary: str = Field(description="LLM自动生成的摘要（例：记录了2023年Q3上海厂区的所有发电机检修与故障数据）")
     time_coverage: str = Field(description="数据涵盖的时间范围（例：2023-07 至 2023-09）")
-    keywords: List[str] = Field(description="核心实体词（例：['发电机', '上海', 'Q3', '检修']）")
+    keywords: list[str] = Field(description="核心实体词（例：['发电机', '上海', 'Q3', '检修']）")
 
 
 class ParsedSection(BaseModel):
@@ -84,9 +87,9 @@ class ParsedSection(BaseModel):
     title: str = ""
     content: str = ""
     level: int = 1
-    start_page: Optional[int] = None
-    end_page: Optional[int] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    start_page: int | None = None
+    end_page: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParsedTable(BaseModel):
@@ -94,11 +97,11 @@ class ParsedTable(BaseModel):
 
     id: str
     title: str = ""
-    data: List[List[str]] = Field(default_factory=list)
+    data: list[list[str]] = Field(default_factory=list)
     rows: int = 0
     columns: int = 0
-    page: Optional[int] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    page: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParsedImage(BaseModel):
@@ -107,10 +110,10 @@ class ParsedImage(BaseModel):
     id: str
     caption: str = ""
     description: str = ""
-    page: Optional[int] = None
-    position: Dict[str, Any] = Field(default_factory=dict)
-    size: Dict[str, Any] = Field(default_factory=dict)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    page: int | None = None
+    position: dict[str, Any] = Field(default_factory=dict)
+    size: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ParsedDocument(BaseModel):
@@ -118,13 +121,13 @@ class ParsedDocument(BaseModel):
 
     doc_id: str
     content: str
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    sections: List[ParsedSection] = Field(default_factory=list)
-    tables: List[ParsedTable] = Field(default_factory=list)
-    images: List[ParsedImage] = Field(default_factory=list)
-    parser_diagnostics: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    sections: list[ParsedSection] = Field(default_factory=list)
+    tables: list[ParsedTable] = Field(default_factory=list)
+    images: list[ParsedImage] = Field(default_factory=list)
+    parser_diagnostics: dict[str, Any] = Field(default_factory=dict)
 
-    def build_knowledge_data(self, tenant_id: str, workspace_id: str = "default_ws") -> Dict[str, Any]:
+    def build_knowledge_data(self, tenant_id: str, workspace_id: str = "default_ws") -> dict[str, Any]:
         return {
             "tenant_id": tenant_id,
             "workspace_id": workspace_id,

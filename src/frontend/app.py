@@ -1,6 +1,7 @@
 """Streamlit entrypoint for lite-interpreter demo pages."""
 from __future__ import annotations
 
+from src.frontend.pages.audit_manager import render_audit_manager
 from src.frontend.pages.knowledge_manager import render_knowledge_manager
 from src.frontend.pages.skill_manager import render_skill_manager
 from src.frontend.pages.task_console import render_task_console
@@ -14,7 +15,7 @@ def main() -> None:
 
     page = st.sidebar.selectbox(
         "Page",
-        options=["Task Console", "Knowledge Manager", "Skill Manager"],
+        options=["Task Console", "Knowledge Manager", "Skill Manager", "Audit Manager"],
         index=0,
     )
     if page == "Knowledge Manager":
@@ -22,6 +23,9 @@ def main() -> None:
         return
     if page == "Skill Manager":
         render_skill_manager()
+        return
+    if page == "Audit Manager":
+        render_audit_manager()
         return
     render_task_console()
 

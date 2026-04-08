@@ -34,6 +34,16 @@
 - `DEERFLOW_RUNTIME_MODE`
 - `DEERFLOW_SIDECAR_URL`
 - `DEERFLOW_CONFIG_PATH`
+- `API_AUTH_REQUIRED`
+- `API_AUTH_TOKENS_JSON`
+- `API_AUTH_USERS_JSON`
+- `API_SESSION_SECRET`
+- `API_SESSION_TTL_SECONDS`
+- `API_ALLOW_ORIGINS`
+- `API_ENABLE_POLICY_API`
+- `API_ENABLE_DEMO_TRACE`
+- `API_ENABLE_DIAGNOSTICS`
+- `STRICT_PERSISTENCE`
 
 ## 3. 本地启动
 
@@ -42,6 +52,36 @@
 ```bash
 cd /home/linsir365/projects/lite-interpreter
 conda run -n lite_interpreter python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+如果你启用了 API 认证，至少还需要：
+
+```bash
+export API_AUTH_REQUIRED=true
+export API_AUTH_TOKENS_JSON='{"viewer-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"viewer","subject":"viewer-user"},"operator-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"operator","subject":"operator-user"},"admin-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"admin","subject":"admin-user"}}'
+export API_AUTH_USERS_JSON='{"alice":{"password":"alice-pass","role":"admin","subject":"alice-user","grants":[{"tenant_id":"demo-tenant","workspace_id":"demo-workspace"},{"tenant_id":"finance-tenant","workspace_id":"finance-ws"}]}}'
+export API_SESSION_SECRET=change-me-in-production
+```
+
+推荐角色：
+
+- `viewer`: 只读任务、执行、知识、记忆、运行时与流式观察
+- `operator`: 在 `viewer` 基础上允许创建任务、上传文件
+- `admin`: 在 `operator` 基础上允许策略管理、诊断和 demo trace
+
+会话登录接口：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/session/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"alice-pass"}'
+```
+
+拿到 `access_token` 后，可调用：
+
+```bash
+curl -H "Authorization: Bearer <access_token>" \
+  http://127.0.0.1:8000/api/session/me
 ```
 
 或：
@@ -95,7 +135,36 @@ make run-frontend
 export DEERFLOW_RUNTIME_MODE=sidecar
 export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
 export DEERFLOW_CONFIG_PATH=/home/linsir365/projects/deer-flow/config.yaml
+export API_ALLOW_ORIGINS=http://127.0.0.1:8501,http://localhost:8501
 ```
+
+如果你要启用受保护的调试/运维接口，再显式开启：
+
+```bash
+export API_ENABLE_DIAGNOSTICS=true
+export API_ENABLE_POLICY_API=true
+export API_ENABLE_DEMO_TRACE=true
+```
+
+高风险控制面操作会写入持久化审计日志，可通过：
+
+```bash
+curl -H "Authorization: Bearer admin-token" \
+  "http://127.0.0.1:8000/api/audit/logs?tenant_id=demo-tenant&workspace_id=demo-workspace&limit=50"
+```
+
+审计过滤还支持：
+
+- `subject`
+- `role`
+- `action`
+- `outcome`
+- `resource_type`
+- `resource_id`
+- `task_id`
+- `execution_id`
+- `recorded_after`
+- `recorded_before`
 
 ## 5. 常用验收命令
 
@@ -103,6 +172,18 @@ export DEERFLOW_CONFIG_PATH=/home/linsir365/projects/deer-flow/config.yaml
 
 ```bash
 conda run -n lite_interpreter python -m pytest -q
+```
+
+首次部署前建议先确保 Postgres driver 已装好：
+
+```bash
+conda run -n lite_interpreter python -c "import psycopg"
+```
+
+如果你仍在使用 `psycopg2`：
+
+```bash
+conda run -n lite_interpreter python -c "import psycopg2"
 ```
 
 ### 5.2 关键链路测试
@@ -139,6 +220,7 @@ make demo-trace
 
 4. 在前端输入：
    - API Base URL: `http://127.0.0.1:8000`
+   - API Token: `viewer-token` / `operator-token` / `admin-token`（按操作权限选择）
    - Task ID: `demo-task-001`
 
 ### 6.2 最小真实任务
@@ -160,6 +242,9 @@ make create-task
 - 是否在 `lite_interpreter` 环境
 - `uvicorn` 是否可 import
 - `config/settings.py` 中路径/环境变量是否正确
+- 如果启用了 Postgres，`psycopg` 或 `psycopg2` 是否可 import
+- 如果启用了认证，`API_AUTH_TOKENS_JSON` 是否是合法 JSON 且包含 `tenant_id/workspace_id`
+- 如果启用了会话登录，`API_AUTH_USERS_JSON` 是否是合法 JSON 且包含 `password/role/grants`
 
 ### 7.2 sidecar 连不上
 
@@ -184,6 +269,15 @@ make create-task
 - Postgres / Qdrant / Neo4j 是否可用
 - 是否已先完成文档解析和入库
 - query 是否命中了 `router -> kag_retriever`
+
+### 7.5 为什么接口返回 401 / 403 / 404
+
+检查：
+
+- 是否已配置并携带 bearer token
+- token 绑定的 `tenant_id/workspace_id` 是否和请求作用域一致
+- 任务/执行资源查询时是否带上了正确作用域
+- `/api/policy`、`/api/diagnostics`、`/api/dev/tasks/{task_id}/demo-trace` 是否被显式开启
 
 ## 8. 部署建议
 

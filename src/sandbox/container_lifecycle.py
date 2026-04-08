@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import docker
-from docker.errors import ImageNotFound
-from requests.exceptions import ConnectionError, ReadTimeout, Timeout as RequestsTimeout
-
 from config.sandbox_config import CONTAINER_NAME_PREFIX, DOCKER_CONFIG
 from config.settings import LOG_MAX_LENGTH, PROJECT_ROOT
+from docker.errors import ImageNotFound
+from requests.exceptions import ConnectionError, ReadTimeout
+from requests.exceptions import Timeout as RequestsTimeout
+
 from src.common import get_current_timestamp, truncate_string
 from src.sandbox.exceptions import ExecTimeoutError
 

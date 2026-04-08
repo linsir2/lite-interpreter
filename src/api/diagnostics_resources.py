@@ -7,15 +7,19 @@ import sys
 from typing import Any
 
 import httpx
-
 from config.settings import DEERFLOW_RUNTIME_MODE, DEERFLOW_SIDECAR_URL, PROJECT_ROOT
+
+from src.api.auth import auth_enabled
 from src.api.routers.analysis_router import get_startup_recovery_status
-from src.mcp_gateway import default_mcp_server
-from src.skillnet.preset_skills import load_preset_skills
+from src.blackboard import build_strict_state_report
 from src.dynamic_engine.runtime_registry import runtime_registry
+from src.mcp_gateway import default_mcp_server
+from src.sandbox.security_explainer import build_security_policy_summary
+from src.skillnet.preset_skills import load_preset_skills
 from src.storage.graph_client import neo4j_client
 from src.storage.postgres_client import pg_client
-from src.storage.repository.skill_repo import SkillRepo
+from src.storage.repository.audit_repo import AuditRepo
+from src.storage.repository.memory_repo import MemoryRepo
 from src.storage.repository.state_repo import StateRepo
 from src.storage.vector_client import qdrant_client
 
@@ -58,8 +62,10 @@ def build_diagnostics_report() -> dict[str, Any]:
     mcp_tools = default_mcp_server.list_tools()
     preset_skills = load_preset_skills()
     state_repo_status = StateRepo.status()
-    skill_repo_status = SkillRepo.status()
+    memory_repo_status = MemoryRepo.status()
     startup_recovery = get_startup_recovery_status()
+    security_policy = build_security_policy_summary()
+    strict_state = build_strict_state_report()
 
     return {
         "service": "lite-interpreter-api",
@@ -74,21 +80,27 @@ def build_diagnostics_report() -> dict[str, Any]:
             "lite_interpreter_env_active": conda_env_ok,
             "runtime_mode": DEERFLOW_RUNTIME_MODE,
             "sidecar_url": DEERFLOW_SIDECAR_URL or None,
+            "api_auth_enabled": auth_enabled(),
         },
         "dependencies": {
             "deerflow_client_importable": deerflow_client_importable,
             "sidecar_configured": deerflow_sidecar_configured,
             "postgres_available": pg_client.engine is not None,
+            "postgres_driver": getattr(pg_client, "driver_name", None),
+            "postgres_driver_error": getattr(pg_client, "driver_error", None),
             "qdrant_available": qdrant_client.client is not None,
             "neo4j_available": neo4j_client.driver is not None,
         },
         "repositories": {
             "state_repo": state_repo_status,
-            "skill_repo": skill_repo_status,
+            "memory_repo": memory_repo_status,
+            "audit_repo": AuditRepo.status(),
         },
         "runtime": {
             "sidecar_health": sidecar_health,
         },
+        "security_policy": security_policy,
+        "strict_state": strict_state,
         "startup_recovery": startup_recovery,
         "capabilities": {
             "mcp_tool_count": len(mcp_tools),

@@ -227,3 +227,24 @@ class RuntimeCapabilityManifest(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     generated_at: datetime = Field(default_factory=get_utc_now)
+
+
+class AuditRecord(BaseModel):
+    """Persistent API audit record for high-risk control-plane operations."""
+
+    audit_id: str
+    subject: str
+    role: str
+    action: str
+    outcome: Literal["success", "failure", "denied"]
+    tenant_id: str
+    workspace_id: str
+    task_id: str | None = None
+    execution_id: str | None = None
+    resource_type: str = "api"
+    resource_id: str | None = None
+    request_method: str
+    request_path: str
+    trace_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    recorded_at: datetime = Field(default_factory=get_utc_now)

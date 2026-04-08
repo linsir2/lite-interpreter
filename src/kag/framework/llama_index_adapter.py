@@ -1,14 +1,13 @@
 """LlamaIndex adapters used by the KAG module without changing its core design."""
 from __future__ import annotations
 
-from typing import List
-
 try:
     from llama_index.core.node_parser import SentenceSplitter
 except ImportError:  # pragma: no cover - optional dependency in lightweight test envs
     SentenceSplitter = None
 
 from config.settings import CHUNK_OVERLAP, CHUNK_SIZE, EMBEDDING_MODEL_NAME
+
 from src.common.llm_client import LiteLLMClient
 from src.storage.schema import DocChunk
 
@@ -19,13 +18,13 @@ class DashScopeLiteLLMEmbedding:
     def __init__(self, model_alias: str = EMBEDDING_MODEL_NAME):
         self.model_alias = model_alias
 
-    def get_query_embedding(self, query: str) -> List[float]:
+    def get_query_embedding(self, query: str) -> list[float]:
         return LiteLLMClient.embedding(self.model_alias, [query])[0]
 
-    def get_text_embedding(self, text: str) -> List[float]:
+    def get_text_embedding(self, text: str) -> list[float]:
         return LiteLLMClient.embedding(self.model_alias, [text])[0]
 
-    def get_text_embeddings(self, texts: List[str]) -> List[List[float]]:
+    def get_text_embeddings(self, texts: list[str]) -> list[list[float]]:
         return LiteLLMClient.embedding(self.model_alias, texts)
 
 
@@ -35,7 +34,7 @@ def build_sentence_splitter(chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     return SentenceSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
 
 
-def split_text_with_llama_index(text: str, *, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+def split_text_with_llama_index(text: str, *, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
     if SentenceSplitter is None:
         if not text.strip():
             return []
@@ -45,7 +44,7 @@ def split_text_with_llama_index(text: str, *, chunk_size: int = CHUNK_SIZE, over
     return splitter.split_text(text)
 
 
-def chunks_to_nodes(chunks: List[DocChunk]):
+def chunks_to_nodes(chunks: list[DocChunk]):
     nodes = []
     for chunk in chunks:
         try:

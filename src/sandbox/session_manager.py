@@ -5,7 +5,8 @@ import threading
 from typing import Any
 
 from config.sandbox_config import DOCKER_CONFIG
-from src.common import InputLease, SandboxSessionHandle, SandboxSessionSpec, generate_uuid, get_utc_now
+
+from src.common import InputLease, SandboxSessionHandle, SandboxSessionSpec, get_utc_now
 
 
 class SandboxSessionManager:

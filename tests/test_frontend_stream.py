@@ -23,7 +23,9 @@ def test_status_stream_html_supports_execution_stream():
         execution_id="runtime:task-1",
         tenant_id="tenant-1",
         workspace_id="ws-1",
+        api_token="secret-token",
     )
 
     assert "/api/executions/runtime:task-1/events" in html
+    assert "access_token=secret-token" in html
     assert "Execution Stream" in html

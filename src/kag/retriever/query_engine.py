@@ -1,8 +1,6 @@
 """KAG 统一查询引擎。"""
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from src.blackboard.schema import RetrievalPlan
 from src.common import EvidencePacket
 from src.common.logger import get_logger
@@ -11,16 +9,35 @@ from .budget import enforce_budget
 from .cache import RetrievalCache
 from .dedup import semantic_dedup
 from .query_understanding import analyze_query
-from .rerank import cross_encoder_rerank
 from .recall import bm25_search, graph_search, hybrid_search, splade_search
+from .rerank import cross_encoder_rerank
 
 logger = get_logger(__name__)
 
 
 def is_keyword_query(query: str) -> bool:
-    words = query.strip().split()
+    normalized = " ".join(query.strip().split())
+    if not normalized:
+        return False
     question_words = ["如何", "为什么", "怎么", "啥", "哪", "帮我"]
-    return len(words) <= 3 and not any(word in query for word in question_words)
+    if any(word in normalized for word in question_words):
+        return False
+
+    has_chinese = any("\u4e00" <= char <= "\u9fff" for char in normalized)
+    if has_chinese:
+        compact = normalized.replace(" ", "")
+        if len(compact) > 12:
+            return False
+        try:
+            import jieba
+
+            tokens = [token for token in jieba.lcut(normalized) if token.strip()]
+            return len(tokens) <= 4
+        except Exception:
+            return len(compact) <= 12
+
+    words = normalized.split()
+    return len(words) <= 3 and len(normalized) <= 32
 
 
 class QueryEngine:
@@ -33,7 +50,7 @@ class QueryEngine:
     ) -> EvidencePacket:
         logger.info(f"[QueryEngine] 启动检索，query={query}")
         search_query = query
-        filters: Dict[str, object] = {}
+        filters: dict[str, object] = {}
         difficulty_score = 0.5
         is_multi_hop = False
 
@@ -62,7 +79,7 @@ class QueryEngine:
                 metadata={"routing_strategy": plan.routing_strategy},
             )
 
-        sparse_results: List[Dict[str, object]] = []
+        sparse_results: list[dict[str, object]] = []
         if is_keyword_query(query) or difficulty_score < 0.4:
             if "bm25" in plan.recall_strategies:
                 sparse_results.extend(bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id))
@@ -72,11 +89,11 @@ class QueryEngine:
             elif "bm25" in plan.recall_strategies:
                 sparse_results.extend(bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id))
 
-        vector_results: List[Dict[str, object]] = []
+        vector_results: list[dict[str, object]] = []
         if "vector" in plan.recall_strategies and difficulty_score >= 0.3:
             vector_results = hybrid_search.vector_recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
 
-        graph_results: List[Dict[str, object]] = []
+        graph_results: list[dict[str, object]] = []
         if "graph" in plan.recall_strategies and (difficulty_score >= 0.7 or is_multi_hop):
             graph_results = graph_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
 
@@ -137,6 +154,6 @@ class QueryEngine:
         plan: RetrievalPlan,
         tenant_id: str,
         workspace_id: str = "default_ws",
-    ) -> List[Dict[str, object]]:
+    ) -> list[dict[str, object]]:
         packet = QueryEngine.execute_with_evidence(query, plan, tenant_id, workspace_id=workspace_id)
         return packet.hits

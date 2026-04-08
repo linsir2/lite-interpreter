@@ -1,10 +1,11 @@
 """Capability registry for tools, skills, and runtime-facing actions."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 
+# frozen=True 让实例变成不可变对象，适合定义元数据，防止运行时被修改
 @dataclass(frozen=True)
 class CapabilityDescriptor:
     """Normalized capability metadata used by governance and coordination."""
@@ -17,7 +18,7 @@ class CapabilityDescriptor:
     network_access: str = "none"
     writes_state: bool = False
     executes_code: bool = False
-    metadata: dict[str, object] = field(default_factory=dict)
+    metadata: dict[str, object] = field(default_factory=dict) # 防止多个实例底层共享同一个dict
 
     def matches(self, name: str) -> bool:
         lowered = str(name).strip().lower()
@@ -50,7 +51,7 @@ class CapabilityRegistry:
         resolved: list[CapabilityDescriptor] = []
         unknown: list[str] = []
         seen: set[str] = set()
-        for name in names or []:
+        for name in names or []: # 如果names为空，则遍历 [] (空列表)
             descriptor = self.get(name)
             if descriptor is None:
                 normalized = str(name).strip()
@@ -130,6 +131,16 @@ capability_registry.register(
         description="Write dynamic runtime trace events into the control plane.",
         aliases=("trace_write", "dynamic_trace_write"),
         risk_tags=("state-write", "trace"),
+        writes_state=True,
+    )
+)
+capability_registry.register(
+    CapabilityDescriptor(
+        capability_id="memory_sync",
+        category="control-plane",
+        description="Write structured patches back to the memory blackboard.",
+        aliases=("memory_write", "memory_blackboard_sync"),
+        risk_tags=("state-write", "memory"),
         writes_state=True,
     )
 )

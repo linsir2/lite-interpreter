@@ -1,20 +1,19 @@
 """上下文预算裁剪。"""
 from __future__ import annotations
 
-from typing import Dict, List
-
 from config.settings import CONTEXT_MODEL_NAME
+
 from src.common import fit_items_to_budget
 from src.common.llm_client import LiteLLMClient
 
 
 def enforce_budget(
-    candidates: List[Dict[str, object]],
+    candidates: list[dict[str, object]],
     budget_tokens: int,
     *,
     query: str = "",
     model_alias: str = CONTEXT_MODEL_NAME,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     if budget_tokens <= 0:
         return []
     model_name = LiteLLMClient.resolve_model_name(model_alias)

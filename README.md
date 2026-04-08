@@ -14,6 +14,13 @@ Its current architecture is:
 
 The project goal is not to build a free-form autonomous agent first. The goal is to build a controllable, observable, secure agent runtime for enterprise-style data analysis tasks.
 
+Recent design emphasis:
+
+- keep the system explicitly centered on data-analysis tasks
+- classify tasks into dataset / rule / hybrid / dynamic-research analysis modes
+- keep context compression evidence-aware instead of treating history as generic chat text
+- ship deterministic evals that verify routing and evidence preservation
+
 ## 1. Core design
 
 Current high-level design:
@@ -51,6 +58,7 @@ Configured aliases:
 Config file:
 
 - `litellm_config.yml`
+- `config/analysis_runtime.yaml`
 
 Environment variable:
 
@@ -88,6 +96,8 @@ Important:
 
 ### Dynamic orchestration
 
+- `config/analysis_runtime.yaml`
+  - defines lightweight data-analysis runtime policy for routing, compression, and summary purposes
 - `src/dynamic_engine/deerflow_bridge.py`
   - supports `embedded`
   - supports `sidecar`
@@ -149,7 +159,7 @@ Important:
 - `src/dag_engine/nodes/analyst_node.py` / `src/dag_engine/nodes/coder_node.py`
   - approved skills now appear in planning and code-generation payloads, so promoted skills start affecting execution paths
   - promotion provenance and skill strategy hints are now carried into execution planning
-- `src/storage/repository/skill_repo.py`
+- `src/storage/repository/memory_repo.py`
   - persists approved skills per tenant/workspace so later tasks can reuse historical promoted skills
   - now supports capability-filtered lookup for router / analyst / coder reuse
   - records lightweight usage telemetry for matched historical skills
@@ -158,7 +168,7 @@ Important:
 - `historical_skill_matches` / `used_historical_skills`
   - task state and final response now distinguish matched historical skills from those actually used in code generation
   - codegen-used historical skills now record replay-case ids and capability ids for richer feedback
-- `SkillRepo.record_skill_outcome(...)`
+- `MemoryRepo.record_skill_outcome(...)`
   - task completion now feeds success/failure counters back into historical skill usage telemetry
 
 ### Blackboard and event flow
@@ -198,6 +208,9 @@ Available routes:
 - `GET /api/conformance`
 - `GET /api/runtimes`
 - `GET /api/runtimes/{runtime_id}/capabilities`
+- `GET /api/audit/logs`
+- `POST /api/session/login`
+- `GET /api/session/me`
 - `POST /api/tasks`
 - `GET /api/tasks/{task_id}/executions`
 - `GET /api/tasks/{task_id}/result`
@@ -213,8 +226,15 @@ Available routes:
 
 Operational notes:
 
-- set `STRICT_PERSISTENCE=true` to disable silent in-memory fallback for state/skill repositories
-- `/api/diagnostics` now exposes `repositories` and `startup_recovery` status for persistence and restart visibility
+- task / execution / knowledge / memory / upload / asset / skill APIs now require `tenant_id` + `workspace_id` scope, either from authenticated API token binding or explicit query/form scope
+- set `API_AUTH_TOKENS_JSON` to enable bearer-token auth; when configured, the token scope is authoritative over client-supplied tenant/workspace values
+- token roles are hierarchical: `viewer` for read-only task/runtime access, `operator` for task creation and uploads, `admin` for policy, diagnostics, and demo-trace controls
+- the API now also supports local user-to-session login via `POST /api/session/login`; session tokens carry one or more tenant/workspace grants and reuse the same role model
+- `GET /api/audit/logs` is `admin`-only and returns persistent API audit records scoped to the caller's tenant/workspace
+- `GET/POST /api/policy`, `POST /api/dev/tasks/{task_id}/demo-trace`, and `GET /api/diagnostics` are disabled by default and must be explicitly enabled via env vars
+- set `STRICT_PERSISTENCE=true` to disable silent in-memory fallback for state/memory repositories
+- `/api/diagnostics` now exposes repository status, startup recovery, and detected Postgres driver state when enabled
+- Postgres-backed persistence now expects a SQLAlchemy-compatible driver such as `psycopg` or `psycopg2`; the default dependency set includes `psycopg[binary]`
 
 ### Frontend demo
 
@@ -239,6 +259,7 @@ Capabilities:
 - inspect approved and preset reusable skills
 - create a minimal real task
 - trigger a fake demo trace
+- optionally authenticate requests from the Task Console with an API token
 
 ### Model client and KAG framework adapter
 
@@ -246,7 +267,7 @@ Capabilities:
   - unified LiteLLM wrapper
   - sync + async wrappers for chat / embeddings
 - `src/kag/retriever/query_engine.py`
-  - still supports legacy hit-list retrieval
+  - emits evidence-aware retrieval payloads and normalized hit lists
   - now also emits `EvidencePacket` for normalized knowledge-plane results
 - `src/mcp_gateway/tools/knowledge_query_tool.py`
   - returns evidence-aware retrieval payloads instead of a thin hit wrapper
@@ -275,6 +296,17 @@ Capabilities:
   - now enforces exact-fit budget against the target context model
 - `src/dag_engine/nodes/context_builder_node.py`
   - performs final context fit before handing material to downstream nodes
+  - now emits an `analysis_brief` with evidence refs, known gaps, and next-step guidance for data-analysis planning
+
+### Data-analysis runtime and evals
+
+- `src/runtime/analysis_runtime.py`
+  - classifies tasks into `dataset_analysis`, `document_rule_analysis`, `hybrid_analysis`, `dynamic_research_analysis`, and `need_more_inputs`
+  - resolves lightweight runtime decisions per call purpose without turning the project into a generic framework
+- `src/evals/runner.py`
+  - runs deterministic seed evals for route correctness and evidence pinning
+- `src/evals/cases.py`
+  - stores seed data-analysis cases for dataset, rule, hybrid, and dynamic-research tasks
 
 ### Demo and utility scripts
 
@@ -293,9 +325,21 @@ Use the `lite_interpreter` conda env:
 conda run -n lite_interpreter python -m pytest -q
 ```
 
+Deterministic eval report:
+
+```bash
+conda run -n lite_interpreter python -m src.evals.run
+```
+
+Write reports into a specific project directory when needed:
+
+```bash
+conda run -n lite_interpreter python -m src.evals.run --output-dir artifacts/evals
+```
+
 Current result:
 
-- `130 passed, 3 skipped`
+- `237 passed, 3 skipped`
 
 ## 4. What is prepared but still incomplete
 

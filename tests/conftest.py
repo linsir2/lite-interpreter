@@ -1,18 +1,23 @@
 """pytest全局配置"""
-import pytest
 import uuid
-from src.sandbox.docker_executor import (
-    _tenant_concurrency, _running_containers
-)
+
+import pytest
+from src.harness.policy import load_harness_policy
+from src.sandbox.docker_executor import _running_containers, _tenant_concurrency
 from src.sandbox.runtime_state import clear_shutdown, reset_runtime_state
+from src.storage.repository.audit_repo import AuditRepo
 from src.storage.repository.state_repo import StateRepo
 
 
 @pytest.fixture(scope="function", autouse=True)
 def reset_state_repo():
     StateRepo.clear()
+    AuditRepo.clear()
+    load_harness_policy.cache_clear()
     yield
     StateRepo.clear()
+    AuditRepo.clear()
+    load_harness_policy.cache_clear()
 
 @pytest.fixture(scope="function")
 def reset_global_state():

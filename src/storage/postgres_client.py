@@ -10,26 +10,52 @@ src/storage/postgres_client.py
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional
+import importlib
+from typing import Any
 
 import pandas as pd
+from config.settings import POSTGRES_URI
 from sqlalchemy import bindparam, create_engine, text
 
-from src.common import get_logger
+from src.common.logger import get_logger
 from src.storage.schema import DocChunk
-from config.settings import POSTGRES_URI
 
 logger = get_logger(__name__)
 
 
+def _module_available(module_name: str) -> bool:
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_postgres_uri(raw_uri: str) -> tuple[str, str]:
+    normalized = str(raw_uri or "").strip()
+    if normalized.startswith("postgresql+"):
+        driver = normalized.split("://", 1)[0].split("+", 1)[1]
+        return normalized, driver
+    if _module_available("psycopg"):
+        return normalized.replace("postgresql://", "postgresql+psycopg://", 1), "psycopg"
+    if _module_available("psycopg2"):
+        return normalized.replace("postgresql://", "postgresql+psycopg2://", 1), "psycopg2"
+    raise ModuleNotFoundError("Postgres driver unavailable: install `psycopg` or `psycopg2`")
+
+
 class PostgresDBClient:
     def __init__(self) -> None:
+        self.driver_name: str | None = None
+        self.driver_error: str | None = None
         try:
-            self.engine = create_engine(POSTGRES_URI, pool_pre_ping=True, pool_size=10)
+            resolved_uri, driver_name = _resolve_postgres_uri(POSTGRES_URI)
+            self.driver_name = driver_name
+            self.engine = create_engine(resolved_uri, pool_pre_ping=True, pool_size=10)
             self._init_core_tables()
             logger.info("[PostgresClient] 初始化成功：确立唯一真相源。")
         except Exception as exc:
             logger.error(f"[PostgresClient] 连接失败: {exc}")
+            self.driver_error = str(exc)
             self.engine = None
 
     def _init_core_tables(self):
@@ -68,7 +94,7 @@ class PostgresDBClient:
         with self.engine.begin() as conn:
             conn.execute(text(init_sql))
 
-    def insert_chunks(self, tenant_id: str, workspace_id: str, chunks: List[DocChunk]):
+    def insert_chunks(self, tenant_id: str, workspace_id: str, chunks: list[DocChunk]):
         if not self.engine or not chunks:
             return
 
@@ -112,7 +138,7 @@ class PostgresDBClient:
             logger.error(f"[PostgresClient] 写入失败: {exc}")
             raise
 
-    def get_chunks_by_ids(self, tenant_id: str, workspace_id: str, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+    def get_chunks_by_ids(self, tenant_id: str, workspace_id: str, chunk_ids: list[str]) -> list[dict[str, Any]]:
         if not self.engine or not chunk_ids:
             return []
 
@@ -141,10 +167,10 @@ class PostgresDBClient:
         self,
         tenant_id: str,
         workspace_id: str,
-        query_terms: List[str],
-        filters: Optional[Dict[str, Any]] = None,
+        query_terms: list[str],
+        filters: dict[str, Any] | None = None,
         limit: int = 50,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not self.engine or not query_terms:
             return []
 
@@ -197,7 +223,7 @@ class PostgresDBClient:
             logger.error(f"[PostgresClient] 文本检索失败: {exc}")
             return []
 
-    def register_dataset_catalog(self, catalog_data: Dict[str, Any]):
+    def register_dataset_catalog(self, catalog_data: dict[str, Any]):
         if not self.engine:
             return
         insert_sql = text(

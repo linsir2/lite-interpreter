@@ -1,11 +1,13 @@
 """沙箱专属工具函数"""
 import re
-from typing import Dict, Any
-from config.sandbox_config import MAX_CODE_LENGTH, MAX_TENANT_ID_LENGTH
+from typing import Any
+
+from config.sandbox_config import CODE_SNIPPET_MAX_LENGTH, MAX_CODE_LENGTH, MAX_TENANT_ID_LENGTH
 from config.security_config import TENANT_ID_PATTERN
+
+from src.common import format_utc_datetime, get_utc_now, truncate_string
 from src.sandbox.exceptions import InputValidationError
-from src.common import get_utc_now, format_utc_datetime, truncate_string
-from config.sandbox_config import CODE_SNIPPET_MAX_LENGTH
+
 
 def validate_code_basic(code: str, trace_id: str) -> None:
     """校验代码合法性"""
@@ -41,7 +43,7 @@ def build_log_data(
     event_type: str,
     code: str,
     trace_id: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """构建标准化日志数据"""
     return {
         "tenant_id": tenant_id,

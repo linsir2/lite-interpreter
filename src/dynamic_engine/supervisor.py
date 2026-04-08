@@ -5,14 +5,23 @@ prepare a bounded dynamic run.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from src.common import ExecutionIntent, TaskEnvelope
+from src.common.control_plane import (
+    decision_log_records,
+    ensure_execution_intent,
+    ensure_task_envelope,
+    execution_intent_dynamic_reason,
+)
 from src.dynamic_engine.blackboard_context import DynamicContextEnvelope, build_dynamic_context
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskRequest
 from src.harness import GovernanceDecision, HarnessGovernor
 from src.harness.policy import load_harness_policy
+from src.memory import MemoryService
+from src.runtime import resolve_runtime_decision
 
 
 @dataclass(frozen=True)
@@ -47,23 +56,21 @@ class DynamicSupervisor:
         state: Mapping[str, Any],
         execution_state: Mapping[str, Any],
     ) -> ExecutionIntent:
-        execution_intent = state.get("execution_intent")
-        if execution_intent and isinstance(execution_intent, ExecutionIntent):
-            return execution_intent
-        if execution_intent:
-            return ExecutionIntent.model_validate(execution_intent)
-        return ExecutionIntent(
-            intent="dynamic_flow",
+        execution_intent = state.get("execution_intent") or execution_state.get("execution_intent")
+        return ensure_execution_intent(
+            execution_intent,
+            routing_mode="dynamic",
             destinations=["dynamic_swarm"],
-            reason=str(state.get("dynamic_reason") or execution_state.get("dynamic_reason") or "dynamic super-node selected"),
-            complexity_score=float(state.get("complexity_score") or execution_state.get("complexity_score") or 0.0),
-            candidate_skills=list(state.get("candidate_skills") or execution_state.get("candidate_skills") or []),
+            reason=str(state.get("dynamic_reason") or "dynamic super-node selected"),
+            complexity_score=float(state.get("complexity_score") or 0.0),
+            candidate_skills=list(state.get("candidate_skills") or []),
         )
 
     @staticmethod
     def build_task_envelope(state: Mapping[str, Any]) -> TaskEnvelope:
         policy = load_harness_policy()
-        return TaskEnvelope(
+        return ensure_task_envelope(
+            state.get("task_envelope"),
             task_id=str(state.get("task_id", "")),
             tenant_id=str(state.get("tenant_id", "")),
             workspace_id=str(state.get("workspace_id", "default_ws")),
@@ -72,7 +79,7 @@ class DynamicSupervisor:
             allowed_tools=list(state.get("allowed_tools") or []),
             redaction_rules=list(state.get("redaction_rules") or policy.get("redaction_rules") or []),
             token_budget=state.get("token_budget"),
-            max_dynamic_steps=int(state.get("max_dynamic_steps", 6)),
+            max_dynamic_steps=int(state.get("max_dynamic_steps") or (policy.get("dynamic", {}) or {}).get("max_steps", 6)),
             metadata={
                 "routing_mode": state.get("routing_mode", "dynamic"),
                 "runtime_backend": str(state.get("runtime_backend") or "deerflow"),
@@ -80,11 +87,65 @@ class DynamicSupervisor:
         )
 
     @staticmethod
+    def build_authoritative_context_state(
+        state: Mapping[str, Any],
+        execution_state: Mapping[str, Any],
+        *,
+        task_envelope: TaskEnvelope,
+        governance_decision: GovernanceDecision,
+    ) -> dict[str, Any]:
+        """
+        构建动态链真正应该继承的上下文输入。
+
+        设计原则：
+        - `execution_state` 是持久化主状态，优先作为事实来源
+        - `state` 只保留本轮 DAG 的瞬时补充信息
+        - 当前这一步新增的 governance decision 要显式追加进去
+
+        这样可以避免一种常见漂移：
+        - dynamic 节点已经能读到最新 execution blackboard
+        - 但真正注入 DeerFlow 的 knowledge / decision context 却还在读旧 state
+        """
+
+        persisted_knowledge_snapshot = execution_state.get("knowledge_snapshot")
+        current_knowledge_snapshot = state.get("knowledge_snapshot")
+        memory_snapshot = MemoryService.get_task_memory(
+            tenant_id=str(task_envelope.tenant_id),
+            task_id=str(task_envelope.task_id),
+            workspace_id=str(task_envelope.workspace_id),
+        ).model_dump(mode="json")
+        base_decision_log = decision_log_records(
+            execution_state.get("decision_log") or state.get("decision_log")
+        )
+        return {
+            **dict(state),
+            "task_envelope": task_envelope.model_dump(mode="json"),
+            "execution_intent": execution_state.get("execution_intent") or state.get("execution_intent"),
+            "knowledge_snapshot": dict(
+                persisted_knowledge_snapshot or current_knowledge_snapshot or {}
+            ),
+            "memory_snapshot": memory_snapshot,
+            "allowed_tools": list(governance_decision.allowed_tools),
+            "governance_profile": governance_decision.profile,
+            "decision_log": [*base_decision_log, governance_decision.to_record()],
+            "routing_mode": str(task_envelope.metadata.get("routing_mode") or state.get("routing_mode") or "dynamic"),
+            "runtime_backend": str(task_envelope.metadata.get("runtime_backend") or state.get("runtime_backend") or "deerflow"),
+            "token_budget": task_envelope.token_budget,
+            "max_dynamic_steps": task_envelope.max_dynamic_steps,
+        }
+
+    @staticmethod
     def prepare(
         state: Mapping[str, Any],
         execution_state: Mapping[str, Any],
     ) -> DynamicRunPlan:
-        task_envelope = DynamicSupervisor.build_task_envelope(state)
+        task_envelope = DynamicSupervisor.build_task_envelope(
+            {
+                **dict(execution_state),
+                **dict(state),
+                "task_envelope": execution_state.get("task_envelope") or state.get("task_envelope"),
+            }
+        )
         execution_intent = DynamicSupervisor.ensure_execution_intent(state, execution_state)
         governance_decision = HarnessGovernor.evaluate_dynamic_request(
             query=task_envelope.input_query,
@@ -102,13 +163,26 @@ class DynamicSupervisor:
                 request=None,
             )
 
+        execution_metadata = dict(execution_intent.metadata or {})
+        runtime_decision = resolve_runtime_decision(
+            call_purpose="dynamic_research",
+            query=task_envelope.input_query,
+            state=state,
+            exec_data=None,
+            allowed_tools=governance_decision.allowed_tools,
+        )
+        analysis_mode = str(execution_metadata.get("analysis_mode") or runtime_decision.analysis_mode)
+        evidence_strategy = str(execution_metadata.get("evidence_strategy") or runtime_decision.evidence_strategy)
+        effective_model_alias = str(execution_metadata.get("effective_model_alias") or runtime_decision.model_alias)
+        effective_tools = list(execution_metadata.get("effective_tools") or list(runtime_decision.effective_tools))
+        context_state = DynamicSupervisor.build_authoritative_context_state(
+            state,
+            execution_state,
+            task_envelope=task_envelope,
+            governance_decision=governance_decision,
+        )
         context_envelope = build_dynamic_context(
-            {
-                **dict(state),
-                "allowed_tools": governance_decision.allowed_tools,
-                "governance_profile": governance_decision.profile,
-                "governance_decisions": [governance_decision.to_patch()["governance_decisions"][0]],
-            },
+            context_state,
             execution_state,
             token_budget=task_envelope.token_budget,
             redaction_rules=task_envelope.redaction_rules,
@@ -121,8 +195,12 @@ class DynamicSupervisor:
             metadata={
                 "routing_mode": task_envelope.metadata.get("routing_mode", "dynamic"),
                 "complexity_score": execution_intent.complexity_score,
-                "dynamic_reason": state.get("dynamic_reason"),
+                "dynamic_reason": execution_intent_dynamic_reason(execution_intent),
                 "governance_profile": governance_decision.profile,
+                "analysis_mode": analysis_mode,
+                "evidence_strategy": evidence_strategy,
+                "effective_model_alias": effective_model_alias,
+                "effective_tools": effective_tools,
             },
         )
         return DynamicRunPlan(

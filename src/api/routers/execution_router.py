@@ -3,22 +3,27 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
-from src.api.schemas import ExecutionStreamEvent
-from src.blackboard import TaskNotExistError, execution_blackboard, global_blackboard
+from src.api.audit_logging import record_api_audit
+from src.api.auth import require_request_role
 from src.api.execution_resources import (
     build_execution_artifacts,
     build_execution_tool_calls,
     build_task_execution_summaries,
     filter_records_after_event_id,
     matches_execution_stream_record,
+    read_task_execution_data,
     resolve_execution_resource,
     task_identity_for_execution,
+    to_jsonable_payload,
 )
+from src.api.request_scope import ensure_resource_scope
+from src.api.schemas import ExecutionStreamEvent
+from src.blackboard import TaskNotExistError, global_blackboard
 from src.common import EventTopic, event_bus, event_journal
 from src.common.event_bus import Event
 from src.privacy import mask_payload
@@ -37,77 +42,251 @@ def _encode_sse(data: dict) -> str:
 
 
 async def list_task_executions(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     task_id = request.path_params["task_id"]
     try:
         task = global_blackboard.get_task_state(task_id)
     except TaskNotExistError:
         return JSONResponse({"error": "task not found", "task_id": task_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=task.tenant_id,
+        workspace_id=task.workspace_id,
+    )
+    if scope_error is not None:
+        record_api_audit(
+            request,
+            action="task.executions.read",
+            outcome="denied",
+            tenant_id=task.tenant_id,
+            workspace_id=task.workspace_id,
+            task_id=task_id,
+            resource_type="task_executions",
+            resource_id=task_id,
+            metadata={"reason": "scope_mismatch"},
+        )
+        return scope_error
 
-    execution_data = execution_blackboard.read(task.tenant_id, task_id)
+    execution_data = read_task_execution_data(task.tenant_id, task_id)
     payload, _ = mask_payload(
-        {"task_id": task_id, "executions": build_task_execution_summaries(execution_data)},
-        list(execution_data.task_envelope.redaction_rules or []) if execution_data and execution_data.task_envelope else None,
+        to_jsonable_payload({"task_id": task_id, "executions": build_task_execution_summaries(execution_data)}),
+        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data and execution_data.control.task_envelope else None,
+    )
+    record_api_audit(
+        request,
+        action="task.executions.read",
+        outcome="success",
+        tenant_id=task.tenant_id,
+        workspace_id=task.workspace_id,
+        task_id=task_id,
+        resource_type="task_executions",
+        resource_id=task_id,
+        metadata={"execution_count": len(payload.get("executions", []))},
     )
     return JSONResponse(payload)
 
 
 async def get_execution(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     execution_id = request.path_params["execution_id"]
     summary, execution_data = resolve_execution_resource(execution_id)
     if summary is None or execution_data is None:
         return JSONResponse({"error": "execution not found", "execution_id": execution_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+    )
+    if scope_error is not None:
+        record_api_audit(
+            request,
+            action="execution.read",
+            outcome="denied",
+            tenant_id=execution_data.tenant_id,
+            workspace_id=execution_data.workspace_id,
+            task_id=execution_data.task_id,
+            execution_id=execution_id,
+            resource_type="execution",
+            resource_id=execution_id,
+            metadata={"reason": "scope_mismatch"},
+        )
+        return scope_error
 
     artifacts = build_execution_artifacts(execution_data, execution_id)
     payload, _ = mask_payload(
-        {
+        to_jsonable_payload(
+            {
             **summary,
             "artifacts": artifacts,
             "tool_calls": build_execution_tool_calls(execution_data, execution_id),
-        },
-        list(execution_data.task_envelope.redaction_rules or []) if execution_data.task_envelope else None,
+            }
+        ),
+        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+    )
+    record_api_audit(
+        request,
+        action="execution.read",
+        outcome="success",
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+        task_id=execution_data.task_id,
+        execution_id=execution_id,
+        resource_type="execution",
+        resource_id=execution_id,
+        metadata={"kind": summary.get("kind")},
     )
     return JSONResponse(payload)
 
 
 async def list_execution_artifacts(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     execution_id = request.path_params["execution_id"]
     summary, execution_data = resolve_execution_resource(execution_id)
     if summary is None or execution_data is None:
         return JSONResponse({"error": "execution not found", "execution_id": execution_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+    )
+    if scope_error is not None:
+        record_api_audit(
+            request,
+            action="execution.artifacts.read",
+            outcome="denied",
+            tenant_id=execution_data.tenant_id,
+            workspace_id=execution_data.workspace_id,
+            task_id=execution_data.task_id,
+            execution_id=execution_id,
+            resource_type="execution_artifacts",
+            resource_id=execution_id,
+            metadata={"reason": "scope_mismatch"},
+        )
+        return scope_error
 
     payload, _ = mask_payload(
-        {
+        to_jsonable_payload(
+            {
             "execution_id": execution_id,
             "artifacts": build_execution_artifacts(execution_data, execution_id),
-        },
-        list(execution_data.task_envelope.redaction_rules or []) if execution_data.task_envelope else None,
+            }
+        ),
+        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+    )
+    record_api_audit(
+        request,
+        action="execution.artifacts.read",
+        outcome="success",
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+        task_id=execution_data.task_id,
+        execution_id=execution_id,
+        resource_type="execution_artifacts",
+        resource_id=execution_id,
+        metadata={"artifact_count": len(payload.get("artifacts", []))},
     )
     return JSONResponse(payload)
 
 
 async def list_execution_tool_calls(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     execution_id = request.path_params["execution_id"]
     summary, execution_data = resolve_execution_resource(execution_id)
     if summary is None or execution_data is None:
         return JSONResponse({"error": "execution not found", "execution_id": execution_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+    )
+    if scope_error is not None:
+        record_api_audit(
+            request,
+            action="execution.tool_calls.read",
+            outcome="denied",
+            tenant_id=execution_data.tenant_id,
+            workspace_id=execution_data.workspace_id,
+            task_id=execution_data.task_id,
+            execution_id=execution_id,
+            resource_type="execution_tool_calls",
+            resource_id=execution_id,
+            metadata={"reason": "scope_mismatch"},
+        )
+        return scope_error
 
     payload, _ = mask_payload(
-        {
+        to_jsonable_payload(
+            {
             "execution_id": execution_id,
             "tool_calls": build_execution_tool_calls(execution_data, execution_id),
-        },
-        list(execution_data.task_envelope.redaction_rules or []) if execution_data.task_envelope else None,
+            }
+        ),
+        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+    )
+    record_api_audit(
+        request,
+        action="execution.tool_calls.read",
+        outcome="success",
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+        task_id=execution_data.task_id,
+        execution_id=execution_id,
+        resource_type="execution_tool_calls",
+        resource_id=execution_id,
+        metadata={"tool_call_count": len(payload.get("tool_calls", []))},
     )
     return JSONResponse(payload)
 
 
 async def stream_execution_events(request: Request) -> StreamingResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     execution_id = request.path_params["execution_id"]
     summary, execution_data = resolve_execution_resource(execution_id)
     if summary is None or execution_data is None:
         return JSONResponse({"error": "execution not found", "execution_id": execution_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+    )
+    if scope_error is not None:
+        record_api_audit(
+            request,
+            action="execution.events.stream",
+            outcome="denied",
+            tenant_id=execution_data.tenant_id,
+            workspace_id=execution_data.workspace_id,
+            task_id=execution_data.task_id,
+            execution_id=execution_id,
+            resource_type="execution_stream",
+            resource_id=execution_id,
+            metadata={"reason": "scope_mismatch"},
+        )
+        return scope_error
 
     loop = asyncio.get_running_loop()
+    record_api_audit(
+        request,
+        action="execution.events.stream",
+        outcome="success",
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+        task_id=execution_data.task_id,
+        execution_id=execution_id,
+        resource_type="execution_stream",
+        resource_id=execution_id,
+        metadata={"kind": summary.get("kind")},
+    )
     queue: asyncio.Queue[dict] = asyncio.Queue()
     callbacks = []
     after_event_id = request.headers.get("last-event-id") or request.query_params.get("after_event_id")
@@ -168,7 +347,7 @@ async def stream_execution_events(request: Request) -> StreamingResponse:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                     yield _encode_sse(event)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keep-alive\n\n"
         finally:
             for topic, callback in callbacks:

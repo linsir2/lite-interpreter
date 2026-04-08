@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from src.frontend.auth_client import api_auth_headers
+
 
 def upload_file_via_api(
     *,
@@ -15,6 +17,7 @@ def upload_file_via_api(
     workspace_id: str,
     task_id: str = "",
     asset_kind: str = "auto",
+    api_token: str = "",
 ) -> dict[str, Any]:
     files = {"file": (file_name, file_bytes)}
     data = {
@@ -23,10 +26,12 @@ def upload_file_via_api(
         "task_id": task_id,
         "asset_kind": asset_kind,
     }
+    headers = api_auth_headers(api_token)
     response = httpx.post(
         f"{api_base_url.rstrip('/')}/api/uploads",
         files=files,
         data=data,
+        headers=headers,
         timeout=60.0,
     )
     response.raise_for_status()
@@ -40,6 +45,7 @@ def render_file_uploader(
     tenant_id: str,
     workspace_id: str,
     task_id: str = "",
+    api_token: str = "",
 ) -> None:
     try:
         import streamlit as st
@@ -66,6 +72,7 @@ def render_file_uploader(
                 workspace_id=workspace_id,
                 task_id=task_id,
                 asset_kind=asset_kind,
+                api_token=api_token,
             )
             st.success(f"Uploaded {payload.get('file_name', uploaded_file.name)}")
             st.json(payload)

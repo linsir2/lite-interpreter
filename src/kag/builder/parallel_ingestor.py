@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List
 
 from src.common import get_logger
 from src.kag.builder.cache import DocumentCache
@@ -16,15 +15,15 @@ class ParallelIngestor:
     @classmethod
     def parse_documents(
         cls,
-        doc_paths: List[str],
+        doc_paths: list[str],
         tenant_id: str,
         upload_batch_id: str,
         max_workers: int = 4,
-    ) -> List[ParsedDocument]:
+    ) -> list[ParsedDocument]:
         if not doc_paths:
             return []
 
-        results: List[ParsedDocument] = []
+        results: list[ParsedDocument] = []
 
         def _parse(path: str) -> ParsedDocument:
             cached = DocumentCache.get(path)

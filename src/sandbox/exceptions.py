@@ -1,5 +1,6 @@
 from src.common import BaseAppException
 
+
 class SandboxBaseError(BaseAppException):
     """沙箱基础异常类"""
     error_type: str = "sandbox_base_error"

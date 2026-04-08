@@ -1,58 +1,80 @@
 """
 LangGraph 状态图定义
 """
-from typing import TypedDict, Annotated, List, Optional, Dict, Any
 import operator
+from typing import Annotated, Any, TypedDict
+
 
 class DagGraphState(TypedDict, total=False):
+    """
+    DAG 运行时的“瞬时传输态”。
+
+    这里刻意强调边界：
+    - 持久化主状态在 `ExecutionData`
+    - `DagGraphState` 只描述节点之间临时传递、或在当前轮执行里
+      需要被显式合并的 patch 字段
+
+    也就是说，它不是另一个 blackboard schema，不负责成为第二真源。
+    """
+
+    # --------------------------
+    # 基础身份
+    # --------------------------
     tenant_id: str
     task_id: str
     workspace_id: str
-
     input_query: str
 
-    # 传给context_builder_node.py
-    # [{"text": text, "score": score, "source": os.path.basename(doc["path"]), "type": "fast_path_injection"}]
-    raw_retrieved_candidates: List[Dict[str, Any]] 
-
-    # 🚀 【熟肉区】：由 context_builder 节点输出
-    # 格式：经过 LLM 降噪、去重、压缩后的精炼 Markdown 文本
-    refined_context: str
-
-    next_actions: Annotated[List[str], operator.add]
-    routing_mode: str
-    complexity_score: float
-    dynamic_reason: Optional[str]
-    candidate_skills: List[Dict[str, Any]]
+    # --------------------------
+    # 控制面 / 契约投影
+    # --------------------------
+    task_envelope: dict[str, Any]
+    execution_intent: dict[str, Any]
+    execution_snapshot: dict[str, Any]
+    allowed_tools: list[str]
+    governance_profile: str
+    redaction_rules: list[str]
     token_budget: int
     max_dynamic_steps: int
-    allowed_tools: List[str]
-    redaction_rules: List[str]
-    governance_mode: str
-    governance_profile: str
-    governance_decisions: List[Dict[str, Any]]
-    decision_log: List[Dict[str, Any]]
-    governance_trace_ref: Optional[str]
-    task_envelope: Dict[str, Any]
-    execution_intent: Dict[str, Any]
-    execution_record: Dict[str, Any]
+    routing_mode: str
+    complexity_score: float
+    dynamic_reason: str | None
+    decision_log: list[dict[str, Any]]
     runtime_backend: str
-    knowledge_snapshot: Dict[str, Any]
-    execution_snapshot: Dict[str, Any]
-    dynamic_request: Dict[str, Any]
+
+    # --------------------------
+    # 静态知识链 / 上下文链
+    # --------------------------
+    # 传给 context_builder_node.py 的检索生肉：
+    # [{"text": text, "score": score, "source": "...", "type": "fast_path_injection"}]
+    raw_retrieved_candidates: list[dict[str, Any]] 
+    knowledge_snapshot: dict[str, Any]
+    memory_snapshot: dict[str, Any]
+    analysis_brief: dict[str, Any]
+    # 经过压缩后的精炼 Markdown 文本
+    refined_context: str
+    analysis_plan: str
+    generated_code: str
+    input_mounts: list[dict[str, Any]]
+    audit_result: dict[str, Any]
+    execution_record: dict[str, Any]
+
+    # --------------------------
+    # 动态链写回 patch
+    # --------------------------
+    next_actions: Annotated[list[str], operator.add]
+    dynamic_request: dict[str, Any]
     dynamic_status: str
     dynamic_summary: str
-    dynamic_trace: List[Dict[str, Any]]
-    dynamic_trace_refs: List[str]
-    dynamic_artifacts: List[str]
-    recommended_static_skill: Dict[str, Any]
-    harvested_skill_candidates: List[Dict[str, Any]]
-    approved_skills: List[Dict[str, Any]]
-    historical_skill_matches: List[Dict[str, Any]]
-    return_to_node: str
-    final_response: Dict[str, Any]
-    blocked: bool
-    block_reason: Optional[str]
+    dynamic_trace: list[dict[str, Any]]
+    dynamic_trace_refs: list[str]
+    dynamic_artifacts: list[str]
+    recommended_static_skill: dict[str, Any]
 
+    # --------------------------
+    # 中断 / 重试 / 终态 patch
+    # --------------------------
+    blocked: bool
+    block_reason: str | None
     retry_count: int
-    current_error_type: Optional[str]
+    final_response: dict[str, Any]

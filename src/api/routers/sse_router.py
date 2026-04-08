@@ -3,13 +3,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
-from typing import AsyncIterator
 
+from src.api.audit_logging import record_api_audit
+from src.api.auth import require_request_role
+from config.settings import API_ENABLE_DEMO_TRACE
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+from src.api.request_scope import endpoint_disabled, ensure_resource_scope
 from src.api.schemas import TaskStreamEvent
+from src.blackboard import TaskNotExistError, global_blackboard
 from src.common import EventTopic, event_bus, event_journal
 from src.common.event_bus import Event
 from src.dynamic_engine.trace_normalizer import TraceNormalizer
@@ -45,9 +50,34 @@ def _event_matches_subscription(
 
 
 async def stream_task_events(request: Request) -> StreamingResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
     task_id = request.path_params["task_id"]
-    tenant_id = request.query_params.get("tenant_id")
-    workspace_id = request.query_params.get("workspace_id")
+    try:
+        task = global_blackboard.get_task_state(task_id)
+    except TaskNotExistError:
+        return JSONResponse({"error": "task not found", "task_id": task_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=task.tenant_id,
+        workspace_id=task.workspace_id,
+    )
+    if scope_error is not None:
+        return scope_error
+    tenant_id = task.tenant_id
+    workspace_id = task.workspace_id
+    record_api_audit(
+        request,
+        action="task.events.stream",
+        outcome="success",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        task_id=task_id,
+        resource_type="task_stream",
+        resource_id=task_id,
+        metadata={},
+    )
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -96,7 +126,7 @@ async def stream_task_events(request: Request) -> StreamingResponse:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                     yield _encode_sse(event)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     yield ": keep-alive\n\n"
         finally:
             for topic, callback in callbacks:
@@ -182,11 +212,27 @@ async def _publish_demo_trace(task_id: str, tenant_id: str, workspace_id: str) -
 
 
 async def trigger_demo_trace(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "admin")
+    if role_error is not None:
+        return role_error
+    if not API_ENABLE_DEMO_TRACE:
+        return endpoint_disabled("demo trace api disabled")
     task_id = request.path_params["task_id"]
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     tenant_id = body.get("tenant_id") or request.query_params.get("tenant_id") or "demo-tenant"
     workspace_id = body.get("workspace_id") or request.query_params.get("workspace_id") or "demo-workspace"
     asyncio.create_task(_publish_demo_trace(task_id, tenant_id, workspace_id))
+    record_api_audit(
+        request,
+        action="demo_trace.trigger",
+        outcome="success",
+        tenant_id=str(tenant_id),
+        workspace_id=str(workspace_id),
+        task_id=task_id,
+        resource_type="demo_trace",
+        resource_id=task_id,
+        metadata={"accepted": True},
+    )
     return JSONResponse(
         {
             "accepted": True,

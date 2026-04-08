@@ -9,7 +9,8 @@
 """
 import logging
 from logging.handlers import RotatingFileHandler
-from config.settings import LOG_LEVEL, DATETIME_FORMAT, LOG_MAX_LENGTH, PROJECT_ROOT
+
+from config.settings import DATETIME_FORMAT, LOG_LEVEL, LOG_MAX_LENGTH, PROJECT_ROOT
 
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)

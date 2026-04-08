@@ -10,11 +10,11 @@ src/storage/repository/knowledge_repo.py
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
-
-from src.common import get_logger, get_utc_now
+from src.common.logger import get_logger
+from src.common.utils import get_utc_now
 from src.storage.graph_client import neo4j_client
 from src.storage.postgres_client import pg_client
 from src.storage.schema import DocChunk, KnowledgeTriple, StructuredDatasetMeta
@@ -29,8 +29,8 @@ class KnowledgeRepo:
         cls,
         tenant_id: str,
         workspace_id: str,
-        chunks: List[DocChunk],
-        embeddings_map: Dict[str, List[float]],
+        chunks: list[DocChunk],
+        embeddings_map: dict[str, list[float]],
     ) -> bool:
         if not chunks:
             logger.error("[KnowledgeRepo] 数据为空，拒绝入库。")
@@ -41,8 +41,8 @@ class KnowledgeRepo:
             logger.info(f"[KnowledgeRepo] PG 落库成功: {len(chunks)} 条全量 Chunk。")
 
             if embeddings_map:
-                qdrant_chunks: List[DocChunk] = []
-                qdrant_embeddings: List[List[float]] = []
+                qdrant_chunks: list[DocChunk] = []
+                qdrant_embeddings: list[list[float]] = []
                 for chunk in chunks:
                     vector = embeddings_map.get(chunk.chunk_id)
                     if vector is None:
@@ -58,7 +58,7 @@ class KnowledgeRepo:
             return False
 
     @classmethod
-    def save_graph_triples(cls, tenant_id: str, workspace_id: str, triples: List[KnowledgeTriple]) -> bool:
+    def save_graph_triples(cls, tenant_id: str, workspace_id: str, triples: list[KnowledgeTriple]) -> bool:
         if not triples:
             return True
         try:
@@ -75,7 +75,7 @@ class KnowledgeRepo:
         workspace_id: str,
         file_name: str,
         df: pd.DataFrame,
-        semantic_summary: Optional[str],
+        semantic_summary: str | None,
         persist: bool = False,
     ):
         try:
@@ -103,7 +103,7 @@ class KnowledgeRepo:
             return None
 
     @classmethod
-    def get_full_chunks(cls, tenant_id: str, workspace_id: str, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+    def get_full_chunks(cls, tenant_id: str, workspace_id: str, chunk_ids: list[str]) -> list[dict[str, Any]]:
         if not chunk_ids:
             return []
         return pg_client.get_chunks_by_ids(tenant_id, workspace_id, chunk_ids)
@@ -113,10 +113,10 @@ class KnowledgeRepo:
         cls,
         tenant_id: str,
         workspace_id: str,
-        query_terms: List[str],
-        filters: Optional[Dict[str, Any]] = None,
+        query_terms: list[str],
+        filters: dict[str, Any] | None = None,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         rows = pg_client.search_chunks(tenant_id, workspace_id, query_terms, filters=filters, limit=limit)
         results = []
         for row in rows:
@@ -139,10 +139,10 @@ class KnowledgeRepo:
         cls,
         tenant_id: str,
         workspace_id: str,
-        query_vector: List[float],
-        filters: Optional[Dict[str, Any]] = None,
+        query_vector: list[float],
+        filters: dict[str, Any] | None = None,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return qdrant_client.search(
             tenant_id=tenant_id,
             query_vector=query_vector,
@@ -156,9 +156,9 @@ class KnowledgeRepo:
         cls,
         tenant_id: str,
         workspace_id: str,
-        query_terms: List[str],
+        query_terms: list[str],
         limit: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         return neo4j_client.search_facts(tenant_id, workspace_id, query_terms, top_k=limit)
 
     @classmethod

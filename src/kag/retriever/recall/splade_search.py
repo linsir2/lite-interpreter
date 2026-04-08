@@ -1,11 +1,11 @@
 """SPLADE 的规则化 MVP 实现：扩展关键词后再做稀疏召回。"""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from src.storage.repository.knowledge_repo import KnowledgeRepo
-from .filters import extract_query_terms, normalize_filters
 
+from .filters import extract_query_terms, normalize_filters
 
 SYNONYMS = {
     "规则": ["标准", "制度", "口径"],
@@ -17,10 +17,10 @@ SYNONYMS = {
 def recall(
     query: str,
     tenant_id: str,
-    filters: Optional[Dict[str, Any]] = None,
+    filters: dict[str, Any] | None = None,
     workspace_id: str = "default_ws",
     top_k: int = 20,
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     terms = extract_query_terms(query)
     expanded = list(terms)
     for term in terms:

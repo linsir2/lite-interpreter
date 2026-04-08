@@ -2,17 +2,16 @@
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
 import docker
+from config.sandbox_config import DOCKER_CONFIG
 from docker.errors import DockerException
 
-from config.sandbox_config import DOCKER_CONFIG
 from src.common import get_logger
 
 logger = get_logger(__name__)
 
-_docker_client: Optional[docker.DockerClient] = None
+_docker_client: docker.DockerClient | None = None
 _client_lock = threading.Lock()
 _shutdown_requested = False
 _shutdown_lock = threading.Lock()

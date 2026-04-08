@@ -1,7 +1,8 @@
 """Runtime gateway for bounded dynamic runs."""
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from src.dynamic_engine.runtime_backends import DynamicRuntimeBackend
 from src.dynamic_engine.runtime_registry import RuntimeRegistry, runtime_registry

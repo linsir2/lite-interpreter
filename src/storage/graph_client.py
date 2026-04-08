@@ -7,16 +7,17 @@ Neo4j 图数据库客户端
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     from neo4j import GraphDatabase
 except ImportError:  # pragma: no cover - optional runtime dependency
     GraphDatabase = None
 
+from config.settings import NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER
+
 from src.common.logger import get_logger
 from src.storage.schema import KnowledgeTriple
-from config.settings import NEO4J_PASSWORD, NEO4J_URI, NEO4J_USER
 
 logger = get_logger(__name__)
 
@@ -46,7 +47,7 @@ class GraphDBClient:
         except Exception:
             return False
 
-    def merge_triples(self, tenant_id: str, workspace_id: str, triples: List[KnowledgeTriple]):
+    def merge_triples(self, tenant_id: str, workspace_id: str, triples: list[KnowledgeTriple]):
         if not self.driver or not triples:
             return
 
@@ -98,9 +99,9 @@ class GraphDBClient:
         self,
         tenant_id: str,
         workspace_id: str,
-        query_terms: List[str],
+        query_terms: list[str],
         top_k: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not self.driver or not query_terms:
             return []
 

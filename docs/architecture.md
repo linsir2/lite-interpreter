@@ -54,6 +54,54 @@
 - 让 API 和前端能看到统一的任务视图
 - 提供 runtime capability / diagnostics / conformance / execution resource 查询
 
+#### 黑板边界与分工
+
+当前控制面里的三类黑板，不应该再混着理解：
+
+| 黑板 | 主要职责 | 应该放什么 | 不应该放什么 |
+| --- | --- | --- | --- |
+| `GlobalBlackboard` | 任务全局生命周期与用户可见总状态 | `global_status`、`sub_status`、失败信息、重试计数 | 代码、检索快照、执行结果细节 |
+| `ExecutionBlackboard` | 执行编排主状态 | `TaskEnvelope`、`ExecutionIntent`、`ExecutionRecord`、`business_context`、`final_response` | 长期知识资产、纯知识观察态 |
+| `KnowledgeBlackboard` | 知识子域观察态 | `business_documents` 解析状态、`latest_retrieval_snapshot` | 最终回复、执行意图、沙箱执行结果 |
+
+更直白地说：
+
+- `ExecutionBlackboard` 回答的是“任务现在怎么跑”
+- `KnowledgeBlackboard` 回答的是“这批文档和本次检索现在是什么状态”
+- `GlobalBlackboard` 回答的是“用户看到这个任务到了哪一步”
+
+#### 为什么不把所有东西都塞回一个黑板
+
+如果全部放回 `ExecutionBlackboard`，短期看起来省事，长期会出现三个问题：
+
+1. 知识资产页、解析状态页、检索诊断页都要从执行态里反查
+2. 知识态和执行态更新频率不同，容易互相污染
+3. 后续如果知识链路要独立恢复、独立审计，就没有天然边界
+
+因此当前的策略不是“黑板越少越好”，而是“每个黑板负责一个稳定子域”。
+
+#### 新增子黑板的判断标准
+
+后面如果你继续扩展 blackboard，建议满足下面三个条件再拆新子黑板：
+
+1. 这类状态有独立的观察视角。
+   例如前端、运维、审计会单独看它，而不是总和执行态一起看。
+
+2. 这类状态的生命周期与执行编排不同。
+   例如知识资产、数据资产、评测资产，往往比某一次代码执行更稳定。
+
+3. 它不是另一个黑板里字段的纯镜像集合。
+   如果只是为了省几次取值而复制一份字段，就不要新开。
+
+当前已经满足拆分条件的，是 `KnowledgeBlackboard`。
+当前还不建议立刻拆出的，是 `structured_datasets`：
+
+- 它仍然紧耦合 `DataInspector`
+- 紧耦合 sandbox input mounts
+- 紧耦合 static codegen 的输入装配
+
+所以结构化数据目前仍留在 `ExecutionBlackboard`，这是有意为之，不是遗漏。
+
 ### 2.2 运行面
 
 运行面负责“任务如何被编排”。
@@ -216,7 +264,7 @@ SkillNet 设计原则：
 ### 4.1 Router 与 Blackboard
 
 - Router 从 `ExecutionBlackboard` 读取上下文
-- Router 把 `routing_mode / complexity_score / candidate_skills / execution_intent` 写回
+- Router 把 `execution_intent` 写回
 - 后续节点不需要重复推断执行意图
 
 ### 4.2 Dynamic Runtime 与 Harness
@@ -253,6 +301,34 @@ SkillNet 设计原则：
   - `/api/tasks/{task_id}/executions`
   - `/api/executions/{execution_id}/tool-calls`
   - `/api/executions/{execution_id}/events`
+
+### 4.6 KnowledgeBlackboard 与 ExecutionBlackboard 的协作
+
+当前协作方式是“执行链写入，知识子域同步投影”：
+
+1. 上传业务文档时
+   先写 `ExecutionBlackboard.business_documents`
+   再同步 `KnowledgeBlackboard.business_documents`
+
+2. KAG 解析文档后
+   更新文档的 `status / parse_mode / parser_diagnostics`
+   同步到 `KnowledgeBlackboard`
+
+3. QueryEngine / ContextBuilder 产生知识快照后
+   更新 `ExecutionBlackboard.knowledge_snapshot`
+   同步到 `KnowledgeBlackboard.latest_retrieval_snapshot`
+
+当前已经收口为：
+
+- 执行节点只更新 `ExecutionBlackboard`
+- 知识节点显式更新 `KnowledgeBlackboard`
+- 业务代码不依赖 execution->knowledge 的隐式同步
+
+这样做的好处是：
+
+- 执行链不会失去当前任务必需的上下文
+- 知识链路又能拥有自己的稳定观察视图
+- 执行面与知识面各自拥有清晰、独立的真源边界
 
 ## 5. 当前架构收益
 

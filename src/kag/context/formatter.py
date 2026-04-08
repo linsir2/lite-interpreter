@@ -1,14 +1,12 @@
 """将压缩后的候选片段格式化为业务上下文。"""
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 
 class ContextFormatter:
     @classmethod
-    def format(cls, candidates: List[Dict[str, object]]) -> Tuple[Dict[str, List[str]], str]:
+    def format(cls, candidates: list[dict[str, object]]) -> tuple[dict[str, list[str]], str]:
         context = {"rules": [], "metrics": [], "filters": [], "sources": []}
-        markdown_parts: List[str] = []
+        markdown_parts: list[str] = []
         for index, candidate in enumerate(candidates, start=1):
             text = str(candidate.get("compressed_text") or candidate.get("text") or "").strip()
             if not text:

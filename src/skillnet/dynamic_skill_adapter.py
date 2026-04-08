@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from src.common import capability_registry
 
@@ -33,9 +34,13 @@ def build_dynamic_skill_candidate(
 ) -> DynamicSkillCandidate:
     """Summarize successful dynamic traces into a future static skill candidate."""
 
+    normalized_trace_records = [
+        record.model_dump(mode="json") if hasattr(record, "model_dump") else dict(record)
+        for record in trace_records
+    ]
     winning_steps = [
         str(record.get("step_name"))
-        for record in trace_records
+        for record in normalized_trace_records
         if str(record.get("event_type") or "") in {
             "success",
             "completed",
@@ -47,7 +52,7 @@ def build_dynamic_skill_candidate(
         }
     ]
     metadata = {
-        "trace_count": len(trace_records),
+        "trace_count": len(normalized_trace_records),
         "source": "dynamic_swarm",
     }
     normalized_capabilities = capability_registry.normalize_names(required_capabilities or [])

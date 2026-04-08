@@ -37,9 +37,6 @@ class GovernanceDecision:
     def to_patch(self) -> dict[str, Any]:
         record = self.to_record()
         return {
-            "governance_mode": self.mode,
-            "governance_profile": self.profile,
-            "governance_decisions": [record],
             "decision_log": [record],
             "governance_trace_ref": self.metadata.get("trace_ref"),
         }

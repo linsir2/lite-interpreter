@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, Dict, List
+from enum import StrEnum
+from typing import Any
 
 from src.common import generate_uuid, get_logger
 from src.storage.schema import EntityNode
@@ -16,7 +16,7 @@ from src.storage.schema import EntityNode
 logger = get_logger(__name__)
 
 
-class EntityType(str, Enum):
+class EntityType(StrEnum):
     SEMANTIC = "semantic"
     TEMPORAL = "temporal"
     CAUSAL = "causal"
@@ -31,7 +31,7 @@ class ExtractedEntity:
     start_pos: int
     end_pos: int
     confidence: float
-    properties: Dict[str, Any]
+    properties: dict[str, Any]
 
 
 class EntityExtractor:
@@ -39,7 +39,7 @@ class EntityExtractor:
         self.use_llm = False if use_llm else False
         logger.info(f"[EntityExtractor] 初始化完成，use_llm={self.use_llm}")
 
-    def extract_entities(self, text: str, doc_id: str, chunk_id: str) -> List[EntityNode]:
+    def extract_entities(self, text: str, doc_id: str, chunk_id: str) -> list[EntityNode]:
         if not text.strip():
             return []
         extracted_entities = self._extract_with_rules(text)
@@ -47,16 +47,16 @@ class EntityExtractor:
         logger.info(f"[EntityExtractor] chunk={chunk_id} 抽取实体 {len(entity_nodes)} 个")
         return entity_nodes
 
-    def _extract_with_rules(self, text: str) -> List[ExtractedEntity]:
-        entities: List[ExtractedEntity] = []
+    def _extract_with_rules(self, text: str) -> list[ExtractedEntity]:
+        entities: list[ExtractedEntity] = []
         entities.extend(self._extract_named_entities(text))
         entities.extend(self._extract_temporal_entities(text))
         entities.extend(self._extract_causal_entities(text))
         entities.extend(self._extract_semantic_entities(text))
         return self._deduplicate_entities(entities)
 
-    def _extract_named_entities(self, text: str) -> List[ExtractedEntity]:
-        entities: List[ExtractedEntity] = []
+    def _extract_named_entities(self, text: str) -> list[ExtractedEntity]:
+        entities: list[ExtractedEntity] = []
         patterns = [
             r"[\u4e00-\u9fa5A-Za-z0-9]+(?:公司|集团|组织|机构|平台|系统|大学|学院|医院)",
             r"[A-Z][A-Za-z0-9_-]{2,}",
@@ -75,8 +75,8 @@ class EntityExtractor:
                 )
         return entities
 
-    def _extract_temporal_entities(self, text: str) -> List[ExtractedEntity]:
-        entities: List[ExtractedEntity] = []
+    def _extract_temporal_entities(self, text: str) -> list[ExtractedEntity]:
+        entities: list[ExtractedEntity] = []
         patterns = [
             r"\d{4}年\d{1,2}月\d{1,2}日",
             r"\d{4}-\d{1,2}-\d{1,2}",
@@ -98,9 +98,9 @@ class EntityExtractor:
                 )
         return entities
 
-    def _extract_causal_entities(self, text: str) -> List[ExtractedEntity]:
+    def _extract_causal_entities(self, text: str) -> list[ExtractedEntity]:
         keywords = ["因为", "由于", "导致", "因此", "影响", "造成"]
-        entities: List[ExtractedEntity] = []
+        entities: list[ExtractedEntity] = []
         for keyword in keywords:
             for match in re.finditer(keyword, text):
                 entities.append(
@@ -115,8 +115,8 @@ class EntityExtractor:
                 )
         return entities
 
-    def _extract_semantic_entities(self, text: str) -> List[ExtractedEntity]:
-        entities: List[ExtractedEntity] = []
+    def _extract_semantic_entities(self, text: str) -> list[ExtractedEntity]:
+        entities: list[ExtractedEntity] = []
         patterns = [
             r"[\u4e00-\u9fa5]{2,}(?:规则|标准|流程|指标|口径|模型|算法|系统|能力|协议|风险|成本)",
             r"[\u4e00-\u9fa5]{2,}(?:分析|治理|优化|检索|融合|规划)",
@@ -135,16 +135,16 @@ class EntityExtractor:
                 )
         return entities
 
-    def _deduplicate_entities(self, entities: List[ExtractedEntity]) -> List[ExtractedEntity]:
-        unique: Dict[tuple[int, int, str], ExtractedEntity] = {}
+    def _deduplicate_entities(self, entities: list[ExtractedEntity]) -> list[ExtractedEntity]:
+        unique: dict[tuple[int, int, str], ExtractedEntity] = {}
         for entity in entities:
             key = (entity.start_pos, entity.end_pos, entity.text)
             if key not in unique:
                 unique[key] = entity
         return list(unique.values())
 
-    def _convert_to_entity_nodes(self, extracted_entities: List[ExtractedEntity], doc_id: str, chunk_id: str) -> List[EntityNode]:
-        nodes: List[EntityNode] = []
+    def _convert_to_entity_nodes(self, extracted_entities: list[ExtractedEntity], doc_id: str, chunk_id: str) -> list[EntityNode]:
+        nodes: list[EntityNode] = []
         for entity in extracted_entities:
             nodes.append(
                 EntityNode(

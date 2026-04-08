@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import importlib
 import json
-from pathlib import Path
 import sys
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
 import httpx
-
-from src.common.contracts import TraceEvent
-from src.common.utils import generate_uuid, get_utc_now
 from config.settings import (
     DEERFLOW_CLIENT_MODULE,
     DEERFLOW_CONFIG_PATH,
@@ -24,6 +22,10 @@ from config.settings import (
     DEERFLOW_SIDECAR_TIMEOUT,
     DEERFLOW_SIDECAR_URL,
 )
+
+from src.common.contracts import TraceEvent
+from src.common.utils import generate_uuid, get_utc_now
+from src.dag_engine.dag_exceptions import TaskLeaseLostError
 
 
 @dataclass(frozen=True)
@@ -410,6 +412,8 @@ class DeerflowBridge:
         if runtime_mode == "sidecar":
             try:
                 return self._run_via_sidecar(request, on_event=on_event)
+            except TaskLeaseLostError:
+                raise
             except Exception as exc:
                 preview = self.preview(request)
                 return DeerflowTaskResult(
@@ -432,6 +436,8 @@ class DeerflowBridge:
         if runtime_mode == "auto" and self.runtime_config.sidecar_url:
             try:
                 return self._run_via_sidecar(request, on_event=on_event)
+            except TaskLeaseLostError:
+                raise
             except Exception as exc:
                 auto_sidecar_error = str(exc)
 
@@ -453,6 +459,8 @@ class DeerflowBridge:
                     },
                 )
             return result
+        except TaskLeaseLostError:
+            raise
         except Exception as exc:
             preview = self.preview(request)
             return DeerflowTaskResult(

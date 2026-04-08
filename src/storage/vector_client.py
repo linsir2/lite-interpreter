@@ -8,7 +8,7 @@ MRL_DIMENSION 保持一致，而不是原始 embedding 维度。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     from qdrant_client import QdrantClient
@@ -24,9 +24,10 @@ except ImportError:  # pragma: no cover - optional runtime dependency
     QdrantClient = None
     Distance = FieldCondition = Filter = MatchValue = PointStruct = VectorParams = None
 
-from src.common import get_logger
-from src.storage.schema import DocChunk
 from config.settings import MRL_DIMENSION, QDRANT_HOST, QDRANT_PORT
+
+from src.common.logger import get_logger
+from src.storage.schema import DocChunk
 
 logger = get_logger(__name__)
 
@@ -36,7 +37,7 @@ class VectorDBClient:
         try:
             if QdrantClient is None:
                 raise ImportError("qdrant-client not installed")
-            self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+            self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
             self.vector_size = MRL_DIMENSION
             logger.info("[VectorClient] Qdrant 客户端初始化成功。")
         except Exception as exc:
@@ -56,7 +57,7 @@ class VectorDBClient:
             )
             logger.info(f"[VectorClient] 创建全新的向量 Collection: {collection_name}")
 
-    def _build_filter(self, workspace_id: Optional[str], filters: Optional[Dict[str, Any]]) -> Optional[Filter]:
+    def _build_filter(self, workspace_id: str | None, filters: dict[str, Any] | None) -> Filter | None:
         must = []
         if workspace_id:
             must.append(FieldCondition(key="workspace_id", match=MatchValue(value=workspace_id)))
@@ -82,15 +83,15 @@ class VectorDBClient:
             logger.error(f"[VectorClient] 探查索引失败: {exc}")
             return False
 
-    def upsert(self, tenant_id: str, workspace_id: str, chunks: List[DocChunk], embeddings: List[List[float]]):
+    def upsert(self, tenant_id: str, workspace_id: str, chunks: list[DocChunk], embeddings: list[list[float]]):
         if not self.client:
             raise ConnectionError("Qdrant client not initialized.")
 
         collection_name = self._get_collection_name(tenant_id)
         self._ensure_collection(collection_name)
 
-        points: List[PointStruct] = []
-        for chunk, emb in zip(chunks, embeddings):
+        points: list[PointStruct] = []
+        for chunk, emb in zip(chunks, embeddings, strict=False):
             metadata = dict(chunk.metadata)
             version = metadata.pop("version", "1.0")
             summary = metadata.get("summary")
@@ -112,11 +113,11 @@ class VectorDBClient:
     def search(
         self,
         tenant_id: str,
-        query_vector: List[float],
-        workspace_id: Optional[str] = None,
-        filters: Optional[Dict[str, Any]] = None,
+        query_vector: list[float],
+        workspace_id: str | None = None,
+        filters: dict[str, Any] | None = None,
         top_k: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not self.client:
             return []
         collection_name = self._get_collection_name(tenant_id)

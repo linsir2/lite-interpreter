@@ -1,17 +1,28 @@
 """黑板核心逻辑测试用例"""
 import asyncio
-import pytest
+import importlib
 import threading
+from datetime import timedelta
+
+import pytest
 from src.blackboard import (
-    global_blackboard,
-    execution_blackboard,
-    knowledge_blackboard,
-    GlobalStatus,
+    AuditResultState,
+    DynamicRequestRuntimeState,
+    DynamicRequestState,
     ExecutionData,
+    GlobalStatus,
+    InputMountState,
+    KnowledgeData,
+    MemoryData,
+    execution_blackboard,
+    global_blackboard,
+    knowledge_blackboard,
+    memory_blackboard,
 )
-from src.common import event_journal
+from src.common import EventTopic, ExecutionRecord, event_journal
 from src.common.event_bus import AsyncEventBus, Event, event_bus
-from src.common import EventTopic
+from src.common.utils import get_utc_now
+from src.storage.repository.state_repo import StateRepo
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -19,6 +30,7 @@ def init_blackboard():
     """测试前初始化黑板，注册子黑板"""
     global_blackboard.register_sub_board(execution_blackboard)
     global_blackboard.register_sub_board(knowledge_blackboard)
+    global_blackboard.register_sub_board(memory_blackboard)
     event_bus._subscribers.clear()
     event_bus._global_subscribers.clear()
     event_journal.clear()
@@ -27,6 +39,7 @@ def init_blackboard():
     global_blackboard._task_states.clear()
     execution_blackboard._storage.clear()
     knowledge_blackboard._storage.clear()
+    memory_blackboard._storage.clear()
     event_bus._subscribers.clear()
     event_bus._global_subscribers.clear()
     event_journal.clear()
@@ -62,16 +75,287 @@ def test_execution_blackboard_write_read():
     exec_data = ExecutionData(
         task_id=task_id,
         tenant_id=tenant_id,
-        generated_code="print('hello world')",
-        execution_result={"success": True, "output": "hello world"}
+        static={
+            "generated_code": "print('hello world')",
+            "execution_record": ExecutionRecord(
+                session_id="session-test-001",
+                tenant_id=tenant_id,
+                workspace_id="default_ws",
+                task_id=task_id,
+                success=True,
+                trace_id="trace-test-001",
+                duration_seconds=0.1,
+                output="hello world",
+            ),
+        },
     )
     assert execution_blackboard.write(tenant_id, task_id, exec_data) is True
     
     # 读取数据
     read_data = execution_blackboard.read(tenant_id, task_id)
     assert read_data is not None
-    assert read_data.generated_code == "print('hello world')"
-    assert read_data.execution_result["success"] is True
+    assert read_data.static.generated_code == "print('hello world')"
+    assert read_data.static.execution_record is not None
+    assert read_data.static.execution_record.success is True
+
+
+def test_knowledge_blackboard_write_read():
+    tenant_id = "test_tenant_knowledge"
+    task_id = "test_task_knowledge"
+
+    data = KnowledgeData(
+        task_id=task_id,
+        tenant_id=tenant_id,
+        business_documents=[{"file_name": "rule.pdf", "status": "parsed", "parse_mode": "ocr"}],
+        latest_retrieval_snapshot={"evidence_refs": ["chunk-1"]},
+    )
+    assert knowledge_blackboard.write(tenant_id, task_id, data) is True
+
+    restored = knowledge_blackboard.read(tenant_id, task_id)
+    assert restored is not None
+    assert restored.business_documents[0].file_name == "rule.pdf"
+    assert restored.parser_reports[0]["parse_mode"] == "ocr"
+
+
+def test_memory_blackboard_write_read():
+    tenant_id = "test_tenant_memory"
+    task_id = "test_task_memory"
+
+    data = MemoryData(
+        task_id=task_id,
+        tenant_id=tenant_id,
+        approved_skills=[{"name": "skill-memory-demo"}],
+        historical_matches=[{"name": "skill-history-demo", "selected_by_stages": ["router"]}],
+        task_summary={"headline": "memory headline", "answer": "summary"},
+    )
+    assert memory_blackboard.write(tenant_id, task_id, data) is True
+
+    restored = memory_blackboard.read(tenant_id, task_id)
+    assert restored is not None
+    assert restored.approved_skills[0].name == "skill-memory-demo"
+    assert restored.historical_matches[0].name == "skill-history-demo"
+    assert restored.task_summary.headline == "memory headline"
+
+
+def test_execution_data_coerces_typed_audit_result():
+    execution = ExecutionData(
+        task_id="task-audit-typed",
+        tenant_id="tenant-audit-typed",
+        static={
+            "audit_result": {
+                "safe": True,
+                "reason": "ok",
+                "trace_id": "trace-audit",
+                "duration_seconds": 0.01,
+            }
+        },
+    )
+    assert isinstance(execution.static.audit_result, AuditResultState)
+    assert execution.static.audit_result.safe is True
+
+
+def test_node_output_patch_coerces_typed_input_mounts():
+    checkpoint = {
+        "status": "completed",
+        "output_patch": {
+            "input_mounts": [
+                {
+                    "kind": "structured_dataset",
+                    "host_path": "/tmp/in.csv",
+                    "container_path": "/app/inputs/in.csv",
+                    "file_name": "in.csv",
+                    "encoding": "utf-8",
+                    "sep": ",",
+                }
+            ],
+            "audit_result": {
+                "safe": True,
+                "reason": "ok",
+                "trace_id": "trace-checkpoint",
+                "duration_seconds": 0.02,
+            },
+        },
+    }
+    execution = ExecutionData(
+        task_id="task-checkpoint-typed",
+        tenant_id="tenant-checkpoint-typed",
+        control={"node_checkpoints": {"coder": checkpoint}},
+    )
+    output_patch = execution.control.node_checkpoints["coder"].output_patch
+    assert isinstance(output_patch.input_mounts[0], InputMountState)
+    assert output_patch.input_mounts[0].container_path == "/app/inputs/in.csv"
+    assert isinstance(output_patch.audit_result, AuditResultState)
+    assert output_patch.audit_result.safe is True
+
+
+def test_execution_data_coerces_typed_dynamic_request():
+    execution = ExecutionData(
+        task_id="task-dynamic-request-typed",
+        tenant_id="tenant-dynamic-request-typed",
+        dynamic={
+            "request": {
+                "task_id": "task-dynamic-request-typed",
+                "tenant_id": "tenant-dynamic-request-typed",
+                "query": "继续调研",
+                "sandbox_backend": "docker",
+                "runtime": {
+                    "runtime_mode": "auto",
+                    "python_package": "deerflow.client",
+                    "max_steps": 6,
+                    "recursion_limit": 32,
+                    "subagent_enabled": True,
+                    "plan_mode": True,
+                },
+                "system_context": {"constraints": {"allowed_tools": ["knowledge_query"]}},
+                "metadata": {"routing_mode": "dynamic"},
+            },
+        },
+    )
+    assert isinstance(execution.dynamic.request, DynamicRequestState)
+    assert isinstance(execution.dynamic.request.runtime, DynamicRequestRuntimeState)
+    assert execution.dynamic.request.runtime.runtime_mode == "auto"
+    assert execution.dynamic.request.sandbox_backend == "docker"
+
+
+def test_knowledge_list_workspace_states_prefers_newer_persisted_state_over_stale_memory():
+    tenant_id = "tenant_projection_refresh"
+    task_id = "task_projection_refresh"
+    knowledge_blackboard.write(
+        tenant_id,
+        task_id,
+        KnowledgeData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws_projection_refresh",
+            business_documents=[
+                {
+                    "file_name": "new-rule.pdf",
+                    "path": "/tmp/new-rule.pdf",
+                    "status": "parsed",
+                }
+            ],
+            latest_retrieval_snapshot={"evidence_refs": ["chunk-new"]},
+            updated_at=get_utc_now() - timedelta(days=1),
+        ),
+    )
+    assert knowledge_blackboard.persist(tenant_id, task_id) is True
+
+    full_state = StateRepo.load_blackboard_state(tenant_id, task_id)
+    assert full_state is not None
+    full_state["knowledge"] = {
+        "task_id": task_id,
+        "tenant_id": tenant_id,
+        "workspace_id": "ws_projection_refresh",
+        "business_documents": [
+            {
+                "file_name": "old-rule.pdf",
+                "path": "/tmp/old-rule.pdf",
+                "status": "pending",
+            }
+        ],
+        "latest_retrieval_snapshot": {"evidence_refs": ["chunk-fresh"]},
+        "updated_at": get_utc_now().isoformat(),
+    }
+    StateRepo.save_blackboard_state(tenant_id, task_id, "ws_projection_refresh", full_state)
+    knowledge_blackboard._storage.clear()
+
+    states = knowledge_blackboard.list_workspace_states(tenant_id, "ws_projection_refresh")
+
+    assert len(states) == 1
+    assert states[0].business_documents[0].file_name == "old-rule.pdf"
+    assert states[0].latest_retrieval_snapshot.evidence_refs == ["chunk-fresh"]
+
+
+def test_list_workspace_states_replaces_stale_in_memory_knowledge_with_newer_persisted_state():
+    tenant_id = "tenant_projection_memory_refresh"
+    task_id = "task_projection_memory_refresh"
+    knowledge_blackboard.write(
+        tenant_id,
+        task_id,
+        KnowledgeData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws_projection_memory_refresh",
+            business_documents=[
+                {
+                    "file_name": "stale-rule.pdf",
+                    "path": "/tmp/stale-rule.pdf",
+                    "status": "pending",
+                }
+            ],
+            latest_retrieval_snapshot={"evidence_refs": ["chunk-stale"]},
+            updated_at=get_utc_now() - timedelta(days=1),
+        ),
+    )
+    StateRepo.save_blackboard_state(
+        tenant_id,
+        task_id,
+        "ws_projection_memory_refresh",
+        {
+            "knowledge": {
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "workspace_id": "ws_projection_memory_refresh",
+                "business_documents": [
+                    {
+                        "file_name": "fresh-rule.pdf",
+                        "path": "/tmp/fresh-rule.pdf",
+                        "status": "parsed",
+                    }
+                ],
+                "latest_retrieval_snapshot": {"evidence_refs": ["chunk-fresh"]},
+                "updated_at": get_utc_now().isoformat(),
+            }
+        },
+    )
+
+    states = knowledge_blackboard.list_workspace_states(tenant_id, "ws_projection_memory_refresh")
+
+    assert len(states) == 1
+    assert states[0].business_documents[0].file_name == "fresh-rule.pdf"
+    assert states[0].latest_retrieval_snapshot.evidence_refs == ["chunk-fresh"]
+    cached = knowledge_blackboard.read(tenant_id, task_id)
+    assert cached is not None
+    assert cached.business_documents[0].file_name == "fresh-rule.pdf"
+
+
+def test_execution_list_workspace_states_prefers_newer_persisted_state_over_stale_memory():
+    tenant_id = "tenant_execution_list_refresh"
+    task_id = "task_execution_list_refresh"
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws_execution_list_refresh",
+            control={
+                "final_response": {"summary": "old"},
+                "updated_at": (get_utc_now() - timedelta(days=1)).isoformat(),
+            },
+        ),
+    )
+    StateRepo.save_blackboard_state(
+        tenant_id,
+        task_id,
+        "ws_execution_list_refresh",
+        {
+            "execution": {
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "workspace_id": "ws_execution_list_refresh",
+                "control": {
+                    "final_response": {"summary": "new"},
+                    "updated_at": get_utc_now().isoformat(),
+                },
+            }
+        },
+    )
+
+    states = execution_blackboard.list_workspace_states(tenant_id, "ws_execution_list_refresh")
+
+    assert len(states) == 1
+    assert states[0].control.final_response["summary"] == "new"
 
 
 def test_event_bus_publish_subscribe():
@@ -111,14 +395,6 @@ def test_event_bus_publish_subscribe():
     assert any(record["topic"] == EventTopic.UI_TASK_STATUS_UPDATE.value for record in journal_records)
 
 
-def test_create_task_keeps_legacy_signature_compatibility():
-    """兼容旧调用：只传 tenant_id + input_query。"""
-    task_id = global_blackboard.create_task("legacy_tenant", "请分析利润波动")
-    task = global_blackboard.get_task_state(task_id)
-    assert task.workspace_id == "default_ws"
-    assert task.input_query == "请分析利润波动"
-
-
 def test_get_task_state_restores_from_persisted_global_state():
     task_id = global_blackboard.create_task("restore_tenant", "ws_restore", "恢复任务")
     global_blackboard.update_global_status(task_id, GlobalStatus.ANALYZING)
@@ -131,6 +407,25 @@ def test_get_task_state_restores_from_persisted_global_state():
     assert restored.global_status == GlobalStatus.ANALYZING
 
 
+def test_get_task_state_prefers_newer_persisted_global_state_over_stale_memory():
+    task_id = global_blackboard.create_task("fresh_global_tenant", "ws_fresh_global", "刷新任务")
+    task = global_blackboard.get_task_state(task_id)
+    task.global_status = GlobalStatus.ANALYZING
+    task.updated_at = get_utc_now() - timedelta(days=1)
+
+    full_state = StateRepo.load_blackboard_state(task.tenant_id, task_id)
+    assert full_state is not None
+    full_state["global"]["global_status"] = GlobalStatus.SUCCESS.value
+    full_state["global"]["sub_status"] = "已由其他实例更新"
+    full_state["global"]["updated_at"] = get_utc_now().isoformat()
+    StateRepo.save_blackboard_state(task.tenant_id, task_id, task.workspace_id, full_state)
+
+    refreshed = global_blackboard.get_task_state(task_id)
+
+    assert refreshed.global_status == GlobalStatus.SUCCESS
+    assert refreshed.sub_status == "已由其他实例更新"
+
+
 def test_list_unfinished_tasks_includes_persisted_tasks():
     task_id = global_blackboard.create_task("unfinished_tenant", "ws_unfinished", "继续执行")
     global_blackboard.update_global_status(task_id, GlobalStatus.CODING)
@@ -139,6 +434,35 @@ def test_list_unfinished_tasks_includes_persisted_tasks():
 
     unfinished = global_blackboard.list_unfinished_tasks()
     assert any(task.task_id == task_id for task in unfinished)
+
+
+def test_list_unfinished_tasks_includes_harvesting_and_summarizing():
+    harvesting_task = global_blackboard.create_task("unfinished_tenant_h", "ws_unfinished_h", "继续执行")
+    summarizing_task = global_blackboard.create_task("unfinished_tenant_s", "ws_unfinished_s", "继续执行")
+    global_blackboard.update_global_status(harvesting_task, GlobalStatus.HARVESTING)
+    global_blackboard.update_global_status(summarizing_task, GlobalStatus.SUMMARIZING)
+
+    global_blackboard._task_states.clear()
+
+    unfinished = global_blackboard.list_unfinished_tasks()
+    unfinished_ids = {task.task_id for task in unfinished}
+
+    assert harvesting_task in unfinished_ids
+    assert summarizing_task in unfinished_ids
+
+
+def test_task_finished_payload_uses_explicit_repair_retry_semantics():
+    task_id = global_blackboard.create_task("tenant-retry-payload", "ws-retry-payload", "query")
+    global_blackboard.update_global_status(task_id, GlobalStatus.FAILED, current_retries=1)
+
+    journal_records = event_journal.read("tenant-retry-payload", task_id, workspace_id="ws-retry-payload")
+    finished_records = [record for record in journal_records if record["topic"] == EventTopic.SYS_TASK_FINISHED.value]
+
+    assert finished_records
+    payload = finished_records[-1]["payload"]
+    assert payload["retry_info"]["scope"] == "codegen_debug_loop"
+    assert payload["retry_info"]["used_repair_retries"] == 1
+    assert "cost_info" not in payload
 
 
 def test_event_bus_process_events_waits_for_dispatch_completion():
@@ -195,3 +519,37 @@ def test_event_bus_can_restart_after_stop():
         assert bus._executor.is_alive()
     finally:
         bus.stop()
+
+
+def test_event_bus_dispatch_reports_async_callback_errors_with_correct_callback_name(monkeypatch):
+    errors: list[str] = []
+    event_bus_module = importlib.import_module("src.common.event_bus")
+
+    def sync_callback(_event):
+        return None
+
+    async def async_callback(_event):
+        raise RuntimeError("boom")
+
+    bus = object.__new__(AsyncEventBus)
+    bus._subscribers = {EventTopic.UI_TASK_STATUS_UPDATE: [sync_callback, async_callback]}
+    bus._global_subscribers = []
+    bus._lock = threading.Lock()
+
+    monkeypatch.setattr(event_bus_module.logger, "error", lambda message, extra=None: errors.append(message))
+
+    event = Event(
+        event_id="evt-async-error",
+        topic=EventTopic.UI_TASK_STATUS_UPDATE,
+        tenant_id="tenant-async-error",
+        task_id="task-async-error",
+        workspace_id="ws-async-error",
+        payload={"new_status": GlobalStatus.CODING.value},
+        timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        trace_id="trace-async-error",
+    )
+
+    asyncio.run(bus._dispatch_event(event))
+
+    assert errors
+    assert errors[-1].count("async_callback") == 1

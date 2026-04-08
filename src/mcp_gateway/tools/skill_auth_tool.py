@@ -1,7 +1,8 @@
 """Skill authorization helpers backed by the capability registry."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from src.common import capability_registry
 from src.harness import get_profile
@@ -18,7 +19,7 @@ class SkillAuthTool:
         *,
         requested_capabilities: Iterable[str],
         profile_name: str = "reviewer",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         resolved_profile, profile, _ = get_profile(profile_name)
         allowed, _ = capability_registry.resolve_names(profile.get("allowed_tools"))
         allowed_ids = {descriptor.capability_id for descriptor in allowed}
@@ -38,7 +39,7 @@ class SkillAuthTool:
         *,
         skill: SkillDescriptor | dict[str, object],
         profile_name: str = "reviewer",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         descriptor = skill if isinstance(skill, SkillDescriptor) else SkillDescriptor.from_payload(dict(skill))
         result = SkillAuthTool.authorize(
             requested_capabilities=descriptor.required_capabilities,

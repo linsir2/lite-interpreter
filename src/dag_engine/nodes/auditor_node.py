@@ -1,7 +1,7 @@
 """Minimal auditor node that AST-checks generated code before execution."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 MAX_DEBUG_RETRIES = 1
 
 
-def auditor_node(state: DagGraphState) -> Dict[str, Any]:
+def auditor_node(state: DagGraphState) -> dict[str, Any]:
     tenant_id = state["tenant_id"]
     task_id = state["task_id"]
 
@@ -25,15 +25,21 @@ def auditor_node(state: DagGraphState) -> Dict[str, Any]:
     )
 
     exec_data = execution_blackboard.read(tenant_id, task_id)
-    if not exec_data or not exec_data.generated_code:
+    if not exec_data or not exec_data.static.generated_code:
         logger.warning(f"[Auditor] 任务 {task_id} 没有待审计代码")
         return {"audit_result": None, "next_actions": ["executor"]}
 
-    audit_result = audit_code(exec_data.generated_code, tenant_id, trace_id=task_id)
-    exec_data.audit_result = audit_result
+    audit_result = audit_code(exec_data.static.generated_code, tenant_id, trace_id=task_id)
+    exec_data.static.audit_result = audit_result
     if not audit_result.get("safe"):
-        exec_data.latest_error_traceback = audit_result.get("reason")
+        exec_data.static.latest_error_traceback = audit_result.get("reason")
         retry_count = int(state.get("retry_count", 0) or 0)
+        global_blackboard.update_global_status(
+            task_id=task_id,
+            new_status=GlobalStatus.AUDITING,
+            sub_status="AST 审计未通过，准备进入修复或终止流程",
+            current_retries=retry_count,
+        )
         if retry_count >= MAX_DEBUG_RETRIES:
             global_blackboard.update_global_status(
                 task_id=task_id,
@@ -41,6 +47,7 @@ def auditor_node(state: DagGraphState) -> Dict[str, Any]:
                 sub_status="静态链路审计失败且已达到最大修复次数",
                 failure_type="auditing",
                 error_message=str(audit_result.get("reason", "audit failed")),
+                current_retries=retry_count,
             )
             next_actions = ["skill_harvester"]
         else:

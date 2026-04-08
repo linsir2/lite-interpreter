@@ -1,12 +1,14 @@
 """Tests for the local harness governance layer."""
 from __future__ import annotations
 
+import textwrap
 from unittest.mock import patch
 
 from src.common import capability_registry
 from src.harness import HarnessGovernor
-from src.mcp_gateway.tools.skill_auth_tool import SkillAuthTool
+from src.harness.policy import load_harness_policy, refresh_harness_policy
 from src.mcp_gateway.tools.sandbox_exec_tool import SandboxExecTool
+from src.mcp_gateway.tools.skill_auth_tool import SkillAuthTool
 from src.sandbox.docker_executor import _execute_code_in_docker
 
 
@@ -33,6 +35,19 @@ def test_harness_governor_resolves_capability_aliases():
     assert decision.allowed is True
     assert decision.allowed_tools == ["knowledge_query"]
     assert decision.metadata["requested_capabilities"] == ["knowledge_query"]
+
+
+def test_harness_governor_respects_profile_network_access():
+    decision = HarnessGovernor.evaluate_dynamic_request(
+        query="请联网搜索最新政策",
+        requested_tools=["web_search"],
+        profile_name="reviewer",
+        trace_ref="trace:profile-network",
+    )
+
+    assert decision.allowed is False
+    assert decision.metadata["denied_by_profile"] == ["web_search"]
+    assert decision.metadata["profile_network_access"] == "none"
 
 
 def test_capability_registry_resolves_alias():
@@ -80,3 +95,34 @@ def test_sandbox_exec_tool_honors_use_audit_flag():
             SandboxExecTool.run_sync(code="print('x')", tenant_id="tenant_x", use_audit=False)
     assert raw_mock.called
     assert not audit_mock.called
+
+
+def test_refresh_harness_policy_reloads_default_path(tmp_path, monkeypatch):
+    policy_file = tmp_path / "harness_policy.yaml"
+    policy_file.write_text(
+        textwrap.dedent(
+            """
+            mode: core
+            profiles: {}
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.harness.policy.HARNESS_POLICY_PATH", policy_file)
+    load_harness_policy.cache_clear()
+
+    first = load_harness_policy()
+    assert first["mode"] == "core"
+
+    policy_file.write_text(
+        textwrap.dedent(
+            """
+            mode: standard
+            profiles: {}
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+
+    second = refresh_harness_policy()
+    assert second["mode"] == "standard"

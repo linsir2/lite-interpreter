@@ -7,10 +7,11 @@ src/kag/builder/parser.py
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable, List
+from typing import Any
 
-from src.common import get_logger, generate_uuid, get_utc_now
+from src.common import generate_uuid, get_logger, get_utc_now
 from src.harness.policy import load_harness_policy
 from src.storage.schema import DocChunk, ParsedDocument, ParsedImage, ParsedSection, ParsedTable
 
@@ -215,7 +216,7 @@ class DocumentParser:
         error: str | None = None,
     ) -> ParsedDocument:
         try:
-            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            with open(file_path, encoding="utf-8", errors="ignore") as f:
                 content = f.read()
         except Exception:
             with open(file_path, "rb") as f:
@@ -288,7 +289,7 @@ class DocumentParser:
         return min(page_numbers), max(page_numbers)
 
     @classmethod
-    def _extract_sections(cls, document: Any) -> List[ParsedSection]:
+    def _extract_sections(cls, document: Any) -> list[ParsedSection]:
         text_items = list(getattr(document, "texts", []) or [])
         if not text_items:
             return []
@@ -358,7 +359,7 @@ class DocumentParser:
         ]
 
     @classmethod
-    def _extract_tables(cls, tables: Iterable[Any]) -> List[ParsedTable]:
+    def _extract_tables(cls, tables: Iterable[Any]) -> list[ParsedTable]:
         result: list[ParsedTable] = []
         for i, table in enumerate(tables):
             try:
@@ -378,7 +379,7 @@ class DocumentParser:
         return result
 
     @classmethod
-    def _table_to_dict(cls, table: Any) -> List[List[str]]:
+    def _table_to_dict(cls, table: Any) -> list[list[str]]:
         try:
             if hasattr(table, "export_to_dataframe"):
                 df = table.export_to_dataframe()
@@ -387,13 +388,13 @@ class DocumentParser:
                 df = table.to_pandas()
                 return [[str(cell) for cell in row] for row in df.values.tolist()]
             if hasattr(table, "data"):
-                return [[str(cell) for cell in row] for row in getattr(table, "data")]
+                return [[str(cell) for cell in row] for row in table.data]
         except Exception:
             return []
         return []
 
     @classmethod
-    def _extract_images(cls, images: Iterable[Any]) -> List[ParsedImage]:
+    def _extract_images(cls, images: Iterable[Any]) -> list[ParsedImage]:
         result: list[ParsedImage] = []
         for i, image in enumerate(images):
             try:
@@ -429,7 +430,7 @@ class DocumentParser:
         return ""
 
     @classmethod
-    def _augment_content_with_image_descriptions(cls, content: str, images: List[ParsedImage]) -> str:
+    def _augment_content_with_image_descriptions(cls, content: str, images: list[ParsedImage]) -> str:
         descriptions = [
             f"- {image.caption or '图片'}: {image.description}"
             for image in images

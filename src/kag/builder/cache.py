@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Dict, Optional
 
 from src.storage.schema import ParsedDocument
 
@@ -18,16 +17,16 @@ class CachedDocument:
 class DocumentCache:
     """基于文件指纹的轻量内存缓存，避免同一轮 DAG 中重复解析同一文档。"""
 
-    _cache: Dict[str, CachedDocument] = {}
+    _cache: dict[str, CachedDocument] = {}
 
     @classmethod
     def build_key(cls, file_path: str) -> str:
         stat = os.stat(file_path)
-        raw = f"{file_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
+        raw = f"{file_path}:{stat.st_size}:{stat.st_mtime_ns}".encode()
         return sha256(raw).hexdigest()
 
     @classmethod
-    def get(cls, file_path: str) -> Optional[ParsedDocument]:
+    def get(cls, file_path: str) -> ParsedDocument | None:
         key = cls.build_key(file_path)
         cached = cls._cache.get(key)
         return cached.parsed_doc if cached else None

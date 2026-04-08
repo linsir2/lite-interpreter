@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Tuple
+from typing import Any
 
 from src.common.logger import get_logger
 
@@ -12,7 +12,7 @@ ALLOWED_FILTER_KEYS = {"year", "doc_type", "department", "status"}
 DOC_TYPE_KEYWORDS = {"制度": "policy", "手册": "manual", "合同": "contract", "规范": "spec"}
 
 
-def validate_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
+def validate_filters(filters: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(filters, dict):
         return {}
     valid_filters = {}
@@ -24,8 +24,8 @@ def validate_filters(filters: Dict[str, Any]) -> Dict[str, Any]:
     return valid_filters
 
 
-def analyze_query(query: str, tenant_id: str) -> Tuple[str, Dict[str, Any], float, bool]:
-    filters: Dict[str, Any] = {}
+def analyze_query(query: str, tenant_id: str) -> tuple[str, dict[str, Any], float, bool]:
+    filters: dict[str, Any] = {}
     year_match = re.search(r"(20\d{2})", query)
     if year_match:
         filters["year"] = year_match.group(1)

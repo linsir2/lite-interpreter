@@ -7,17 +7,18 @@ Data Inspector 数据嗅探节点
 3. 参数透传：必须提取 load_kwargs 供下游 Coder 直接使用。
 4. 硬性阻断：若三级防线全线崩溃，立刻阻断 DAG，发布人工介入事件。
 """
-import os
 import csv
+import os
+from typing import Any
+
+import chardet
 import duckdb
 import pandas as pd
-import chardet
-from typing import Dict, Any
 
-from src.blackboard import global_blackboard, execution_blackboard, GlobalStatus
+from src.blackboard import GlobalStatus, execution_blackboard, global_blackboard
+from src.common import get_logger
 from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
-from src.common import get_logger
 from src.prompts.inspector_prompts import DATA_INSPECTOR_SYSTEM_PROMPT, build_llm_fallback_prompt
 
 logger = get_logger(__name__)
@@ -39,7 +40,7 @@ def fast_llm_call(prompt: str) -> str:
         logger.warning(f"[Data Inspector] fast_model 调用失败，降级为规则提示: {exc}")
         return "推测：存在嵌套表头，优先尝试 `skiprows=2, sep='|', encoding='gbk'` 读取。"
 
-def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
+def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
     """
     数据探查员：为结构化文件提取 Schema 和读取参数
     """
@@ -56,7 +57,7 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
     )
 
     exec_data = execution_blackboard.read(tenant_id, task_id)
-    if not exec_data or not exec_data.structured_datasets:
+    if not exec_data or not exec_data.inputs.structured_datasets:
         logger.warning(f"任务 {task_id} 没有需要探查的结构化数据。")
         return {}
     
@@ -65,15 +66,15 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
     failed_file_name = ""
     failed_reason = ""
 
-    for dataset in exec_data.structured_datasets:
-        file_name = dataset.get("file_name", "unknown.csv")
-        file_path = dataset.get("path")
+    for dataset in exec_data.inputs.structured_datasets:
+        file_name = dataset.file_name or "unknown.csv"
+        file_path = dataset.path
 
         if not file_path or not os.path.exists(file_path):
             logger.error(f"文件不存在: {file_path}")
             continue
 
-        if dataset.get("schema"):
+        if dataset.dataset_schema:
             logger.info(f"文件 {file_name} 已探查过，跳过。")
             continue
 
@@ -101,12 +102,12 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
                     encoding = chardet.detect(raw_data)["encoding"] or "utf-8"
                 
                 # 获取分隔符
-                with open(file_path, 'r', encoding=encoding, errors='ignore') as f:
+                with open(file_path, encoding=encoding, errors='ignore') as f:
                     sample_text = f.read(4096)
                     try:
                         dialect = csv.Sniffer().sniff(sample_text)
                         sep = dialect.delimiter
-                    except:
+                    except csv.Error:
                         sep = ','
                 
                 df = pd.read_csv(file_path, nrows=5, encoding=encoding, sep=sep, engine='python')
@@ -120,7 +121,7 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
 
                 # LLM解析表结构
                 try:
-                    with open(file_path, "r", errors="ignore") as f:
+                    with open(file_path, errors="ignore") as f:
                         head_text = "".join([f.readline() for _ in range(50)])
                     
                     prompt = build_llm_fallback_prompt(head_text)
@@ -138,8 +139,13 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
                     break # 跳出循环，不需要继续探查了，直接终止任务
         
         if not inspection_failed:
-            dataset["schema"] = inspection_result["schema"]
-            dataset["load_kwargs"] = inspection_result["load_kwargs"]
+            dataset.dataset_schema = inspection_result["schema"]
+            dataset.load_kwargs = inspection_result["load_kwargs"]
+            # 逐个文件增量落盘：
+            # 这样如果节点在后续文件上中途崩溃，前面已经探查完成的数据集
+            # 不会因为整个节点尚未结束而全部丢失。
+            execution_blackboard.write(tenant_id, task_id, exec_data)
+            execution_blackboard.persist(tenant_id, task_id)
             inspection_count += 1
     
     if inspection_failed:
@@ -149,7 +155,7 @@ def data_inspector_node(state: DagGraphState) -> Dict[str, Any]:
             sub_status=f"数据文件 [{failed_file_name}] 解析彻底失败，需人工介入清洗。",
         )
 
-        exec_data.latest_error_traceback = failed_reason
+        exec_data.static.latest_error_traceback = failed_reason
         execution_blackboard.write(tenant_id, task_id, exec_data)
         execution_blackboard.persist(tenant_id, task_id)
         logger.info(f"[Data Inspector] 嗅探失败，已阻断后续静态链。共处理 {inspection_count} 个新文件。")

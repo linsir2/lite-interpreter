@@ -5,6 +5,7 @@ import datetime
 import re
 import time
 import uuid
+import os
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -20,7 +21,7 @@ def generate_uuid() -> str:
 
 def get_utc_now() -> datetime.datetime:
     """获取UTC当前时间"""
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 def format_utc_datetime(dt: datetime.datetime) -> str:
@@ -63,6 +64,8 @@ def _count_with_litellm(
     model_name: str,
     messages: list[dict[str, Any]] | None = None,
 ) -> int | None:
+    if str(os.getenv("LITE_INTERPRETER_DISABLE_LITELLM_TOKEN_COUNTER", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return None
     try:
         from litellm import token_counter
     except ImportError:
@@ -123,5 +126,5 @@ def fit_items_to_budget(
 
 
 def estimate_tokens(content: str) -> int:
-    """向后兼容旧接口；新代码请显式使用 fast/exact 版本。"""
+    """Estimate token usage with the fast heuristic."""
     return estimate_tokens_fast(content)

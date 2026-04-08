@@ -4,8 +4,9 @@
 修改点：抽离所有分散的常量/配置，避免重复定义，提升可维护性
 """
 import os
+from typing import Any, Final
+
 from docker.types import LogConfig
-from typing import Final, Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -37,8 +38,8 @@ CODE_SNIPPET_MAX_LENGTH: Final[int] = 100  # 日志中代码片段最大长度
 ZOMBIE_CONTAINER_TIMEOUT_FACTOR: Final[int] = 2  # 僵尸容器超时倍数
 
 # -------------------------- Docker配置 --------------------------
-DOCKER_CONFIG: Final[Dict[str, Any]] = {
-    "image": os.getenv(
+DOCKER_CONFIG: Final[dict[str, Any]] = {
+    "image": _env_str(
         "SANDBOX_IMAGE",
         "python:3.11-slim@sha256:6d98ca198cea726f2c86da2699594339a7b7ff08e49728797b4ed6e3b5c3b62a"
     ),

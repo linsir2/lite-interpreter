@@ -12,6 +12,7 @@ def build_status_stream_html(
     execution_id: str = "",
     tenant_id: str = "",
     workspace_id: str = "",
+    api_token: str = "",
     height: int = 420,
 ) -> str:
     query = {}
@@ -19,6 +20,8 @@ def build_status_stream_html(
         query["tenant_id"] = tenant_id
     if workspace_id:
         query["workspace_id"] = workspace_id
+    if api_token:
+        query["access_token"] = api_token
     query_string = urlencode(query)
     if execution_id:
         stream_url = f"{api_base_url.rstrip('/')}/api/executions/{execution_id}/events"
@@ -111,6 +114,7 @@ def render_status_stream(
     execution_id: str = "",
     tenant_id: str = "",
     workspace_id: str = "",
+    api_token: str = "",
     height: int = 420,
 ) -> None:
     """Render the stream when Streamlit is available; otherwise raise a clear error."""
@@ -126,6 +130,7 @@ def render_status_stream(
             execution_id=execution_id,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            api_token=api_token,
             height=height,
         ),
         height=height + 120,

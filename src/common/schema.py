@@ -1,6 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
-class EventTopic(str, Enum):
+
+class EventTopic(StrEnum):
     """
     事件主题枚举：按「消费方+业务域+动作」分层命名，支持精准订阅
     命名规则：{消费方}.{业务域}.{动作}

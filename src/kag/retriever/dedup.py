@@ -1,10 +1,8 @@
 """检索结果去重。"""
 from __future__ import annotations
 
-from typing import Dict, List
 
-
-def semantic_dedup(candidates: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def semantic_dedup(candidates: list[dict[str, object]]) -> list[dict[str, object]]:
     unique = {}
     for candidate in candidates:
         key = (

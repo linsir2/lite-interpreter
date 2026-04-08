@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List
 
 from config.settings import COMPRESSION_RATIO, CONTEXT_MAX_TOKENS, CONTEXT_MODEL_NAME
+
 from src.common import count_text_tokens_exact
 from src.common.llm_client import LiteLLMClient
 
@@ -14,15 +14,16 @@ class ContextCompressor:
     def compress(
         cls,
         query: str,
-        candidates: List[Dict[str, object]],
+        candidates: list[dict[str, object]],
         max_tokens: int = CONTEXT_MAX_TOKENS,
-    ) -> List[Dict[str, object]]:
+        model_alias: str | None = None,
+    ) -> list[dict[str, object]]:
         if not candidates:
             return []
         keywords = {token for token in re.split(r"\W+", query.lower()) if token}
         budget = max_tokens
-        compressed: List[Dict[str, object]] = []
-        model_name = LiteLLMClient.resolve_model_name(CONTEXT_MODEL_NAME)
+        compressed: list[dict[str, object]] = []
+        model_name = LiteLLMClient.resolve_model_name(model_alias or CONTEXT_MODEL_NAME)
         for candidate in candidates:
             text = str(candidate.get("text", "")).strip()
             if not text:

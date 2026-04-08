@@ -7,18 +7,18 @@ src/kag/builder/chunker.py
 2. 按节定父块 (Parent-child Chunking) - 父子分块关系，保持上下文连贯性
 3. 长度兜底防御 (SentenceSplitter 兜底) - 当上述策略失效时，使用 SentenceSplitter 进行安全分块
 """
-import re
-from typing import Dict, List, Any, Tuple, Optional
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 
-from src.common import get_logger, generate_uuid, estimate_tokens
+from config.settings import CHUNK_OVERLAP, CHUNK_SIZE, PARENT_CHUNK_SIZE
+
+from src.common import estimate_tokens, generate_uuid, get_logger
 from src.kag.framework.llama_index_adapter import split_text_with_llama_index
 from src.storage.schema import DocChunk, ParsedDocument
-from config.settings import CHUNK_SIZE, CHUNK_OVERLAP, PARENT_CHUNK_SIZE
 
 logger = get_logger(__name__)
 
-class ChunkingStrategy(str, Enum):
+class ChunkingStrategy(StrEnum):
     """分块策略枚举"""
     LAYOUT_AWARE = "layout_aware"  # 结构化感知分块
     PARENT_CHILD = "parent_child"  # 父子分块
@@ -28,7 +28,7 @@ class DocumentChunker:
     """文档分块器"""
     
     @classmethod
-    def chunk_document(cls, parsed_doc: ParsedDocument, strategy: ChunkingStrategy = None) -> List[DocChunk]:
+    def chunk_document(cls, parsed_doc: ParsedDocument, strategy: ChunkingStrategy = None) -> list[DocChunk]:
         """
         对解析后的文档进行分块
         
@@ -67,7 +67,7 @@ class DocumentChunker:
         return chunks
     
     @classmethod
-    def _select_strategy(cls, sections: List[Dict[str, Any]], content: str) -> ChunkingStrategy:
+    def _select_strategy(cls, sections: list[dict[str, Any]], content: str) -> ChunkingStrategy:
         """根据文档特征选择分块策略"""
         
         # 如果有清晰的章节结构，使用结构化感知分块
@@ -85,7 +85,7 @@ class DocumentChunker:
         return ChunkingStrategy.SENTENCE_SPLITTER
     
     @classmethod
-    def _layout_aware_chunking(cls, sections: List[Dict[str, Any]], doc_id: str, metadata: Dict[str, Any]) -> List[DocChunk]:
+    def _layout_aware_chunking(cls, sections: list[dict[str, Any]], doc_id: str, metadata: dict[str, Any]) -> list[DocChunk]:
         """结构化感知分块：基于文档结构进行分块"""
         chunks = []
         
@@ -144,7 +144,7 @@ class DocumentChunker:
         return chunks
     
     @classmethod
-    def _parent_child_chunking(cls, sections: List[Dict[str, Any]], doc_id: str, metadata: Dict[str, Any]) -> List[DocChunk]:
+    def _parent_child_chunking(cls, sections: list[dict[str, Any]], doc_id: str, metadata: dict[str, Any]) -> list[DocChunk]:
         """父子分块：创建父子关系的chunk"""
         chunks = []
         
@@ -202,7 +202,7 @@ class DocumentChunker:
         return chunks
     
     @classmethod
-    def _sentence_splitter_chunking(cls, content: str, doc_id: str, metadata: Dict[str, Any]) -> List[DocChunk]:
+    def _sentence_splitter_chunking(cls, content: str, doc_id: str, metadata: dict[str, Any]) -> list[DocChunk]:
         """句子分割器分块：兜底策略"""
         chunks = []
         
@@ -228,7 +228,7 @@ class DocumentChunker:
         return chunks
     
     @classmethod
-    def _split_by_sentences(cls, text: str, chunk_size: int, overlap: int) -> List[str]:
+    def _split_by_sentences(cls, text: str, chunk_size: int, overlap: int) -> list[str]:
         """按句子分割文本，考虑chunk大小和重叠"""
         if not text.strip():
             return []
@@ -247,7 +247,7 @@ class DocumentChunker:
         return f"{prefix}...{suffix}"
     
     @classmethod
-    def _validate_chunks(cls, chunks: List[DocChunk]) -> List[DocChunk]:
+    def _validate_chunks(cls, chunks: list[DocChunk]) -> list[DocChunk]:
         """验证分块结果，确保质量"""
         valid_chunks = []
         
@@ -273,7 +273,7 @@ class DocumentChunker:
         return valid_chunks
     
     @classmethod
-    def get_chunk_statistics(cls, chunks: List[DocChunk]) -> Dict[str, Any]:
+    def get_chunk_statistics(cls, chunks: list[DocChunk]) -> dict[str, Any]:
         """获取分块统计信息"""
         if not chunks:
             return {}

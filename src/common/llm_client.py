@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
-
 from config.settings import LITELLM_CONFIG_PATH
+
 from src.common.logger import get_logger
 
 logger = get_logger(__name__)
@@ -18,16 +18,16 @@ logger = get_logger(__name__)
 @dataclass(frozen=True)
 class LiteLLMModelConfig:
     alias: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
 
 
 class LiteLLMClient:
     """Resolve model aliases from `litellm_config.yml` and call LiteLLM."""
 
-    _configs: Dict[str, LiteLLMModelConfig] | None = None
+    _configs: dict[str, LiteLLMModelConfig] | None = None
 
     @classmethod
-    def _load_configs(cls) -> Dict[str, LiteLLMModelConfig]:
+    def _load_configs(cls) -> dict[str, LiteLLMModelConfig]:
         if cls._configs is not None:
             return cls._configs
 
@@ -37,7 +37,7 @@ class LiteLLMClient:
 
         raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {} # 读取
         model_list = raw_config.get("model_list", []) 
-        configs: Dict[str, LiteLLMModelConfig] = {}
+        configs: dict[str, LiteLLMModelConfig] = {}
         for item in model_list:
             alias = str(item.get("model_name"))
             params = cls._resolve_config_values(dict(item.get("litellm_params", {})))
@@ -46,8 +46,8 @@ class LiteLLMClient:
         return configs
 
     @classmethod
-    def _resolve_config_values(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
-        resolved: Dict[str, Any] = {}
+    def _resolve_config_values(cls, payload: dict[str, Any]) -> dict[str, Any]:
+        resolved: dict[str, Any] = {}
         for key, value in payload.items():
             if isinstance(value, str) and value.startswith("os.environ/"):
                 env_name = value.split("/", 1)[1]
@@ -71,9 +71,9 @@ class LiteLLMClient:
     def completion(
         cls,
         alias: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         **overrides: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         from litellm import completion as litellm_completion
 
         config = cls.get_model_config(alias)
@@ -85,9 +85,9 @@ class LiteLLMClient:
     async def acompletion(
         cls,
         alias: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         **overrides: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         config = cls.get_model_config(alias)
         params = {**config.params, **overrides}
         logger.info(f"[LiteLLM] acompletion alias={alias} model={params.get('model')}")
@@ -102,7 +102,7 @@ class LiteLLMClient:
     def chat(
         cls,
         alias: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         **overrides: Any,
     ) -> str:
         response = cls.completion(alias, messages, **overrides)
@@ -112,7 +112,7 @@ class LiteLLMClient:
     async def achat(
         cls,
         alias: str,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         **overrides: Any,
     ) -> str:
         response = await cls.acompletion(alias, messages, **overrides)
@@ -122,9 +122,9 @@ class LiteLLMClient:
     def embedding(
         cls,
         alias: str,
-        inputs: List[str],
+        inputs: list[str],
         **overrides: Any,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         from litellm import embedding
 
         config = cls.get_model_config(alias)
@@ -137,9 +137,9 @@ class LiteLLMClient:
     async def aembedding(
         cls,
         alias: str,
-        inputs: List[str],
+        inputs: list[str],
         **overrides: Any,
-    ) -> List[List[float]]:
+    ) -> list[list[float]]:
         config = cls.get_model_config(alias)
         params = {**config.params, **overrides}
         logger.info(f"[LiteLLM] aembedding alias={alias} model={params.get('model')} count={len(inputs)}")

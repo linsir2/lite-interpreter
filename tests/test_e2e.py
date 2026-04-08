@@ -4,12 +4,26 @@ from __future__ import annotations
 import asyncio
 import json
 
-from starlette.requests import Request
-
 from src.api.routers.analysis_router import _run_task_flow, create_task, get_task_result
 from src.api.routers.execution_router import get_execution, list_task_executions
+from src.blackboard import MemoryData, execution_blackboard, memory_blackboard
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
+from starlette.requests import Request
+
+
+def _run_task_flow_inline(monkeypatch, coroutine):
+    class FakeLoop:
+        def run_in_executor(self, executor, func):  # noqa: ARG002
+            future = asyncio.Future()
+            try:
+                future.set_result(func())
+            except Exception as exc:  # pragma: no cover - test helper
+                future.set_exception(exc)
+            return future
+
+    monkeypatch.setattr("src.api.routers.analysis_router.asyncio.get_running_loop", lambda: FakeLoop())
+    asyncio.run(coroutine)
 
 
 def _make_request(
@@ -18,6 +32,7 @@ def _make_request(
     path: str,
     path_params: dict[str, str] | None = None,
     body: dict | None = None,
+    query_params: dict[str, str] | None = None,
 ) -> Request:
     payload = json.dumps(body or {}).encode()
 
@@ -29,12 +44,16 @@ def _make_request(
         }
 
     headers = [(b"content-type", b"application/json")] if body is not None else []
+    query_string = "&".join(
+        f"{key}={value}"
+        for key, value in (query_params or {}).items()
+    ).encode()
     return Request(
         {
             "type": "http",
             "method": method,
             "path": path,
-            "query_string": b"",
+            "query_string": query_string,
             "path_params": path_params or {},
             "headers": headers,
         },
@@ -87,7 +106,8 @@ def test_static_task_flow_e2e_via_api(monkeypatch):
 
     monkeypatch.setattr("src.dag_engine.nodes.executor_node.SandboxExecTool.run_sync", fake_run_sync)
 
-    asyncio.run(
+    _run_task_flow_inline(
+        monkeypatch,
         _run_task_flow(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -95,28 +115,30 @@ def test_static_task_flow_e2e_via_api(monkeypatch):
             query="请做简单分析",
             allowed_tools=[],
             governance_profile="researcher",
-        )
+        ),
     )
 
     result_request = _make_request(
         method="GET",
         path=f"/api/tasks/{task_id}/result",
         path_params={"task_id": task_id},
+        query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
     )
     result_response = asyncio.run(get_task_result(result_request))
     result_body = json.loads(result_response.body.decode())
 
-    assert result_body["global_status"] == "success"
-    assert result_body["final_response"]["mode"] == "static"
-    assert result_body["final_response"]["details"]["execution_success"] is True
-    assert result_body["task_envelope"]["task_id"] == task_id
-    assert result_body["execution_intent"]["intent"] == "static_flow"
+    assert result_body["status"]["global_status"] == "success"
+    assert result_body["response"]["mode"] == "static"
+    assert result_body["response"]["details"]["execution_success"] is True
+    assert result_body["control"]["task_envelope"]["task_id"] == task_id
+    assert result_body["control"]["execution_intent"]["intent"] == "static_flow"
     executions_response = asyncio.run(
         list_task_executions(
             _make_request(
                 method="GET",
                 path=f"/api/tasks/{task_id}/executions",
                 path_params={"task_id": task_id},
+                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
             )
         )
     )
@@ -128,6 +150,7 @@ def test_static_task_flow_e2e_via_api(monkeypatch):
                 method="GET",
                 path=f"/api/executions/{execution_id}",
                 path_params={"execution_id": execution_id},
+                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
             )
         )
     )
@@ -169,8 +192,39 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
     )
 
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result)
+    def fake_skill_harvester(state):
+        approved_skills = [{"name": "dynamic_skill_demo"}]
+        memory_blackboard.write(
+            tenant_id,
+            task_id,
+            MemoryData(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                workspace_id=workspace_id,
+                approved_skills=approved_skills,
+            ),
+        )
+        memory_blackboard.persist(tenant_id, task_id)
+        return {}
 
-    asyncio.run(
+    monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", fake_skill_harvester)
+    def fake_summarizer(state):
+        execution = execution_blackboard.read(tenant_id, task_id)
+        assert execution is not None
+        execution.control.final_response = {
+            "mode": "dynamic",
+            "headline": "dynamic e2e answer",
+            "answer": "dynamic e2e answer",
+            "key_findings": [],
+        }
+        execution_blackboard.write(tenant_id, task_id, execution)
+        execution_blackboard.persist(tenant_id, task_id)
+        return {"final_response": execution.control.final_response}
+
+    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", fake_summarizer)
+
+    _run_task_flow_inline(
+        monkeypatch,
         _run_task_flow(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -178,28 +232,30 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
             query="帮我分析这份财报，并结合宏观经济数据预测下季度走势，自己找数据并写代码验证",
             allowed_tools=[],
             governance_profile="researcher",
-        )
+        ),
     )
 
     result_request = _make_request(
         method="GET",
         path=f"/api/tasks/{task_id}/result",
         path_params={"task_id": task_id},
+        query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
     )
     result_response = asyncio.run(get_task_result(result_request))
     result_body = json.loads(result_response.body.decode())
 
-    assert result_body["global_status"] == "success"
-    assert result_body["final_response"]["mode"] == "dynamic"
-    assert result_body["dynamic_summary"] == "dynamic e2e answer"
-    assert result_body["approved_skills"]
-    assert result_body["execution_intent"]["intent"] == "dynamic_flow"
+    assert result_body["status"]["global_status"] == "success"
+    assert result_body["response"]["mode"] == "dynamic"
+    assert result_body["dynamic"]["summary"] == "dynamic e2e answer"
+    assert result_body["skills"]["approved"]
+    assert result_body["control"]["execution_intent"]["intent"] == "dynamic_flow"
     executions_response = asyncio.run(
         list_task_executions(
             _make_request(
                 method="GET",
                 path=f"/api/tasks/{task_id}/executions",
                 path_params={"task_id": task_id},
+                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
             )
         )
     )

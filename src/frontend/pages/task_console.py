@@ -2,25 +2,29 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import httpx
+from urllib.parse import urlencode
 
+from src.frontend.auth_client import api_auth_headers, render_auth_panel
 from src.frontend.components.file_uploader import render_file_uploader
 from src.frontend.components.status_stream import render_status_stream
 
 
-def summarize_result_header(task_result: Dict[str, Any]) -> Dict[str, str]:
-    final_response = task_result.get("final_response") or {}
+def summarize_result_header(task_result: dict[str, Any]) -> dict[str, str]:
+    final_response = task_result.get("response") or task_result.get("final_response") or {}
+    status = dict(task_result.get("status") or {})
     return {
-        "mode": str(final_response.get("mode") or task_result.get("global_status") or "unknown"),
+        "mode": str(final_response.get("mode") or status.get("global_status") or task_result.get("global_status") or "unknown"),
         "headline": str(final_response.get("headline") or "No headline available"),
         "answer": str(final_response.get("answer") or final_response.get("headline") or "No answer available"),
     }
 
 
-def select_stream_target(task_result: Dict[str, Any] | None, *, preferred_execution_id: str = "") -> Dict[str, str]:
+def select_stream_target(task_result: dict[str, Any] | None, *, preferred_execution_id: str = "") -> dict[str, str]:
     executions = list((task_result or {}).get("executions") or [])
+    task_payload = dict((task_result or {}).get("task") or {})
     if executions:
         execution_id = ""
         if preferred_execution_id:
@@ -31,29 +35,51 @@ def select_stream_target(task_result: Dict[str, Any] | None, *, preferred_execut
         if not execution_id:
             execution_id = str(executions[0].get("execution_id", "")).strip()
         if execution_id:
-            return {"stream_kind": "execution", "execution_id": execution_id, "task_id": str(task_result.get("task_id", ""))}
+            return {"stream_kind": "execution", "execution_id": execution_id, "task_id": str(task_payload.get("task_id") or (task_result or {}).get("task_id", ""))}
     return {
         "stream_kind": "task",
         "execution_id": "",
-        "task_id": str((task_result or {}).get("task_id", "")),
+        "task_id": str(task_payload.get("task_id") or (task_result or {}).get("task_id", "")),
     }
 
 
-def fetch_json_payload(url: str, *, timeout: float = 20.0) -> Dict[str, Any]:
-    response = httpx.get(url, timeout=timeout)
+def fetch_json_payload(url: str, *, timeout: float = 20.0, api_token: str = "") -> dict[str, Any]:
+    headers = api_auth_headers(api_token)
+    response = httpx.get(url, timeout=timeout, headers=headers)
     response.raise_for_status()
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
 
 
-def fetch_task_console_bundle(api_base_url: str, task_id: str, *, timeout: float = 20.0) -> Dict[str, Any]:
-    base_url = api_base_url.rstrip("/")
-    result_payload = fetch_json_payload(f"{base_url}/api/tasks/{task_id}/result", timeout=timeout)
+def _scoped_url(base_url: str, path: str, *, tenant_id: str, workspace_id: str) -> str:
+    query = urlencode({"tenant_id": tenant_id, "workspace_id": workspace_id})
+    return f"{base_url.rstrip('/')}{path}?{query}"
 
-    executions: List[Dict[str, Any]] = []
-    tool_calls: List[Dict[str, Any]] = []
+
+def fetch_task_console_bundle(
+    api_base_url: str,
+    task_id: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    timeout: float = 20.0,
+    api_token: str = "",
+) -> dict[str, Any]:
+    base_url = api_base_url.rstrip("/")
+    result_payload = fetch_json_payload(
+        _scoped_url(base_url, f"/api/tasks/{task_id}/result", tenant_id=tenant_id, workspace_id=workspace_id),
+        timeout=timeout,
+        api_token=api_token,
+    )
+
+    executions: list[dict[str, Any]] = []
+    tool_calls: list[dict[str, Any]] = []
     try:
-        executions_payload = fetch_json_payload(f"{base_url}/api/tasks/{task_id}/executions", timeout=timeout)
+        executions_payload = fetch_json_payload(
+            _scoped_url(base_url, f"/api/tasks/{task_id}/executions", tenant_id=tenant_id, workspace_id=workspace_id),
+            timeout=timeout,
+            api_token=api_token,
+        )
         executions = list(executions_payload.get("executions") or [])
     except Exception:
         executions = list(result_payload.get("executions") or [])
@@ -64,8 +90,9 @@ def fetch_task_console_bundle(api_base_url: str, task_id: str, *, timeout: float
             continue
         try:
             tool_calls_payload = fetch_json_payload(
-                f"{base_url}/api/executions/{execution_id}/tool-calls",
+                _scoped_url(base_url, f"/api/executions/{execution_id}/tool-calls", tenant_id=tenant_id, workspace_id=workspace_id),
                 timeout=timeout,
+                api_token=api_token,
             )
         except Exception:
             continue
@@ -77,9 +104,22 @@ def fetch_task_console_bundle(api_base_url: str, task_id: str, *, timeout: float
     return enriched
 
 
-def collect_result_sections(task_result: Dict[str, Any]) -> Dict[str, List[Any]]:
-    final_response = task_result.get("final_response") or {}
-    knowledge_snapshot = dict((final_response.get("details") or {}).get("knowledge_snapshot") or task_result.get("knowledge_snapshot") or {})
+def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]:
+    final_response = task_result.get("response") or task_result.get("final_response") or {}
+    knowledge = dict(task_result.get("knowledge") or {})
+    skills = dict(task_result.get("skills") or {})
+    status = dict(task_result.get("status") or {})
+    analysis_brief = dict(
+        (final_response.get("details") or {}).get("analysis_brief")
+        or knowledge.get("analysis_brief")
+        or {}
+    )
+    knowledge_snapshot = dict(
+        (final_response.get("details") or {}).get("knowledge_snapshot")
+        or knowledge.get("knowledge_snapshot")
+        or task_result.get("knowledge_snapshot")
+        or {}
+    )
     return {
         "findings": list(final_response.get("key_findings") or []),
         "outputs": list(final_response.get("outputs") or []),
@@ -91,15 +131,16 @@ def collect_result_sections(task_result: Dict[str, Any]) -> Dict[str, List[Any]]
         "rule_checks": list((final_response.get("details") or {}).get("rule_checks") or []),
         "metric_checks": list((final_response.get("details") or {}).get("metric_checks") or []),
         "filter_checks": list((final_response.get("details") or {}).get("filter_checks") or []),
+        "analysis_brief": [analysis_brief] if analysis_brief else [],
         "knowledge_snapshot": [knowledge_snapshot] if knowledge_snapshot else [],
-        "historical_skill_matches": list(task_result.get("historical_skill_matches") or []),
+        "historical_skill_matches": list(skills.get("historical_matches") or task_result.get("historical_skill_matches") or []),
         "used_historical_skills": list((final_response.get("details") or {}).get("used_historical_skills") or []),
-        "task_lease": [dict(task_result.get("task_lease") or {})] if task_result.get("task_lease") else [],
+        "task_lease": [dict(status.get("task_lease") or task_result.get("task_lease") or {})] if (status.get("task_lease") or task_result.get("task_lease")) else [],
     }
 
 
-def build_output_cards(outputs: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    cards: List[Dict[str, str]] = []
+def build_output_cards(outputs: list[dict[str, Any]]) -> list[dict[str, str]]:
+    cards: list[dict[str, str]] = []
     icon_map = {
         "dataset": "TABLE",
         "document": "DOC",
@@ -121,7 +162,7 @@ def build_output_cards(outputs: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return cards
 
 
-def describe_output_asset(output: Dict[str, Any]) -> Dict[str, Any]:
+def describe_output_asset(output: dict[str, Any]) -> dict[str, Any]:
     path_value = str(output.get("path") or "").strip()
     path_obj = Path(path_value) if path_value else None
     suffix = path_obj.suffix.lower() if path_obj else ""
@@ -141,12 +182,12 @@ def describe_output_asset(output: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def list_directory_entries(path_value: str, max_items: int = 12) -> List[Dict[str, Any]]:
+def list_directory_entries(path_value: str, max_items: int = 12) -> list[dict[str, Any]]:
     path_obj = Path(path_value)
     if not path_obj.exists() or not path_obj.is_dir():
         return []
 
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     for entry in sorted(path_obj.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))[:max_items]:
         entries.append(
             {
@@ -170,8 +211,16 @@ def render_task_console() -> None:
     st.caption("Observe task status updates and DeerFlow dynamic trace events over SSE.")
 
     api_base_url = st.text_input("API Base URL", value="http://127.0.0.1:8000")
-    tenant_id = st.text_input("Tenant ID", value="demo-tenant")
-    workspace_id = st.text_input("Workspace ID", value="demo-workspace")
+    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="task-console-auth")
+    if session_info and session_info.get("grants"):
+        first_grant = session_info["grants"][0]
+        default_tenant = str(first_grant.get("tenant_id") or "demo-tenant")
+        default_workspace = str(first_grant.get("workspace_id") or "demo-workspace")
+    else:
+        default_tenant = "demo-tenant"
+        default_workspace = "demo-workspace"
+    tenant_id = st.text_input("Tenant ID", value=default_tenant)
+    workspace_id = st.text_input("Workspace ID", value=default_workspace)
     governance_profile = st.selectbox("Governance Profile", options=["researcher", "planner", "executor", "reviewer"], index=0)
     allowed_tools_text = st.text_input("Allowed Tools (comma separated)", value="web_search,knowledge_query")
     default_task = st.session_state.get("task_id", "")
@@ -195,6 +244,7 @@ def render_task_console() -> None:
                     "governance_profile": governance_profile,
                     "allowed_tools": [item.strip() for item in allowed_tools_text.split(",") if item.strip()],
                 },
+                headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
                 timeout=20.0,
             )
             response.raise_for_status()
@@ -210,6 +260,7 @@ def render_task_console() -> None:
                 response = httpx.post(
                     f"{api_base_url.rstrip('/')}/api/dev/tasks/{task_id}/demo-trace",
                     json={"tenant_id": tenant_id, "workspace_id": workspace_id},
+                    headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
                     timeout=20.0,
                 )
                 response.raise_for_status()
@@ -221,13 +272,20 @@ def render_task_console() -> None:
             tenant_id=tenant_id,
             workspace_id=workspace_id,
             task_id=task_id,
+            api_token=api_token,
         )
 
     if task_id:
         task_result = st.session_state.get("task_result")
         if st.button("Fetch Final Result", use_container_width=True):
             try:
-                st.session_state["task_result"] = fetch_task_console_bundle(api_base_url, task_id)
+                st.session_state["task_result"] = fetch_task_console_bundle(
+                    api_base_url,
+                    task_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    api_token=api_token,
+                )
                 task_result = st.session_state["task_result"]
             except httpx.HTTPStatusError as exc:
                 st.error(f"Failed to fetch result: {exc.response.status_code}")
@@ -258,6 +316,37 @@ def render_task_console() -> None:
                         st.code(ref, language=None)
                 else:
                     st.caption("No evidence refs recorded.")
+
+                st.markdown("#### Analysis Brief")
+                analysis_brief = sections["analysis_brief"][0] if sections["analysis_brief"] else {}
+                if analysis_brief:
+                    if analysis_brief.get("analysis_mode"):
+                        st.caption(f"mode={analysis_brief.get('analysis_mode')}")
+                    dataset_summaries = analysis_brief.get("dataset_summaries", []) or []
+                    if dataset_summaries:
+                        st.markdown("**Datasets**")
+                        for item in dataset_summaries:
+                            st.caption(str(item))
+                    business_rules = analysis_brief.get("business_rules", []) or []
+                    business_metrics = analysis_brief.get("business_metrics", []) or []
+                    business_filters = analysis_brief.get("business_filters", []) or []
+                    if business_rules or business_metrics or business_filters:
+                        st.markdown("**Business Context**")
+                        for item in business_rules[:3]:
+                            st.caption(f"rule: {item}")
+                        for item in business_metrics[:3]:
+                            st.caption(f"metric: {item}")
+                        for item in business_filters[:3]:
+                            st.caption(f"filter: {item}")
+                    known_gaps = analysis_brief.get("known_gaps", []) or []
+                    if known_gaps:
+                        st.markdown("**Known Gaps**")
+                        for item in known_gaps:
+                            st.caption(str(item))
+                    if analysis_brief.get("recommended_next_step"):
+                        st.caption(f"next={analysis_brief.get('recommended_next_step')}")
+                else:
+                    st.caption("No analysis brief recorded.")
 
                 st.markdown("#### Knowledge Snapshot")
                 knowledge_snapshot = sections["knowledge_snapshot"][0] if sections["knowledge_snapshot"] else {}
@@ -428,7 +517,7 @@ def render_task_console() -> None:
             with info_col2:
                 st.markdown("#### Outputs")
                 if sections["outputs"]:
-                    for raw_output, card in zip(sections["outputs"], build_output_cards(sections["outputs"])):
+                    for raw_output, card in zip(sections["outputs"], build_output_cards(sections["outputs"]), strict=False):
                         asset = describe_output_asset(raw_output)
                         st.markdown(
                             "\n".join(
@@ -510,6 +599,7 @@ def render_task_console() -> None:
             execution_id=stream_target["execution_id"],
             tenant_id=tenant_id,
             workspace_id=workspace_id,
+            api_token=api_token,
             height=460,
         )
     else:

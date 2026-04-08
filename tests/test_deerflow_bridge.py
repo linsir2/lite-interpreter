@@ -1,16 +1,15 @@
 """Unit tests for the DeerFlow bridge using a stub embedded client."""
 from __future__ import annotations
 
+import sys
 import types
 import unittest
 from pathlib import Path
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
 
-from src.dynamic_engine.deerflow_bridge import (
+from src.dynamic_engine.deerflow_bridge import (  # noqa: E402
     DeerflowBridge,
     DeerflowRuntimeConfig,
     DeerflowTaskRequest,
@@ -49,8 +48,7 @@ class _FakeStreamResponse:
             raise RuntimeError(f"status={self.status_code}")
 
     def iter_lines(self):
-        for line in self._lines:
-            yield line
+        yield from self._lines
 
     def __enter__(self):
         return self

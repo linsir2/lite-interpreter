@@ -1,11 +1,10 @@
 """Registry for pluggable dynamic runtime backends."""
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from src.common import RuntimeCapabilityManifest
 from src.dynamic_engine.runtime_backends import DeerflowRuntimeBackend, DynamicRuntimeBackend
-
 
 BackendFactory = Callable[..., DynamicRuntimeBackend]
 

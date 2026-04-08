@@ -27,6 +27,7 @@ pip-wheel-metadata/
 MANIFEST
 .codex
 项目二.md
+bug.md
 
 # ==========================================
 # Virtualenv / local Python runtime
@@ -86,6 +87,8 @@ test-report.xml
 *.err
 *.tmp
 *.temp
+*.bak
+*.orig
 logs/
 .omx/
 .cache/
@@ -106,6 +109,7 @@ temp/
 *.sqlite
 *.sqlite3
 *.db-journal
+artifacts/
 
 # ==========================================
 # Project-local caches / generated JSON artifacts
@@ -118,6 +122,8 @@ processed_hashes.json
 page_heavy_data.json
 global_alias_map.json
 sidecar.json
+seed_eval_report.json
+seed_eval_report.md
 
 # ==========================================
 # Frontend / misc tool caches

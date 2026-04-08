@@ -3,12 +3,23 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import EventTopic, event_bus
+from src.common.control_plane import (
+    execution_intent_routing_mode,
+    execution_output,
+    execution_success,
+    knowledge_evidence_refs,
+    parser_reports_from_documents,
+    static_artifacts,
+    task_governance_profile,
+)
+from src.memory import MemoryService
 from src.privacy import mask_payload
 
 
@@ -17,7 +28,7 @@ def _trim(value: str, limit: int = 600) -> str:
     return compact[:limit]
 
 
-def _as_json(value: Any) -> Dict[str, Any]:
+def _as_json(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if not isinstance(value, str):
@@ -29,10 +40,14 @@ def _as_json(value: Any) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
-    result = exec_data.execution_result or {}
-    output = str(result.get("output") or "")
+def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, Any]:
+    output = execution_output(exec_data.static.execution_record)
     structured_output = _as_json(output)
+    analysis_brief_payload = exec_data.knowledge.analysis_brief.model_dump(mode="json")
+    business_context_payload = exec_data.knowledge.business_context.model_dump(mode="json")
+    knowledge_snapshot_payload = exec_data.knowledge.knowledge_snapshot.model_dump(mode="json")
+    approved_skills_payload = [item.model_dump(mode="json") for item in memory_data.approved_skills]
+    historical_matches_payload = [item.model_dump(mode="json") for item in memory_data.historical_matches]
     dataset_items = structured_output.get("datasets", []) if isinstance(structured_output.get("datasets"), list) else []
     document_items = structured_output.get("documents", []) if isinstance(structured_output.get("documents"), list) else []
     derived_findings = structured_output.get("derived_findings", []) if isinstance(structured_output.get("derived_findings"), list) else []
@@ -45,13 +60,13 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
         findings.append(f"识别到 {len(dataset_items)} 份结构化数据输入")
     if document_items:
         findings.append(f"识别到 {len(document_items)} 份业务文档输入")
-    if exec_data.business_context.get("rules"):
-        findings.append(f"命中 {len(exec_data.business_context['rules'])} 条业务规则")
-    if exec_data.knowledge_snapshot.get("recall_strategies"):
+    if business_context_payload.get("rules"):
+        findings.append(f"命中 {len(business_context_payload['rules'])} 条业务规则")
+    if knowledge_snapshot_payload.get("recall_strategies"):
         findings.append(
-            f"知识检索通道: {', '.join(str(item) for item in exec_data.knowledge_snapshot.get('recall_strategies', [])[:4])}"
+            f"知识检索通道: {', '.join(str(item) for item in knowledge_snapshot_payload.get('recall_strategies', [])[:4])}"
         )
-    if exec_data.knowledge_snapshot.get("cache_hit") is True:
+    if knowledge_snapshot_payload.get("cache_hit") is True:
         findings.append("知识检索命中缓存")
     findings.extend([_trim(str(item), limit=240) for item in derived_findings[:5]])
     findings.extend(
@@ -88,11 +103,11 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
     answer = (
         "已完成静态链分析。"
         f" {'；'.join(findings)}。"
-        f" 任务输出状态为 {'成功' if result.get('success') else '失败'}。"
+        f" 任务输出状态为 {'成功' if execution_success(exec_data.static.execution_record) else '失败'}。"
     )
-    evidence_refs = [str(item) for item in exec_data.business_context_refs if item]
+    evidence_refs = knowledge_evidence_refs(knowledge_snapshot_payload)
     if not evidence_refs:
-        evidence_refs = [str(item.get("path")) for item in exec_data.artifacts if item.get("path")]
+        evidence_refs = [str(item.get("path")) for item in static_artifacts(exec_data.static.execution_record) if item.get("path")]
 
     outputs = []
     for item in dataset_items:
@@ -128,7 +143,7 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
                 },
             }
         )
-    for report in exec_data.parser_reports:
+    for report in parser_reports_from_documents(exec_data.inputs.business_documents):
         outputs.append(
             {
                 "type": "parser_report",
@@ -141,7 +156,7 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
                 "parse_mode": report.get("parse_mode", "default"),
             }
         )
-    for artifact in exec_data.artifacts:
+    for artifact in static_artifacts(exec_data.static.execution_record):
         artifact_path = artifact.get("path")
         outputs.append(
             {
@@ -153,8 +168,8 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
         )
 
     caveats = []
-    if exec_data.latest_error_traceback:
-        caveats.append(_trim(exec_data.latest_error_traceback))
+    if exec_data.static.latest_error_traceback:
+        caveats.append(_trim(exec_data.static.latest_error_traceback))
     for check in rule_checks[:5]:
         warnings = check.get("warnings", []) or []
         for warning in warnings[:2]:
@@ -165,22 +180,23 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
     for check in filter_checks[:5]:
         for matched_range in (check.get("matched_date_ranges", []) or [])[:2]:
             caveats.append(_trim(f"过滤条件命中日期范围: {matched_range}", limit=240))
-    if not dataset_items and exec_data.structured_datasets:
+    if not dataset_items and exec_data.inputs.structured_datasets:
         caveats.append("结构化数据已挂载，但当前最小代码仅输出概览，不做深度统计。")
-    if not document_items and exec_data.business_documents:
+    if not document_items and exec_data.inputs.business_documents:
         caveats.append("业务文档已挂载，但当前最小代码仅输出预览，不做全文语义推理。")
 
     details = {
-        "analysis_plan": exec_data.analysis_plan,
-        "execution_success": bool(result.get("success")),
-        "artifacts": exec_data.artifacts,
-        "execution_record": exec_data.execution_record.model_dump(mode="json") if exec_data.execution_record else None,
-        "business_context": exec_data.business_context,
-        "knowledge_snapshot": exec_data.knowledge_snapshot,
-        "approved_skills": exec_data.approved_skills,
-        "historical_skill_matches": exec_data.historical_skill_matches,
+        "analysis_plan": exec_data.static.analysis_plan,
+        "analysis_brief": analysis_brief_payload,
+        "execution_success": execution_success(exec_data.static.execution_record),
+        "artifacts": static_artifacts(exec_data.static.execution_record),
+        "execution_record": exec_data.static.execution_record.model_dump(mode="json") if exec_data.static.execution_record else None,
+        "business_context": business_context_payload,
+        "knowledge_snapshot": knowledge_snapshot_payload,
+        "approved_skills": approved_skills_payload,
+        "historical_skill_matches": historical_matches_payload,
         "used_historical_skills": [
-            match for match in exec_data.historical_skill_matches
+            match for match in historical_matches_payload
             if bool(match.get("used_in_codegen"))
         ],
         "skill_strategy_hints": (
@@ -191,11 +207,11 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
                     "name": skill.get("name"),
                     "promotion_status": (skill.get("promotion") or {}).get("status"),
                 }
-                for skill in exec_data.approved_skills[:5]
+                for skill in approved_skills_payload[:5]
             ]
         ),
         "structured_output": structured_output,
-        "parser_reports": exec_data.parser_reports,
+        "parser_reports": parser_reports_from_documents(exec_data.inputs.business_documents),
         "derived_findings": derived_findings,
         "rule_checks": rule_checks,
         "metric_checks": metric_checks,
@@ -215,13 +231,14 @@ def _build_static_response(task_id: str, exec_data) -> Dict[str, Any]:
     }
 
 
-def _build_dynamic_response(task_id: str, exec_data) -> Dict[str, Any]:
-    dynamic_summary = exec_data.dynamic_summary or "Dynamic chain finished without summary."
+def _build_dynamic_response(task_id: str, exec_data, memory_data) -> dict[str, Any]:
+    dynamic_summary = exec_data.dynamic.summary or "Dynamic chain finished without summary."
+    historical_matches_payload = [item.model_dump(mode="json") for item in memory_data.historical_matches]
     findings = [
-        f"动态链路状态: {exec_data.dynamic_status or 'unknown'}",
-        f"轨迹事件: {len(exec_data.dynamic_trace)} 条",
+        f"动态链路状态: {exec_data.dynamic.status or 'unknown'}",
+        f"轨迹事件: {len(exec_data.dynamic.trace)} 条",
     ]
-    if exec_data.recommended_static_skill:
+    if exec_data.dynamic.recommended_static_skill:
         findings.append("生成了可候选沉淀的静态技能建议")
 
     answer = f"已完成动态探索。{_trim(dynamic_summary, limit=800)}"
@@ -232,22 +249,23 @@ def _build_dynamic_response(task_id: str, exec_data) -> Dict[str, Any]:
             "path": artifact,
             "summary": artifact,
         }
-        for artifact in exec_data.dynamic_artifacts
+        for artifact in exec_data.dynamic.artifacts
     ]
     caveats = []
-    if exec_data.dynamic_status and exec_data.dynamic_status != "completed":
-        caveats.append(f"动态链路最终状态为 {exec_data.dynamic_status}，请结合轨迹核实结果完整性。")
+    if exec_data.dynamic.status and exec_data.dynamic.status != "completed":
+        caveats.append(f"动态链路最终状态为 {exec_data.dynamic.status}，请结合轨迹核实结果完整性。")
 
     details = {
-        "dynamic_status": exec_data.dynamic_status,
-        "runtime_metadata": exec_data.dynamic_runtime_metadata,
-        "trace_refs": exec_data.dynamic_trace_refs,
-        "artifacts": exec_data.dynamic_artifacts,
-        "recommended_skill": exec_data.recommended_static_skill,
-        "decision_log": exec_data.decision_log,
-        "knowledge_snapshot": exec_data.knowledge_snapshot,
-        "historical_skill_matches": exec_data.historical_skill_matches,
-        "parser_reports": exec_data.parser_reports,
+        "dynamic_status": exec_data.dynamic.status,
+        "analysis_brief": exec_data.knowledge.analysis_brief.model_dump(mode="json"),
+        "runtime_metadata": exec_data.dynamic.runtime_metadata,
+        "trace_refs": exec_data.dynamic.trace_refs,
+        "artifacts": exec_data.dynamic.artifacts,
+        "recommended_skill": exec_data.dynamic.recommended_static_skill,
+        "decision_log": exec_data.control.decision_log,
+        "knowledge_snapshot": exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
+        "historical_skill_matches": historical_matches_payload,
+        "parser_reports": parser_reports_from_documents(exec_data.inputs.business_documents),
     }
 
     return {
@@ -256,14 +274,14 @@ def _build_dynamic_response(task_id: str, exec_data) -> Dict[str, Any]:
         "headline": _trim(dynamic_summary),
         "answer": answer,
         "key_findings": findings,
-        "evidence_refs": [str(item) for item in exec_data.dynamic_trace_refs if item],
+        "evidence_refs": [str(item) for item in exec_data.dynamic.trace_refs if item],
         "outputs": outputs,
         "caveats": caveats,
         "details": details,
     }
 
 
-def summarizer_node(state: Mapping[str, Any]) -> Dict[str, Any]:
+def summarizer_node(state: Mapping[str, Any]) -> dict[str, Any]:
     tenant_id = str(state.get("tenant_id", ""))
     task_id = str(state.get("task_id", ""))
     workspace_id = str(state.get("workspace_id", "default_ws"))
@@ -271,6 +289,11 @@ def summarizer_node(state: Mapping[str, Any]) -> Dict[str, Any]:
     exec_data = execution_blackboard.read(tenant_id, task_id)
     if not exec_data:
         return {"final_response": {}}
+    memory_data = MemoryService.get_task_memory(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        workspace_id=exec_data.workspace_id,
+    )
 
     global_blackboard.update_global_status(
         task_id=task_id,
@@ -278,13 +301,17 @@ def summarizer_node(state: Mapping[str, Any]) -> Dict[str, Any]:
         sub_status="正在组装最终回复",
     )
 
-    mode = "dynamic" if exec_data.routing_mode == "dynamic" or exec_data.dynamic_summary else "static"
-    final_response = _build_dynamic_response(task_id, exec_data) if mode == "dynamic" else _build_static_response(task_id, exec_data)
+    mode = "dynamic" if execution_intent_routing_mode(exec_data.control.execution_intent) == "dynamic" or exec_data.dynamic.summary else "static"
+    final_response = (
+        _build_dynamic_response(task_id, exec_data, memory_data)
+        if mode == "dynamic"
+        else _build_static_response(task_id, exec_data, memory_data)
+    )
     final_response["governance"] = {
-        "profile": exec_data.governance_profile,
-        "decision_count": len(exec_data.governance_decisions),
+        "profile": task_governance_profile(exec_data.control.task_envelope),
+        "decision_count": len(exec_data.control.decision_log),
     }
-    final_response, redaction_report = mask_payload(final_response, list(exec_data.task_envelope.redaction_rules or []) if exec_data.task_envelope else None)
+    final_response, redaction_report = mask_payload(final_response, list(exec_data.control.task_envelope.redaction_rules or []) if exec_data.control.task_envelope else None)
     if isinstance(final_response, dict) and redaction_report["match_count"]:
         final_response.setdefault("governance", {})
         final_response["governance"]["redaction_report"] = {
@@ -292,9 +319,15 @@ def summarizer_node(state: Mapping[str, Any]) -> Dict[str, Any]:
             "rule_hits": redaction_report["rule_hits"],
         }
 
-    exec_data.final_response = final_response
+    exec_data.control.final_response = final_response
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
+    MemoryService.store_task_summary(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        workspace_id=exec_data.workspace_id,
+        final_response=final_response,
+    )
 
     event_bus.publish(
         topic=EventTopic.UI_TASK_STATUS_UPDATE,

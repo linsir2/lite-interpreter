@@ -12,3 +12,7 @@ class DagRoutingError(DagEngineError):
 
 class DagExecutionError(DagEngineError):
     """Raised when a node in the DAG fails during execution."""
+
+
+class TaskLeaseLostError(DagEngineError):
+    """Raised when the current scheduler instance no longer owns the task lease."""

@@ -5,15 +5,16 @@
 
 - 任务总状态管理
 
-- 事件统一分发 -> 与前端交互
+- 事件统一分发 -> 与前端交互 ：前端、SSE、监控、恢复逻辑需要一个很轻量、稳定、统一的任务状态对象
 """
 import threading
-from typing import Dict, Optional
-from src.common.event_bus import event_bus
+from typing import Optional
+
 from src.blackboard.base_blackboard import BaseSubBlackboard
-from src.blackboard.schema import TaskGlobalState, GlobalStatus
-from src.blackboard.exceptions import SubBoardNotRegisteredError, TaskNotExistError, StatusUpdateError
-from src.common import get_logger, generate_uuid, get_utc_now, EventTopic
+from src.blackboard.exceptions import StatusUpdateError, SubBoardNotRegisteredError, TaskNotExistError
+from src.blackboard.schema import GlobalStatus, TaskGlobalState
+from src.common import EventTopic, generate_uuid, get_logger, get_utc_now
+from src.common.event_bus import event_bus
 from src.storage.repository.state_repo import StateRepo
 
 logger = get_logger(__name__)
@@ -32,8 +33,8 @@ class GlobalBlackboard:
         return cls._instance
     
     def _init(self):
-        self._sub_boards: Dict[str, BaseSubBlackboard] = {} # board_name -> 子黑板实例
-        self._task_states: Dict[str, TaskGlobalState] = {} # task_id -> TaskGlobalState
+        self._sub_boards: dict[str, BaseSubBlackboard] = {} # board_name -> 子黑板实例
+        self._task_states: dict[str, TaskGlobalState] = {} # task_id -> TaskGlobalState
         self._rw_lock = threading.RLock()
         logger.info("全局黑板初始化完成", extra={"trace_id": "system"})
 
@@ -47,22 +48,58 @@ class GlobalBlackboard:
             full_state,
         )
 
-    def _restore_task_state(self, task_id: str) -> Optional[TaskGlobalState]:
+    @staticmethod
+    def _is_newer_task_state(candidate: TaskGlobalState, current: TaskGlobalState | None) -> bool:
+        if current is None:
+            return True
+        return candidate.updated_at > current.updated_at
+
+    def _load_persisted_task_state(self, task_id: str) -> TaskGlobalState | None:
         full_state = StateRepo.load_blackboard_state_by_task(task_id)
         if not full_state or "global" not in full_state:
             return None
-        task_state = TaskGlobalState(**full_state["global"])
+        try:
+            return TaskGlobalState(**full_state["global"])
+        except Exception:
+            return None
+
+    def _restore_task_state(self, task_id: str) -> TaskGlobalState | None:
+        task_state = self._load_persisted_task_state(task_id)
+        if task_state is None:
+            return None
         self._task_states[task_id] = task_state
         return task_state
 
     def _get_task_state_locked(self, task_id: str) -> TaskGlobalState:
         task = self._task_states.get(task_id)
+        persisted = self._load_persisted_task_state(task_id)
+        if persisted and self._is_newer_task_state(persisted, task):
+            # 这里不能只要“内存里有”就直接返回。
+            # 在租约/多实例场景下，其他进程可能已经把更晚的任务状态写入持久层；
+            # 如果继续抱着旧缓存不放，结果接口和恢复逻辑都会看到陈旧状态。
+            self._task_states[task_id] = persisted
+            return persisted
         if task:
             return task
-        restored = self._restore_task_state(task_id)
-        if restored:
-            return restored
+        if persisted:
+            self._task_states[task_id] = persisted
+            return persisted
         raise TaskNotExistError(f"任务 {task_id} 不存在")
+
+    def _iter_known_global_states_locked(self) -> list[TaskGlobalState]:
+        known_tasks = {task.task_id: task for task in self._task_states.values()}
+        for state in StateRepo.list_blackboard_states():
+            payload = state.get("global")
+            if not isinstance(payload, dict):
+                continue
+            try:
+                task = TaskGlobalState(**payload)
+            except Exception:
+                continue
+            current = known_tasks.get(task.task_id)
+            if current is None or self._is_newer_task_state(task, current):
+                known_tasks[task.task_id] = task
+        return list(known_tasks.values())
 
     def register_sub_board(self, sub_board: BaseSubBlackboard) -> None:
         """
@@ -89,20 +126,30 @@ class GlobalBlackboard:
         self,
         tenant_id: str,
         workspace_id: str,
-        input_query: Optional[str] = None,
+        input_query: str,
         max_retry_times: int = 3,
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
     ) -> str:
         """
         创建新任务，生成唯一task_id，初始化总状态，发布TASK_CREATED事件
 
         :return: 任务ID
         """
-        if input_query is None:
-            # 兼容旧调用：create_task(tenant_id, input_query)
-            input_query = workspace_id
-            workspace_id = "default_ws"
-
         with self._rw_lock:
+            if idempotency_key:
+                existing = self.find_task_by_idempotency(
+                    tenant_id,
+                    workspace_id,
+                    idempotency_key,
+                )
+                if existing:
+                    existing_fingerprint = str(existing.request_fingerprint or "")
+                    incoming_fingerprint = str(request_fingerprint or "")
+                    if existing_fingerprint and incoming_fingerprint and existing_fingerprint != incoming_fingerprint:
+                        raise StatusUpdateError("相同 idempotency_key 对应的请求体不一致，拒绝复用旧任务")
+                    return existing.task_id
+
             task_id = generate_uuid()
             task_state = TaskGlobalState(
                 task_id=task_id,
@@ -110,6 +157,8 @@ class GlobalBlackboard:
                 workspace_id=workspace_id,
                 input_query=input_query,
                 max_retries=max_retry_times,
+                idempotency_key=str(idempotency_key or "").strip() or None,
+                request_fingerprint=str(request_fingerprint or "").strip() or None,
             )
             self._task_states[task_id] = task_state
 
@@ -130,13 +179,31 @@ class GlobalBlackboard:
             )
             self._persist_task_state(task_state)
             return task_id
+
+    def find_task_by_idempotency(
+        self,
+        tenant_id: str,
+        workspace_id: str,
+        idempotency_key: str,
+    ) -> TaskGlobalState | None:
+        normalized_key = str(idempotency_key or "").strip()
+        if not normalized_key:
+            return None
+        with self._rw_lock:
+            for task in self._iter_known_global_states_locked():
+                if task.tenant_id != tenant_id or task.workspace_id != workspace_id:
+                    continue
+                if str(task.idempotency_key or "") != normalized_key:
+                    continue
+                return task
+        return None
     
     def get_task_state(self, task_id: str) -> TaskGlobalState:
         """获取任务全局状态"""
         with self._rw_lock:
             return self._get_task_state_locked(task_id)
     
-    def update_global_status(self, task_id: str, new_status: GlobalStatus, sub_status: Optional[str] = None, **kwargs) -> None:
+    def update_global_status(self, task_id: str, new_status: GlobalStatus, sub_status: str | None = None, **kwargs) -> None:
         """
         更新任务全局状态
 
@@ -159,9 +226,10 @@ class GlobalBlackboard:
                     setattr(task, key, value)
             
             display_message = sub_status if sub_status else f"任务状态更新为 {new_status.value}"
+            old_status_value = old_status.value if hasattr(old_status, "value") else str(old_status)
             
             status_payload = {
-                "old_status": old_status.value,
+                "old_status": old_status_value,
                 "new_status": new_status.value,
                 "sub_status": sub_status,
                 "message": display_message,  # 前端友好提示
@@ -183,7 +251,12 @@ class GlobalBlackboard:
                     "final_status": new_status.value,
                     "failure_type": task.failure_type,
                     "error_message": task.error_message,
-                    "cost_info": {"max_retries": task.max_retries, "used_retries": task.current_retries}
+                    # 这里明确暴露“修复重试”语义，避免把它误解成整个任务的通用 retry 统计。
+                    "retry_info": {
+                        "scope": "codegen_debug_loop",
+                        "max_repair_retries": task.max_retries,
+                        "used_repair_retries": task.current_retries,
+                    },
                 }
                 event_bus.publish(
                     topic=EventTopic.SYS_TASK_FINISHED,
@@ -230,17 +303,13 @@ class GlobalBlackboard:
                 GlobalStatus.AUDITING, 
                 GlobalStatus.EXECUTING, 
                 GlobalStatus.DEBUGGING,
-                GlobalStatus.EVALUATING
+                GlobalStatus.EVALUATING,
+                GlobalStatus.HARVESTING,
+                GlobalStatus.SUMMARIZING,
                 # 注：WAITING_FOR_HUMAN 不包含在内，因为它需要等待前端用户主动触发，不能由系统自动盲目重启
                 # SUCCESS, FAILED, ARCHIVED 属于终态
             ]
-            known_tasks = {task.task_id: task for task in self._task_states.values()}
-            for state in StateRepo.list_blackboard_states():
-                payload = state.get("global")
-                if not isinstance(payload, dict):
-                    continue
-                task = TaskGlobalState(**payload)
-                known_tasks.setdefault(task.task_id, task)
+            known_tasks = {task.task_id: task for task in self._iter_known_global_states_locked()}
             return [
                 task for task in known_tasks.values()
                 if task.global_status in unfinished_status

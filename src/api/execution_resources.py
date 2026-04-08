@@ -1,8 +1,11 @@
 """Helpers for deriving execution resources from persisted task state."""
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import date, datetime, time
+from typing import Any
 
+from src.blackboard import execution_blackboard
 from src.blackboard.schema import ExecutionData
 from src.common import ToolCallRecord
 from src.common.schema import EventTopic
@@ -20,6 +23,43 @@ def _normalize_execution_data(value: Any) -> ExecutionData | None:
     return ExecutionData.model_validate(execution_payload)
 
 
+def to_jsonable_payload(value: Any) -> Any:
+    """
+    把 blackboard / pydantic / dict-like typed state 递归投影成原生 JSON 结构。
+
+    这里的目标不是做业务裁剪，而是把 API 出口上的：
+    - Pydantic 模型
+    - 以及它们的嵌套 list/dict
+    统一变成 `JSONResponse` 可以直接消费的原生对象。
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if hasattr(value, "model_dump"):
+        return to_jsonable_payload(value.model_dump(mode="json", by_alias=True))
+    if isinstance(value, Mapping):
+        return {
+            str(key): to_jsonable_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [to_jsonable_payload(item) for item in value]
+    return value
+
+
+def read_task_execution_data(tenant_id: str, task_id: str) -> ExecutionData | None:
+    """
+    读取任务 execution 主状态；当前进程缓存为空时，显式从 execution 持久化状态恢复。
+    """
+    execution_data = execution_blackboard.read(tenant_id, task_id)
+    if execution_data is not None:
+        return execution_data
+    if execution_blackboard.restore(tenant_id, task_id):
+        return execution_blackboard.read(tenant_id, task_id)
+    return None
+
+
 def serialize_execution_record(execution_record: Any) -> dict[str, Any] | None:
     if execution_record is None:
         return None
@@ -35,9 +75,9 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
         return []
 
     summaries: list[dict[str, Any]] = []
-    execution_record = serialize_execution_record(execution_data.execution_record)
+    execution_record = serialize_execution_record(execution_data.static.execution_record)
     sandbox_execution_id = f"sandbox:{execution_record['session_id']}" if execution_record else None
-    runtime_execution_id = f"runtime:{execution_data.task_id}" if execution_data.runtime_backend and execution_data.dynamic_status else None
+    runtime_execution_id = f"runtime:{execution_data.task_id}" if execution_data.dynamic.runtime_backend and execution_data.dynamic.status else None
     if execution_record:
         summaries.append(
             {
@@ -56,7 +96,7 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
             }
         )
 
-    if execution_data.runtime_backend and execution_data.dynamic_status:
+    if execution_data.dynamic.runtime_backend and execution_data.dynamic.status:
         summaries.append(
             {
                 "execution_id": runtime_execution_id,
@@ -64,14 +104,14 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
                 "tenant_id": execution_data.tenant_id,
                 "workspace_id": execution_data.workspace_id,
                 "kind": "runtime",
-                "backend": execution_data.runtime_backend,
-                "status": execution_data.dynamic_status,
-                "success": execution_data.dynamic_status == "completed",
-                "trace_id": execution_data.dynamic_trace_refs[0] if execution_data.dynamic_trace_refs else None,
-                "summary": execution_data.dynamic_summary,
-                "artifact_count": len(execution_data.dynamic_artifacts),
+                "backend": execution_data.dynamic.runtime_backend,
+                "status": execution_data.dynamic.status,
+                "success": execution_data.dynamic.status == "completed",
+                "trace_id": execution_data.dynamic.trace_refs[0] if execution_data.dynamic.trace_refs else None,
+                "summary": execution_data.dynamic.summary,
+                "artifact_count": len(execution_data.dynamic.artifacts),
                 "tool_call_count": len(build_execution_tool_calls(execution_data, runtime_execution_id)),
-                "runtime_metadata": dict(execution_data.dynamic_runtime_metadata or {}),
+                "runtime_metadata": execution_data.dynamic.runtime_metadata.model_dump(mode="json"),
             }
         )
 
@@ -79,19 +119,11 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
 
 
 def build_execution_artifacts(execution_data: ExecutionData, execution_id: str) -> list[dict[str, Any]]:
-    execution_record = serialize_execution_record(execution_data.execution_record)
+    execution_record = serialize_execution_record(execution_data.static.execution_record)
     if execution_id.startswith("sandbox:"):
         if execution_record and execution_id == f"sandbox:{execution_record['session_id']}":
             return list(execution_record.get("artifacts", []) or [])
-        return [
-            {
-                "path": artifact.get("path"),
-                "artifact_type": artifact.get("type", "artifact"),
-                "summary": artifact.get("path"),
-            }
-            for artifact in execution_data.artifacts
-            if artifact.get("path")
-        ]
+        return []
 
     if execution_id == f"runtime:{execution_data.task_id}":
         return [
@@ -100,7 +132,7 @@ def build_execution_artifacts(execution_data: ExecutionData, execution_id: str) 
                 "artifact_type": "runtime_artifact",
                 "summary": artifact,
             }
-            for artifact in execution_data.dynamic_artifacts
+            for artifact in execution_data.dynamic.artifacts
             if artifact
         ]
     return []
@@ -111,7 +143,7 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
         return []
 
     records: list[dict[str, Any]] = []
-    execution_record = serialize_execution_record(execution_data.execution_record)
+    execution_record = serialize_execution_record(execution_data.static.execution_record)
 
     if execution_id.startswith("sandbox:"):
         sandbox_session_id = execution_id.removeprefix("sandbox:")
@@ -136,7 +168,7 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
                 ).model_dump(mode="json")
             )
 
-        knowledge_snapshot = dict(execution_data.knowledge_snapshot or {})
+        knowledge_snapshot = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json")
         if knowledge_snapshot:
             records.append(
                 ToolCallRecord(
@@ -148,7 +180,7 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
                     agent_name="static_chain",
                     step_name="kag_retriever",
                     arguments={
-                        "query": execution_data.task_envelope.input_query if execution_data.task_envelope else None,
+                        "query": execution_data.control.task_envelope.input_query if execution_data.control.task_envelope else None,
                     },
                     result={
                         "rewritten_query": knowledge_snapshot.get("rewritten_query"),
@@ -165,14 +197,13 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
     if not execution_id.startswith("runtime:"):
         return []
 
-    for index, event in enumerate(execution_data.dynamic_trace):
-        if not isinstance(event, dict):
-            continue
-        event_type = str(event.get("event_type") or "")
+    for index, event in enumerate(execution_data.dynamic.trace):
+        event_payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else dict(event)
+        event_type = str(event_payload.get("event_type") or "")
         if not event_type.startswith("tool_call") and event_type != "tool_result":
             continue
-        tool_call = dict(event.get("tool_call") or {})
-        tool_name = str(tool_call.get("tool_name") or event.get("payload", {}).get("tool_name") or "").strip()
+        tool_call = dict(event_payload.get("tool_call") or {})
+        tool_name = str(tool_call.get("tool_name") or event_payload.get("payload", {}).get("tool_name") or "").strip()
         if not tool_name:
             continue
         tool_call_id = str(tool_call.get("tool_call_id") or f"{execution_id}:tool:{index}")
@@ -188,12 +219,12 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
             tool_name=tool_name,
             phase=phase_map.get(event_type, "start"),
             status=tool_call.get("status"),
-            agent_name=event.get("agent_name"),
-            step_name=event.get("step_name"),
+            agent_name=event_payload.get("agent_name"),
+            step_name=event_payload.get("step_name"),
             arguments=tool_call.get("arguments"),
             result=tool_call.get("result"),
-            source_event_type=event.get("source_event_type"),
-            payload=dict(event.get("payload", {}) or {}),
+            source_event_type=event_payload.get("source_event_type"),
+            payload=dict(event_payload.get("payload", {}) or {}),
         )
         records.append(record.model_dump(mode="json"))
     return records

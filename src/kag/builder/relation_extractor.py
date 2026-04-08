@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List
 
 from src.common import get_logger
 from src.storage.schema import EntityNode, KnowledgeTriple
@@ -14,7 +13,7 @@ logger = get_logger(__name__)
 @dataclass
 class ChunkEntityGroup:
     chunk_id: str
-    entities: List[EntityNode]
+    entities: list[EntityNode]
     text: str
 
 
@@ -32,16 +31,16 @@ class RelationExtractor:
     @classmethod
     def extract_relations(
         cls,
-        chunk_text_map: Dict[str, str],
-        entities: List[EntityNode],
-    ) -> List[KnowledgeTriple]:
-        grouped: Dict[str, List[EntityNode]] = defaultdict(list)
+        chunk_text_map: dict[str, str],
+        entities: list[EntityNode],
+    ) -> list[KnowledgeTriple]:
+        grouped: dict[str, list[EntityNode]] = defaultdict(list)
         for entity in entities:
             chunk_id = str(entity.properties.get("chunk_id", ""))
             if chunk_id:
                 grouped[chunk_id].append(entity)
 
-        triples: List[KnowledgeTriple] = []
+        triples: list[KnowledgeTriple] = []
         for chunk_id, chunk_entities in grouped.items():
             text = chunk_text_map.get(chunk_id, "")
             triples.extend(cls._extract_entity_graph(chunk_entities, chunk_id))
@@ -52,8 +51,8 @@ class RelationExtractor:
         return triples
 
     @classmethod
-    def _extract_entity_graph(cls, entities: List[EntityNode], chunk_id: str) -> List[KnowledgeTriple]:
-        triples: List[KnowledgeTriple] = []
+    def _extract_entity_graph(cls, entities: list[EntityNode], chunk_id: str) -> list[KnowledgeTriple]:
+        triples: list[KnowledgeTriple] = []
         named = [entity for entity in entities if entity.label == "named"]
         semantic = [entity for entity in entities if entity.label == "semantic"]
         for left in named:
@@ -74,8 +73,8 @@ class RelationExtractor:
         return triples
 
     @classmethod
-    def _extract_semantic_graph(cls, entities: List[EntityNode], chunk_id: str) -> List[KnowledgeTriple]:
-        triples: List[KnowledgeTriple] = []
+    def _extract_semantic_graph(cls, entities: list[EntityNode], chunk_id: str) -> list[KnowledgeTriple]:
+        triples: list[KnowledgeTriple] = []
         semantic_like = [entity for entity in entities if entity.label in {"semantic", "named"}]
         for index, left in enumerate(semantic_like):
             for right in semantic_like[index + 1 : index + 4]:
@@ -95,8 +94,8 @@ class RelationExtractor:
         return triples
 
     @classmethod
-    def _extract_temporal_graph(cls, entities: List[EntityNode], chunk_id: str) -> List[KnowledgeTriple]:
-        triples: List[KnowledgeTriple] = []
+    def _extract_temporal_graph(cls, entities: list[EntityNode], chunk_id: str) -> list[KnowledgeTriple]:
+        triples: list[KnowledgeTriple] = []
         temporals = [entity for entity in entities if entity.label == "temporal"]
         targets = [entity for entity in entities if entity.label in {"named", "semantic"}]
         for temporal in temporals:
@@ -115,7 +114,7 @@ class RelationExtractor:
         return triples
 
     @classmethod
-    def _extract_causal_graph(cls, entities: List[EntityNode], text: str, chunk_id: str) -> List[KnowledgeTriple]:
+    def _extract_causal_graph(cls, entities: list[EntityNode], text: str, chunk_id: str) -> list[KnowledgeTriple]:
         if not text or not any(marker in text for marker in cls.CAUSAL_MARKERS):
             return []
         candidates = [entity for entity in entities if entity.label in {"semantic", "named"}]

@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
-
 from src.frontend.pages.task_console import (
     build_output_cards,
     collect_result_sections,
@@ -19,8 +18,8 @@ from src.frontend.pages.task_console import (
 
 def test_summarize_result_header_prefers_final_response_fields():
     payload = {
-        "global_status": "success",
-        "final_response": {
+        "status": {"global_status": "success"},
+        "response": {
             "mode": "static",
             "headline": "分析完成",
             "answer": "这是最终回答。",
@@ -37,8 +36,10 @@ def test_collect_result_sections_extracts_lists():
     payload = {
         "executions": [{"execution_id": "sandbox:session-1", "kind": "sandbox"}],
         "tool_calls": [{"tool_name": "web_search", "phase": "start"}],
-        "task_lease": {"owner_id": "host:pid", "lease_expires_at": "2026-04-05T00:00:00Z", "backend": "memory_fallback"},
-        "final_response": {
+        "status": {
+            "task_lease": {"owner_id": "host:pid", "lease_expires_at": "2026-04-05T00:00:00Z", "backend": "memory_fallback"}
+        },
+        "response": {
             "key_findings": ["f1", "f2"],
             "outputs": [{"type": "dataset", "name": "sales.csv"}],
             "caveats": ["limited"],
@@ -54,13 +55,14 @@ def test_collect_result_sections_extracts_lists():
     assert sections["executions"][0]["execution_id"] == "sandbox:session-1"
     assert sections["tool_calls"][0]["tool_name"] == "web_search"
     assert sections["task_lease"][0]["owner_id"] == "host:pid"
+    assert sections["analysis_brief"] == []
     assert sections["parser_reports"] == []
 
 
 def test_select_stream_target_prefers_execution_stream_when_available():
     target = select_stream_target(
         {
-            "task_id": "task-1",
+            "task": {"task_id": "task-1"},
             "executions": [{"execution_id": "runtime:task-1", "kind": "runtime"}],
         }
     )
@@ -71,7 +73,7 @@ def test_select_stream_target_prefers_execution_stream_when_available():
 def test_select_stream_target_honors_preferred_execution_id():
     target = select_stream_target(
         {
-            "task_id": "task-1",
+            "task": {"task_id": "task-1"},
             "executions": [
                 {"execution_id": "runtime:task-1", "kind": "runtime"},
                 {"execution_id": "sandbox:session-1", "kind": "sandbox"},
@@ -84,7 +86,7 @@ def test_select_stream_target_honors_preferred_execution_id():
 
 
 def test_select_stream_target_falls_back_to_task_stream():
-    target = select_stream_target({"task_id": "task-2", "executions": []})
+    target = select_stream_target({"task": {"task_id": "task-2"}, "executions": []})
     assert target["stream_kind"] == "task"
     assert target["task_id"] == "task-2"
 
@@ -97,7 +99,7 @@ def test_fetch_json_payload_returns_dict(monkeypatch):
         def json(self):
             return {"ok": True}
 
-    monkeypatch.setattr(httpx, "get", lambda url, timeout=20.0: _FakeResponse())
+    monkeypatch.setattr(httpx, "get", lambda url, timeout=20.0, headers=None: _FakeResponse())
     payload = fetch_json_payload("http://127.0.0.1:8000/api/tasks/task-1/result")
     assert payload["ok"] is True
 
@@ -115,29 +117,34 @@ def test_fetch_task_console_bundle_uses_execution_endpoints(monkeypatch):
         def json(self):
             return self._payload
 
-    def fake_get(url, timeout=20.0):
+    def fake_get(url, timeout=20.0, headers=None):
         requested_urls.append(url)
-        if url.endswith("/result"):
-            return _FakeResponse({"task_id": "task-1", "final_response": {"headline": "done"}})
-        if url.endswith("/executions"):
+        if "/result?" in url:
+            return _FakeResponse({"task": {"task_id": "task-1"}, "response": {"headline": "done"}})
+        if "/executions?" in url:
             return _FakeResponse({"executions": [{"execution_id": "runtime:task-1", "kind": "runtime"}]})
-        if url.endswith("/tool-calls"):
+        if "/tool-calls?" in url:
             return _FakeResponse({"tool_calls": [{"tool_name": "web_search", "phase": "start"}]})
         raise AssertionError(f"unexpected url: {url}")
 
     monkeypatch.setattr(httpx, "get", fake_get)
-    payload = fetch_task_console_bundle("http://127.0.0.1:8000", "task-1")
+    payload = fetch_task_console_bundle(
+        "http://127.0.0.1:8000",
+        "task-1",
+        tenant_id="tenant-1",
+        workspace_id="ws-1",
+    )
 
     assert payload["executions"][0]["execution_id"] == "runtime:task-1"
     assert payload["tool_calls"][0]["tool_name"] == "web_search"
-    assert any(url.endswith("/api/tasks/task-1/result") for url in requested_urls)
-    assert any(url.endswith("/api/tasks/task-1/executions") for url in requested_urls)
-    assert any(url.endswith("/api/executions/runtime:task-1/tool-calls") for url in requested_urls)
+    assert any(url.endswith("/api/tasks/task-1/result?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
+    assert any(url.endswith("/api/tasks/task-1/executions?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
+    assert any(url.endswith("/api/executions/runtime:task-1/tool-calls?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
 
 
 def test_collect_result_sections_extracts_parser_reports():
     payload = {
-        "final_response": {
+        "response": {
             "details": {
                 "parser_reports": [
                     {"file_name": "rule.pdf", "parse_mode": "ocr+vision", "parser_diagnostics": {"image_description_count": 2}}
@@ -151,10 +158,12 @@ def test_collect_result_sections_extracts_parser_reports():
 
 def test_collect_result_sections_extracts_knowledge_snapshot():
     payload = {
-        "knowledge_snapshot": {
-            "rewritten_query": "报销 规则",
-            "recall_strategies": ["bm25", "vector"],
-            "filters": {"year": "2024"},
+        "knowledge": {
+            "knowledge_snapshot": {
+                "rewritten_query": "报销 规则",
+                "recall_strategies": ["bm25", "vector"],
+                "filters": {"year": "2024"},
+            }
         }
     }
     sections = collect_result_sections(payload)
@@ -162,19 +171,43 @@ def test_collect_result_sections_extracts_knowledge_snapshot():
     assert sections["knowledge_snapshot"][0]["filters"]["year"] == "2024"
 
 
+def test_collect_result_sections_extracts_analysis_brief():
+    payload = {
+        "knowledge": {
+            "analysis_brief": {
+                "question": "结合费用数据和规则，检查合同缺失",
+                "analysis_mode": "hybrid_analysis",
+                "dataset_summaries": ["expenses.csv: schema=contract_id,tax_amount"],
+                "business_rules": ["规则：必须上传合同。"],
+                "business_metrics": ["审批时效口径"],
+                "business_filters": ["上海"],
+                "evidence_refs": ["rule-1"],
+                "known_gaps": ["业务规则尚未抽取完成"],
+                "recommended_next_step": "先核对证据与规则，再生成模板化数据分析代码",
+            }
+        }
+    }
+    sections = collect_result_sections(payload)
+    assert sections["analysis_brief"][0]["analysis_mode"] == "hybrid_analysis"
+    assert sections["analysis_brief"][0]["dataset_summaries"][0].startswith("expenses.csv")
+    assert sections["analysis_brief"][0]["business_rules"] == ["规则：必须上传合同。"]
+
+
 def test_collect_result_sections_extracts_historical_skill_matches():
     payload = {
-        "historical_skill_matches": [
-            {
-                "name": "historical_skill_demo",
-                "required_capabilities": ["knowledge_query"],
-                "match_source": "historical_repo",
-                "match_reason": "query_capabilities=knowledge_query",
-                "match_score": 5,
-                "usage": {"usage_count": 3},
-            }
-        ],
-        "final_response": {
+        "skills": {
+            "historical_matches": [
+                {
+                    "name": "historical_skill_demo",
+                    "required_capabilities": ["knowledge_query"],
+                    "match_source": "historical_repo",
+                    "match_reason": "query_capabilities=knowledge_query",
+                    "match_score": 5,
+                    "usage": {"usage_count": 3},
+                }
+            ]
+        },
+        "response": {
             "details": {
                 "used_historical_skills": [
                     {
@@ -199,7 +232,7 @@ def test_collect_result_sections_extracts_historical_skill_matches():
 
 def test_collect_result_sections_extracts_rule_checks():
     payload = {
-        "final_response": {
+        "response": {
             "details": {
                 "rule_checks": [
                     {
@@ -220,7 +253,7 @@ def test_collect_result_sections_extracts_rule_checks():
 
 def test_collect_result_sections_extracts_metric_and_filter_checks():
     payload = {
-        "final_response": {
+        "response": {
             "details": {
                 "metric_checks": [
                     {

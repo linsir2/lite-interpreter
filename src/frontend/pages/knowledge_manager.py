@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import httpx
 
+from src.frontend.auth_client import api_auth_headers, render_auth_panel
+
 
 def render_knowledge_manager() -> None:
     try:
@@ -12,14 +14,23 @@ def render_knowledge_manager() -> None:
 
     st.title("Knowledge Manager")
     api_base_url = st.text_input("API Base URL", value="http://127.0.0.1:8000", key="knowledge-api")
-    tenant_id = st.text_input("Tenant ID", value="demo-tenant", key="knowledge-tenant")
-    workspace_id = st.text_input("Workspace ID", value="demo-workspace", key="knowledge-workspace")
+    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="knowledge-auth")
+    if session_info and session_info.get("grants"):
+        first_grant = session_info["grants"][0]
+        default_tenant = str(first_grant.get("tenant_id") or "demo-tenant")
+        default_workspace = str(first_grant.get("workspace_id") or "demo-workspace")
+    else:
+        default_tenant = "demo-tenant"
+        default_workspace = "demo-workspace"
+    tenant_id = st.text_input("Tenant ID", value=default_tenant, key="knowledge-tenant")
+    workspace_id = st.text_input("Workspace ID", value=default_workspace, key="knowledge-workspace")
 
     if st.button("Refresh Assets", use_container_width=True):
         try:
             response = httpx.get(
                 f"{api_base_url.rstrip('/')}/api/knowledge/assets",
                 params={"tenant_id": tenant_id, "workspace_id": workspace_id},
+                headers=api_auth_headers(api_token),
                 timeout=20.0,
             )
             response.raise_for_status()

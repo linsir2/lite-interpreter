@@ -1,23 +1,28 @@
 """Docker沙箱执行器"""
+import asyncio
+import json
 import os
 import signal
-import docker
-import json
 import threading
 import time
 import traceback
-import asyncio
-from datetime import datetime
-from typing import Dict, Any, Optional
-from docker.errors import DockerException, ContainerError, ImageNotFound
 from concurrent.futures import ThreadPoolExecutor
-from dotenv import load_dotenv
+from datetime import datetime
+from typing import Any
 
-from config.sandbox_config import DOCKER_CONFIG, ZOMBIE_CONTAINER_TIMEOUT_FACTOR, ZOMBIE_CLEAN_INTERVAL, CONTAINER_NAME_PREFIX
-from src.sandbox.exceptions import (
-    DockerOperationError, InputValidationError,
-    ExecTimeoutError, CodeExecError, SandboxBaseError
+import docker
+from config.sandbox_config import (
+    DOCKER_CONFIG,
+    ZOMBIE_CLEAN_INTERVAL,
+    ZOMBIE_CONTAINER_TIMEOUT_FACTOR,
 )
+from docker.errors import ContainerError, DockerException
+from dotenv import load_dotenv
+from requests.exceptions import Timeout as RequestsTimeout
+
+from src.common import generate_uuid, get_current_timestamp, get_logger
+from src.harness import HarnessGovernor
+from src.harness.policy import load_harness_policy
 from src.sandbox.container_lifecycle import (
     cleanup_sandbox_run,
     collect_container_logs,
@@ -25,19 +30,34 @@ from src.sandbox.container_lifecycle import (
     prepare_sandbox_run,
     wait_for_container_exit,
 )
-from src.sandbox.utils import validate_code_basic, validate_tenant_id, build_log_data
-from src.sandbox.metrics import (
-    sandbox_exec_duration_seconds, sandbox_exec_success_total, sandbox_exec_fail_total,
-    sandbox_container_oom_total, sandbox_container_create_fail_total,
-    sandbox_container_remove_fail_total, sandbox_container_create_success_total
+from src.sandbox.exceptions import (
+    CodeExecError,
+    DockerOperationError,
+    ExecTimeoutError,
+    InputValidationError,
+    SandboxBaseError,
 )
 from src.sandbox.execution_reporting import build_preflight_failure_response, build_sandbox_response
+from src.sandbox.metrics import (
+    sandbox_container_create_fail_total,
+    sandbox_container_create_success_total,
+    sandbox_container_oom_total,
+    sandbox_container_remove_fail_total,
+    sandbox_exec_duration_seconds,
+    sandbox_exec_fail_total,
+    sandbox_exec_success_total,
+)
+from src.sandbox.runtime_state import (
+    _running_containers as _runtime_running_containers,
+)
+from src.sandbox.runtime_state import (
+    _tenant_concurrency as _runtime_tenant_concurrency,
+)
 from src.sandbox.runtime_state import (
     clear_running_containers,
     close_docker_client,
     current_tenant_concurrency,
     decrement_tenant_concurrency,
-    get_docker_client as _get_docker_client,
     increment_tenant_concurrency,
     is_shutdown_requested,
     register_running_container,
@@ -45,19 +65,19 @@ from src.sandbox.runtime_state import (
     should_start_zombie_cleaner,
     snapshot_running_containers,
     unregister_running_container,
-    _running_containers as _runtime_running_containers,
-    _tenant_concurrency as _runtime_tenant_concurrency,
+)
+from src.sandbox.runtime_state import (
+    get_docker_client as _get_docker_client,
 )
 from src.sandbox.session_manager import sandbox_session_manager
-from src.common import get_logger, generate_uuid, truncate_string, get_current_timestamp
-from src.harness import HarnessGovernor
+from src.sandbox.utils import build_log_data, validate_code_basic, validate_tenant_id
 
 load_dotenv()
 logger = get_logger(__name__)
 
 # Backward-compatible test hooks.
-_tenant_concurrency: Dict[str, int] = _runtime_tenant_concurrency
-_running_containers: Dict[str, str] = _runtime_running_containers
+_tenant_concurrency: dict[str, int] = _runtime_tenant_concurrency
+_running_containers: dict[str, str] = _runtime_running_containers
 
 executor_pool = ThreadPoolExecutor(max_workers=50)
 
@@ -93,7 +113,7 @@ def clean_zombie_containers() -> None:
         client = get_docker_client()
         timeout_seconds = DOCKER_CONFIG["timeout"] * ZOMBIE_CONTAINER_TIMEOUT_FACTOR
         now = time.time()
-        containers = client.containers.list(all=True, filters={"name": f"^sandbox-"})
+        containers = client.containers.list(all=True, filters={"name": "^sandbox-"})
         
         cleaned_count = 0
         for container in containers:
@@ -118,10 +138,10 @@ def _execute_code_in_docker(
     code: str,
     tenant_id: str,
     workspace_id: str,
-    trace_id: Optional[str] = None,
-    task_id: Optional[str] = None,
-    input_mounts: Optional[list[dict[str, str]]] = None,
-) -> Dict[str, Any]:
+    trace_id: str | None = None,
+    task_id: str | None = None,
+    input_mounts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """
     沙箱执行核心函数
 
@@ -134,8 +154,8 @@ def _execute_code_in_docker(
     trace_id = trace_id or generate_uuid()
     log_extra = {"trace_id": trace_id}
     start_time = get_current_timestamp()
-    container: Optional[Any] = None
-    client: Optional[docker.DockerClient] = None
+    container: Any | None = None
+    client: docker.DockerClient | None = None
     log_data = build_log_data(tenant_id, "sandbox_exec", code, trace_id)
     concurrency_incremented = False
     code_file_path = ""
@@ -147,14 +167,24 @@ def _execute_code_in_docker(
         input_mounts=sandbox_inputs,
     )
     sandbox_session_manager.create_session(session_spec, trace_id=trace_id)
+    policy = load_harness_policy()
+    sandbox_policy = dict(policy.get("sandbox") or {})
+    require_policy_check = bool(sandbox_policy.get("require_policy_check", True))
+    governance_decision = None
+    governance_record = None
 
     try:
-        governance_decision = HarnessGovernor.evaluate_sandbox_execution(
-            code=code,
-            tenant_id=tenant_id,
-            trace_ref=f"governance:sandbox:{trace_id}",
-        )
-        if not governance_decision.allowed:
+        if require_policy_check:
+            governance_decision = HarnessGovernor.evaluate_sandbox_execution(
+                code=code,
+                tenant_id=tenant_id,
+                trace_ref=f"governance:sandbox:{trace_id}",
+            )
+            governance_record = governance_decision.to_record()
+        else:
+            logger.info("sandbox.require_policy_check=false，跳过 harness 预检", extra=log_extra)
+
+        if governance_decision is not None and not governance_decision.allowed:
             reason = "沙箱执行请求被 harness policy 拒绝"
             log_data.update({
                 "exec_result": "fail",
@@ -172,7 +202,7 @@ def _execute_code_in_docker(
                 workspace_id=workspace_id,
                 task_id=task_id,
                 error=log_data["reason"],
-                governance=governance_decision.to_patch()["governance_decisions"][0],
+                governance=governance_record,
                 session_metadata={"phase": "governance", "error": log_data["reason"]},
             )
 
@@ -269,7 +299,7 @@ def _execute_code_in_docker(
             output=logs,
             artifacts_dir=str(prepared_run.host_output_dir),
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": "completed", "artifacts_dir": str(prepared_run.host_output_dir)},
         )
 
@@ -294,7 +324,7 @@ def _execute_code_in_docker(
             task_id=task_id,
             error=error.message,
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": "timeout", "error": error.message},
         )
 
@@ -318,7 +348,7 @@ def _execute_code_in_docker(
             task_id=task_id,
             error=e.message,
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": e.error_type, "error": e.message},
         )
 
@@ -345,7 +375,7 @@ def _execute_code_in_docker(
             task_id=task_id,
             error=reason,
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": error_type, "error": reason},
         )
 
@@ -370,7 +400,7 @@ def _execute_code_in_docker(
             task_id=task_id,
             error=error.message,
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": error.error_type, "error": error.message},
         )
 
@@ -396,7 +426,7 @@ def _execute_code_in_docker(
             task_id=task_id,
             error=reason,
             mounted_inputs=sandbox_inputs,
-            governance=governance_decision.to_patch()["governance_decisions"][0],
+            governance=governance_record,
             session_metadata={"phase": error_type, "error": reason},
         )
 
@@ -422,8 +452,8 @@ def execute_in_sandbox_with_audit(
     tenant_id: str,
     workspace_id: str = "default_ws",
     task_id: str | None = None,
-    input_mounts: Optional[list[dict[str, str]]] = None,
-) -> Dict[str, Any]:
+    input_mounts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """
     【独立服务入口】一站式沙箱执行（包含完整校验+审计+执行）
     
@@ -434,13 +464,14 @@ def execute_in_sandbox_with_audit(
     :param workspace_id: 租户内部空间隔离
     :return: 执行结果
     """
-    from src.sandbox.ast_auditor import audit_code
-    from src.sandbox.exceptions import AuditFailError, SandboxBaseError, DockerOperationError
-    from src.sandbox.utils import validate_code, validate_tenant_id, build_log_data
-    from src.common import generate_uuid, get_current_timestamp, get_logger
     import json
     import traceback
+
+    from src.common import generate_uuid, get_current_timestamp, get_logger
+    from src.sandbox.ast_auditor import audit_code
+    from src.sandbox.exceptions import AuditFailError, DockerOperationError, SandboxBaseError
     from src.sandbox.metrics import sandbox_exec_fail_total
+    from src.sandbox.utils import build_log_data, validate_code, validate_tenant_id
 
     logger = get_logger(__name__)
     trace_id = generate_uuid()
@@ -524,8 +555,8 @@ def execute_in_sandbox(
     tenant_id: str,
     workspace_id: str = "default_ws",
     task_id: str | None = None,
-    input_mounts: Optional[list[dict[str, str]]] = None,
-) -> Dict[str, Any]:
+    input_mounts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     """Raw sandbox execution without the extra AST audit wrapper."""
     return _execute_code_in_docker(
         code,
@@ -541,8 +572,8 @@ async def execute_in_sandbox_async(
     workspace_id: str = "default_ws",
     use_audit: bool = False,
     task_id: str | None = None,
-    input_mounts: Optional[list[dict[str, str]]] = None,
-) -> Dict[str, Any]:
+    input_mounts: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     loop = asyncio.get_running_loop()
     if use_audit:
         return await loop.run_in_executor(

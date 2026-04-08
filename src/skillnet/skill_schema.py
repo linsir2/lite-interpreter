@@ -1,11 +1,13 @@
 """Skill schema models used by SkillNet and capability-aware governance."""
 from __future__ import annotations
 
-from enum import Enum
+from collections.abc import Mapping
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 
-class SkillPromotionStatus(str, Enum):
+class SkillPromotionStatus(StrEnum):
     HARVESTED = "harvested"
     VALIDATED = "validated"
     APPROVED = "approved"
@@ -36,7 +38,7 @@ class SkillDescriptor(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
     @classmethod
-    def from_payload(cls, payload: dict[str, object]) -> "SkillDescriptor":
+    def from_payload(cls, payload: dict[str, object]) -> SkillDescriptor:
         metadata = dict(payload.get("metadata", {}) or {})
         description = str(payload.get("description") or metadata.get("summary") or "")
         return cls(
@@ -46,7 +48,7 @@ class SkillDescriptor(BaseModel):
             replay_cases=[
                 SkillReplayCase.model_validate(case)
                 for case in list(payload.get("replay_cases") or [])
-                if isinstance(case, dict)
+                if isinstance(case, Mapping)
             ],
             validation=dict(payload.get("validation", {}) or {}),
             promotion=dict(payload.get("promotion", {}) or {}),

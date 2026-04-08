@@ -6,14 +6,15 @@ src/kag/builder/classifier.py
 拒绝处理 Structured (CSV/Excel) 数据，因为 DAG Router 已经将其引流至 Inspector。
 """
 import os
-from enum import Enum
-from typing import Optional
-from src.common import get_logger, estimate_tokens
-from config.settings import CLASSIFIER_SMALL_THRESHOLD, CLASSIFIER_MEDIUM_THRESHOLD
+from enum import StrEnum
+
+from config.settings import CLASSIFIER_MEDIUM_THRESHOLD, CLASSIFIER_SMALL_THRESHOLD
+
+from src.common import estimate_tokens, get_logger
 
 logger = get_logger(__name__)
 
-class DocProcessClass(str, Enum):
+class DocProcessClass(StrEnum):
     SMALL = "small"       # 单chunk, 直接向量化
     MEDIUM = "medium"     # 分块 + 向量化
     LARGE = "large"       # 分块 + 向量化 + 图谱抽取
@@ -51,7 +52,7 @@ class DocumentClassifier:
     @classmethod
     def _fast_estimate_tokens(cls, file_path: str, ext: str) -> int:
         if ext in ['.txt', '.md']:
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(file_path, encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             return estimate_tokens(content)
         

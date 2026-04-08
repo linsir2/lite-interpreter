@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from src.mcp_gateway.tools.sandbox_exec_tool import build_input_mount_manifest
 
@@ -25,7 +26,7 @@ def build_skill_strategy_hints(approved_skills: list[dict[str, Any]]) -> list[di
             focus_areas.append("在证据不足时补充外部检索")
         replay_cases = skill.get("replay_cases", []) or []
         expected_signals = []
-        if replay_cases and isinstance(replay_cases[0], dict):
+        if replay_cases and isinstance(replay_cases[0], Mapping):
             expected_signals = [str(item) for item in replay_cases[0].get("expected_signals", [])[:3] if str(item).strip()]
         hints.append(
             {
@@ -39,15 +40,15 @@ def build_skill_strategy_hints(approved_skills: list[dict[str, Any]]) -> list[di
 
 
 def build_static_input_mounts(exec_data: Any) -> list[dict[str, Any]]:
-    input_mounts = build_input_mount_manifest(exec_data.structured_datasets, exec_data.business_documents)
+    input_mounts = build_input_mount_manifest(exec_data.inputs.structured_datasets, exec_data.inputs.business_documents)
     for mount in input_mounts:
         if mount["kind"] != "structured_dataset":
             continue
         dataset_meta = next(
-            (item for item in exec_data.structured_datasets if str(item.get("path", "")) == mount["host_path"]),
+            (item for item in exec_data.inputs.structured_datasets if str(item.path) == mount["host_path"]),
             {},
         )
-        load_kwargs = dataset_meta.get("load_kwargs", {}) or {}
+        load_kwargs = dataset_meta.load_kwargs if hasattr(dataset_meta, "load_kwargs") else {}
         mount["encoding"] = str(load_kwargs.get("encoding") or "utf-8")
         mount["sep"] = str(load_kwargs.get("sep") or ",")
     return input_mounts
@@ -58,34 +59,43 @@ def build_static_coder_payload(
     exec_data: Any,
     state: Mapping[str, Any],
     input_mounts: list[dict[str, Any]],
+    approved_skills: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    approved_skill_payloads = [
+        skill.model_dump(mode="json", by_alias=True) if hasattr(skill, "model_dump") else dict(skill)
+        for skill in approved_skills
+    ]
     payload: dict[str, Any] = {
         "query": state["input_query"],
-        "analysis_plan": exec_data.analysis_plan or "",
-        "business_context": exec_data.business_context,
+        "analysis_plan": exec_data.static.analysis_plan or "",
+        "analysis_mode": str(((state.get("analysis_brief") or {}).get("analysis_mode")) or ""),
+        "analysis_brief": dict(state.get("analysis_brief") or {}),
+        "business_context": dict(exec_data.knowledge.business_context),
         "approved_skills": [
-            {
-                "name": skill.get("name"),
-                "required_capabilities": skill.get("required_capabilities", []),
-                "promotion": skill.get("promotion", {}),
-                "replay_cases": skill.get("replay_cases", []),
-            }
-            for skill in exec_data.approved_skills
+            (
+                {
+                    "name": skill_payload.get("name"),
+                    "required_capabilities": skill_payload.get("required_capabilities", []),
+                    "promotion": skill_payload.get("promotion", {}),
+                    "replay_cases": skill_payload.get("replay_cases", []),
+                }
+            )
+            for skill_payload in approved_skill_payloads
         ],
-        "skill_strategy_hints": build_skill_strategy_hints(exec_data.approved_skills),
+        "skill_strategy_hints": build_skill_strategy_hints(approved_skill_payloads),
         "refined_context_excerpt": serialize_preview(str(state.get("refined_context", "") or ""), limit=400),
         "input_mounts": input_mounts,
         "structured_dataset_summaries": [
             {
-                "file_name": item.get("file_name"),
-                "schema": serialize_preview(str(item.get("schema", "")), limit=240),
-                "load_kwargs": item.get("load_kwargs", {}),
+                "file_name": item.file_name,
+                "schema": serialize_preview(str(item.dataset_schema), limit=240),
+                "load_kwargs": item.load_kwargs,
             }
-            for item in exec_data.structured_datasets
+            for item in exec_data.inputs.structured_datasets
         ],
     }
-    if exec_data.latest_error_traceback:
-        payload["previous_error"] = serialize_preview(exec_data.latest_error_traceback, limit=400)
+    if exec_data.static.latest_error_traceback:
+        payload["previous_error"] = serialize_preview(exec_data.static.latest_error_traceback, limit=400)
     return payload
 
 
@@ -102,6 +112,8 @@ payload = json.loads({payload_literal!r})
 result = {{
     "query": payload["query"],
     "analysis_plan": payload["analysis_plan"],
+    "analysis_mode": payload.get("analysis_mode", ""),
+    "analysis_brief": payload.get("analysis_brief", {{}}),
     "business_context": payload["business_context"],
     "approved_skills": payload.get("approved_skills", []),
     "skill_strategy_hints": payload.get("skill_strategy_hints", []),

@@ -1,10 +1,9 @@
 """Built-in desensitization rules used by lite-interpreter."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
-from typing import Callable, Iterable
-
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 
 Replacement = str | Callable[[re.Match[str]], str]
 

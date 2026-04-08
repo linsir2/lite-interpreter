@@ -1,14 +1,15 @@
 """In-process MCP-style tool registry for lite-interpreter."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from src.mcp_gateway.tools.knowledge_query_tool import KnowledgeQueryTool
+from src.mcp_gateway.tools.memory_sync_tool import MemorySyncTool
 from src.mcp_gateway.tools.sandbox_exec_tool import SandboxExecTool
 from src.mcp_gateway.tools.skill_auth_tool import SkillAuthTool
 from src.mcp_gateway.tools.state_sync_tool import StateSyncTool
-
 
 ToolHandler = Callable[[dict[str, Any], dict[str, Any]], Any]
 
@@ -74,7 +75,10 @@ def _build_default_server() -> MCPToolServer:
                 tenant_id=str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
                 workspace_id=str(args.get("workspace_id") or ctx.get("workspace_id") or "default_ws"),
                 task_id=args.get("task_id") or ctx.get("task_id"),
-                use_audit=bool(args.get("use_audit", True)),
+                # MCP 暴露的是“受治理的沙箱执行”能力，不允许通过参数把 AST 审计关掉。
+                # 如果未来确实需要原始/不审计执行面，应该单独暴露一个显式命名的内部工具，
+                # 而不是复用同一个 governed capability id。
+                use_audit=True,
                 input_mounts=list(args.get("input_mounts") or []),
             ),
         )
@@ -100,6 +104,18 @@ def _build_default_server() -> MCPToolServer:
                 str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
                 str(args.get("task_id") or ctx.get("task_id") or ""),
                 dict(args.get("event") or {}),
+            ),
+        )
+    )
+    server.register(
+        ToolSpec(
+            name="memory_sync",
+            capability_id=MemorySyncTool.CAPABILITY_ID,
+            description="Apply a partial memory-blackboard patch.",
+            handler=lambda args, ctx: MemorySyncTool.sync_memory_patch(
+                str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
+                str(args.get("task_id") or ctx.get("task_id") or ""),
+                dict(args.get("patch") or {}),
             ),
         )
     )

@@ -1,5 +1,6 @@
 from src.common.exceptions import BaseAppException
 
+
 class BlackboardException(BaseAppException):
     """黑板基础异常"""
     error_type: str = "blackboard_error"

@@ -66,13 +66,15 @@ conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
 2. `src/blackboard/schema.py`
 3. `src/blackboard/global_blackboard.py`
 4. `src/blackboard/execution_blackboard.py`
-5. `src/common/event_bus.py`
-6. `src/common/event_journal.py`
+5. `src/blackboard/knowledge_blackboard.py`
+6. `src/common/event_bus.py`
+7. `src/common/event_journal.py`
 
 你要回答的问题：
 
 - 系统用什么结构表示任务、意图、决策、执行结果
 - 哪些状态只在内存，哪些会持久化
+- 执行态和知识态为什么要分成两个子黑板
 - 事件如何被实时投递，如何被 backlog 回放
 
 如果你在查：
@@ -229,7 +231,7 @@ conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
 3. `src/skillnet/skill_validator.py`
 4. `src/skillnet/skill_promoter.py`
 5. `src/skillnet/skill_retriever.py`
-6. `src/storage/repository/skill_repo.py`
+6. `src/storage/repository/memory_repo.py`
 
 重点：
 
@@ -244,7 +246,7 @@ conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
 - “为什么 historical skill match 有但没参与 codegen”
 - “为什么 usage telemetry 没更新”
 
-就从 `skill_retriever.py` 和 `skill_repo.py` 开始。
+就从 `skill_retriever.py` 和 `memory_repo.py` 开始。
 
 ### 3.8 API 与前端
 
@@ -336,7 +338,7 @@ conda run -n lite_interpreter python -m pytest -q \
 看：
 
 - `skill_retriever.py`
-- `skill_repo.py`
+- `memory_repo.py`
 - `coder_node.py`
 
 ## 6. 推荐的阅读方式

@@ -8,18 +8,19 @@
 - 线程安全，支持多并发
 """
 import asyncio
-import threading
+import contextlib
 import datetime
 import inspect
-import contextlib
-from typing import Dict, List, Callable, Any, Optional
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, Optional
 
 from src.common.contracts import TraceEvent
 from src.common.event_journal import event_journal
+from src.common.logger import get_logger
 from src.common.schema import EventTopic
 from src.common.utils import generate_uuid
-from src.common.logger import get_logger
 from src.privacy import mask_payload
 
 logger = get_logger(__name__)
@@ -31,7 +32,7 @@ class Event:
     tenant_id: str
     task_id: str
     workspace_id: str  # 🚀 新增：让事件具备空间隔离属性
-    payload: Dict[str, Any] # 事件上下文数据
+    payload: dict[str, Any] # 事件上下文数据
     timestamp: datetime.datetime
     trace_id: str
 
@@ -63,21 +64,21 @@ class AsyncEventBus:
     def _init(self):
         """初始化"""
          # 订阅者映射：EventTopic -> 回调函数列表
-        self._subscribers: Dict[EventTopic, List[Callable[[Event], None]]] = {}
+        self._subscribers: dict[EventTopic, list[Callable[[Event], None]]] = {}
         # 全局订阅者：接收所有事件
-        self._global_subscribers: List[Callable[[Event], None]] = []
+        self._global_subscribers: list[Callable[[Event], None]] = []
         self._pending_puts: set[Any] = set()
         self._start_runtime()
         logger.info("异步事件总线初始化完成", extra={"trace_id": "system"})
 
     def _start_runtime(self) -> None:
         """Start or restart the background event loop runtime."""
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_ready = threading.Event()
         self._executor = threading.Thread(target=self._event_loop, daemon=True, name="EventBusLoop")
-        self._event_queue: Optional[asyncio.Queue] = None
+        self._event_queue: asyncio.Queue | None = None
         self._running = True
-        self._processor_task: Optional[asyncio.Task] = None
+        self._processor_task: asyncio.Task | None = None
 
         self._executor.start()
         self._loop_ready.wait(timeout=5.0)
@@ -122,7 +123,7 @@ class AsyncEventBus:
             try:
                 # 使用 asyncio.wait_for 支持优雅退出
                 event = await asyncio.wait_for(self._event_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # 如果超时，检查是否应该停止
                 if not self._running:
                     break
@@ -145,24 +146,24 @@ class AsyncEventBus:
             if event.topic in self._subscribers:
                 callbacks.extend(self._subscribers[event.topic])
         
-        pending_callbacks = []
+        pending_callbacks: list[tuple[Callable[[Event], None], asyncio.Task[Any]]] = []
         for callback in callbacks:
             try:
                 if inspect.iscoroutinefunction(callback):
-                    pending_callbacks.append(asyncio.create_task(callback(event)))
+                    pending_callbacks.append((callback, asyncio.create_task(callback(event))))
                 else:
                     callback(event)
             except Exception as e:
                 logger.error(
-                    f"事件分发失败 event={event.topic.value}, callback={callback.__name__}: {str(e)}",
+                    f"事件分发失败 event={event.topic.value}, callback={getattr(callback, '__name__', repr(callback))}: {str(e)}",
                     extra={"trace_id": event.trace_id},
                 )
 
         if not pending_callbacks:
             return
 
-        results = await asyncio.gather(*pending_callbacks, return_exceptions=True)
-        for callback, result in zip(callbacks, results):
+        results = await asyncio.gather(*(task for _, task in pending_callbacks), return_exceptions=True)
+        for (callback, _), result in zip(pending_callbacks, results, strict=False):
             if isinstance(result, Exception):
                 logger.error(
                     f"事件回调执行失败 event={event.topic.value}, callback={getattr(callback, '__name__', repr(callback))}: {result}",
@@ -175,8 +176,8 @@ class AsyncEventBus:
         tenant_id: str,
         task_id: str,
         workspace_id: str,
-        payload: Dict[str, Any],
-        trace_id: Optional[str] = None, 
+        payload: dict[str, Any],
+        trace_id: str | None = None, 
     ) -> str:
         """
         发布事件（非阻塞）
@@ -200,7 +201,7 @@ class AsyncEventBus:
             task_id=task_id,
             workspace_id=workspace_id,
             payload=safe_payload,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
+            timestamp=datetime.datetime.now(datetime.UTC),
             trace_id=trace_id,
         )
         try:

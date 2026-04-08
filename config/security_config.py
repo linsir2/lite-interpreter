@@ -1,17 +1,17 @@
-from typing import Final, Set, Tuple
 import re
+from typing import Final
 
 # -------------------------- 高危操作配置 --------------------------
-HIGH_RISK_MODULES: Final[Set[str]] = {
+HIGH_RISK_MODULES: Final[set[str]] = {
     "os", "subprocess", "commands", "socket", "requests", "urllib", "sys", "builtins",
     "multiprocessing", "threading", "shutil", "pwd", "grp", "posix", "importlib", "pty"
 }
-HIGH_RISK_BUILTINS: Final[Set[str]] = {
+HIGH_RISK_BUILTINS: Final[set[str]] = {
     "eval", "exec", "compile", "open", "__import__",
     "globals", "locals", "vars", "breakpoint",
     "memoryview", "bytearray"
 } 
-HIGH_RISK_METHODS: Final[Set[Tuple[str, str]]] = {
+HIGH_RISK_METHODS: Final[set[tuple[str, str]]] = {
     ("os", "system"), ("os", "popen"), ("os", "spawnl"), ("os", "spawnv"),
     ("os", "remove"), ("os", "unlink"), ("os", "rmdir"), ("os", "removedirs"),
     ("os", "mkdir"), ("os", "makedirs"), ("os", "rename"), ("os", "replace"),

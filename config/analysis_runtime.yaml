@@ -1,0 +1,62 @@
+call_purposes:
+  routing_assess:
+    model_alias: fast_model
+  query_rewrite:
+    model_alias: fast_model
+  context_compress:
+    model_alias: reasoning_model
+  analysis_summary:
+    model_alias: reasoning_model
+  dynamic_research:
+    model_alias: reasoning_model
+
+profiles:
+  dataset_analysis:
+    evidence_strategy: dataset_first
+    routing_mode: static
+  document_rule_analysis:
+    evidence_strategy: rules_first
+    routing_mode: static
+  hybrid_analysis:
+    evidence_strategy: dataset_and_rules
+    routing_mode: static
+  dynamic_research_analysis:
+    evidence_strategy: external_research
+    routing_mode: dynamic
+  need_more_inputs:
+    evidence_strategy: input_gap
+    routing_mode: static
+
+dynamic_patterns:
+  - 自己找数据
+  - 自己收集
+  - 自己验证
+  - 多步
+  - 探索
+  - 对比方案
+  - 联网
+  - 外部资料
+  - research
+  - benchmark
+  - 宏观
+  - 财报
+
+dataset_keywords:
+  - 数据
+  - 表
+  - csv
+  - 统计
+  - 趋势
+  - dataset
+  - table
+
+document_keywords:
+  - 规则
+  - 口径
+  - 制度
+  - 合规
+  - 说明
+  - 合同
+  - policy
+  - rule
+  - compliance

@@ -38,6 +38,7 @@ def test_build_dynamic_context_redacts_query_and_snapshots():
             "workspace_id": "ws-1",
             "input_query": "请分析 api_key=secret-1 对系统的影响",
             "knowledge_snapshot": {"note": "联系 foo@example.com"},
+            "memory_snapshot": {"task_summary": {"answer": "手机号 13800138000"}},
             "allowed_tools": ["knowledge_query"],
         },
         {"execution_result": {"output": "手机号 13800138000"}},
@@ -45,4 +46,39 @@ def test_build_dynamic_context_redacts_query_and_snapshots():
     )
     assert "[REDACTED]" in envelope.input_query
     assert "[REDACTED_EMAIL]" in envelope.knowledge_snapshot["note"]
+    assert envelope.memory_snapshot["task_summary"]["answer"] == "手机号 [REDACTED_PHONE]"
     assert envelope.execution_snapshot["execution_result"]["output"] == "手机号 [REDACTED_PHONE]"
+
+
+def test_build_dynamic_context_prefers_canonical_task_contract_fields():
+    envelope = build_dynamic_context(
+        {
+            "tenant_id": "tenant-2",
+            "task_id": "task-2",
+            "workspace_id": "ws-2",
+            "input_query": "继续分析",
+            "task_envelope": {
+                "task_id": "task-2",
+                "tenant_id": "tenant-2",
+                "workspace_id": "ws-2",
+                "input_query": "继续分析",
+                "governance_profile": "reviewer",
+                "allowed_tools": ["knowledge_query"],
+                "max_dynamic_steps": 9,
+            },
+            "execution_intent": {
+                "intent": "dynamic_flow",
+                "destinations": ["dynamic_swarm"],
+            },
+            # 故意给扁平字段放冲突值，验证优先使用规范契约
+            "allowed_tools": ["shell_exec"],
+            "governance_profile": "researcher",
+            "max_dynamic_steps": 2,
+        },
+        {},
+    )
+
+    assert envelope.constraints["allowed_tools"] == ["knowledge_query"]
+    assert envelope.constraints["governance_profile"] == "reviewer"
+    assert envelope.constraints["routing_mode"] == "dynamic"
+    assert envelope.budget["max_steps"] == 9

@@ -8,6 +8,9 @@ requires-python = ">=3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+filterwarnings = [
+  "ignore:datetime.datetime.utcfromtimestamp\\(\\) is deprecated and scheduled for removal:DeprecationWarning:dateutil\\.tz\\.tz",
+]
 
 [tool.ruff]
 line-length = 120

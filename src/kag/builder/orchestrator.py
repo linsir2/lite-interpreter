@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional
 
 from src.common import generate_uuid, get_logger
 from src.kag.builder.chunker import ChunkingStrategy, DocumentChunker
@@ -27,18 +26,18 @@ class IngestedDocument:
     vector_count: int
     triple_count: int
     parse_mode: str
-    parser_diagnostics: Dict[str, object]
+    parser_diagnostics: dict[str, object]
 
 
 class KagBuilderOrchestrator:
     @classmethod
     def ingest_documents(
         cls,
-        doc_paths: List[str],
+        doc_paths: list[str],
         tenant_id: str,
         workspace_id: str = "default_ws",
-        upload_batch_id: Optional[str] = None,
-    ) -> List[Dict[str, object]]:
+        upload_batch_id: str | None = None,
+    ) -> list[dict[str, object]]:
         if not doc_paths:
             return []
 
@@ -47,7 +46,7 @@ class KagBuilderOrchestrator:
         embedder = EmbeddingGenerator()
         extractor = EntityExtractor(use_llm=False)
 
-        results: List[IngestedDocument] = []
+        results: list[IngestedDocument] = []
         for parsed_doc in parsed_docs:
             file_path = str(parsed_doc.metadata.get("file_path", ""))
             process_class = DocumentClassifier.classify(file_path)
@@ -60,7 +59,7 @@ class KagBuilderOrchestrator:
             embeddings_map = {item.chunk_id: item.reduced_embedding.tolist() for item in embeddings}
             KnowledgeRepo.save_chunks_and_embeddings(tenant_id, workspace_id, chunks, embeddings_map)
 
-            triples: List[KnowledgeTriple] = []
+            triples: list[KnowledgeTriple] = []
             if process_class == DocProcessClass.LARGE:
                 entities = []
                 chunk_text_map = {chunk.chunk_id: chunk.content for chunk in chunks}
@@ -87,7 +86,7 @@ class KagBuilderOrchestrator:
         return [asdict(item) for item in results]
 
     @classmethod
-    def _build_chunks(cls, parsed_doc: ParsedDocument, process_class: DocProcessClass) -> List[DocChunk]:
+    def _build_chunks(cls, parsed_doc: ParsedDocument, process_class: DocProcessClass) -> list[DocChunk]:
         if process_class == DocProcessClass.SMALL:
             content = str(parsed_doc.content).strip()
             if not content:

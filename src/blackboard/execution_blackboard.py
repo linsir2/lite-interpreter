@@ -8,7 +8,6 @@
 - 生产期：完美委托给 StateRepo (PostgreSQL JSONB) 实现跨节点持久化
 """
 import threading
-from typing import Optional, Dict
 
 from src.blackboard.base_blackboard import BaseSubBlackboard
 from src.blackboard.schema import ExecutionData
@@ -21,11 +20,11 @@ class ExecutionBlackboard(BaseSubBlackboard):
     board_name: str = "execution"
 
     def __init__(self):
-        self._storage: Dict[str, Dict[str, ExecutionData]] = {} # 内存存储：tenant_id -> {task_id -> ExecutionData}
+        self._storage: dict[str, dict[str, ExecutionData]] = {} # 内存存储：tenant_id -> {task_id -> ExecutionData}
         self._lock = threading.RLock()
         logger.info("执行流子黑板初始化完成(已成功接入 Postgres StateRepo)", extra={"trace_id": "system"})
 
-    def read(self, tenant_id: str, task_id: str) -> Optional[ExecutionData]:
+    def read(self, tenant_id: str, task_id: str) -> ExecutionData | None:
         """
         读取执行数据
 
@@ -36,22 +35,49 @@ class ExecutionBlackboard(BaseSubBlackboard):
         with self._lock:
             tenant_data = self._storage.get(tenant_id, {})
             return tenant_data.get(task_id)
+
+    @staticmethod
+    def _is_newer_execution_data(candidate: ExecutionData, current: ExecutionData | None) -> bool:
+        if current is None:
+            return True
+        return candidate.control.updated_at > current.control.updated_at
+
+    def _load_persisted_execution_data(self, tenant_id: str, task_id: str) -> ExecutionData | None:
+        full_state = StateRepo.load_blackboard_state(tenant_id, task_id) or {}
+        payload = full_state.get(self.board_name)
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return ExecutionData(**payload)
+        except Exception:
+            return None
     
-    def write(self, tenant_id: str, task_id: str, value: ExecutionData) -> bool:
+    def write(
+        self,
+        tenant_id: str,
+        task_id: str,
+        value: ExecutionData,
+        *,
+        refresh_updated_at: bool = True,
+    ) -> bool:
         """
         写入执行数据
 
         :param tenant_id: 租户ID
         :param task_id: task_id 任务ID
         :param value: ExecutionData 实例
+        :param refresh_updated_at:
+            - True: 正常业务写入，刷新 updated_at
+            - False: 恢复/缓存回填，保留原始更新时间
         :return: 写入成功返回True
         """
         if not isinstance(value, ExecutionData):
-            logger.error(f"写入数据类型错误，必须是ExecutionData", extra={"trace_id": task_id})
+            logger.error("写入数据类型错误，必须是ExecutionData", extra={"trace_id": task_id})
             return False
         
         with self._lock:
-            value.updated_at = get_utc_now()
+            if refresh_updated_at:
+                value.control.updated_at = get_utc_now()
             if tenant_id not in self._storage:
                 self._storage[tenant_id] = {}
             self._storage[tenant_id][task_id] = value
@@ -73,7 +99,6 @@ class ExecutionBlackboard(BaseSubBlackboard):
             return False
 
     def persist(self, tenant_id: str, task_id: str) -> bool:
-        """🚀 委托模式：将持久化动作甩给底层 Repo"""
         data = self.read(tenant_id, task_id)
         if not data:
             logger.warning(f"持久化失败，数据不存在 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
@@ -114,7 +139,9 @@ class ExecutionBlackboard(BaseSubBlackboard):
 
             data = ExecutionData(**full_state[self.board_name])
 
-            self.write(tenant_id, task_id, data)
+            # restore 的目标是把持久化态原样回填到当前单例缓存，
+            # 不是制造一次新的执行状态写入。
+            self.write(tenant_id, task_id, data, refresh_updated_at=False)
             logger.info(
                 f"执行数据恢复成功 tenant_id={tenant_id} task_id={task_id}",
                 extra={"trace_id": task_id}
@@ -126,5 +153,35 @@ class ExecutionBlackboard(BaseSubBlackboard):
                 extra={"trace_id": task_id}
             )
             return False
+
+    def list_workspace_states(self, tenant_id: str, workspace_id: str) -> list[ExecutionData]:
+        """
+        列出某个 tenant/workspace 下的执行态快照。
+
+        这个方法的目的不是替代查询层，而是避免上层 API 直接扫描
+        `StateRepo.list_blackboard_states()` 再自己拼 execution payload。
+        """
+
+        known: dict[str, ExecutionData] = {}
+        with self._lock:
+            for task_id, payload in self._storage.get(tenant_id, {}).items():
+                if payload.workspace_id != workspace_id:
+                    continue
+                known[task_id] = payload
+
+        for state in StateRepo.list_blackboard_states():
+            payload = state.get(self.board_name)
+            if not isinstance(payload, dict):
+                continue
+            try:
+                data = ExecutionData(**payload)
+            except Exception:
+                continue
+            if data.tenant_id != tenant_id or data.workspace_id != workspace_id:
+                continue
+            current = known.get(data.task_id)
+            if current is None or self._is_newer_execution_data(data, current):
+                known[data.task_id] = data
+        return list(known.values())
 
 execution_blackboard = ExecutionBlackboard()

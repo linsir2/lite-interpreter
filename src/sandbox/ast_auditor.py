@@ -2,24 +2,20 @@
 import ast
 import json
 import logging
-from typing import Dict, Set, Tuple, Optional, Any
-from config.security_config import (
-    HIGH_RISK_MODULES, HIGH_RISK_BUILTINS, HIGH_RISK_METHODS
-)
+from typing import Any
+
 from config.sandbox_config import MAX_RECURSION_DEPTH
-from src.sandbox.exceptions import (
-    SyntaxParseError, AuditFailError, SandboxBaseError
-)
-from src.sandbox.utils import validate_code, validate_tenant_id, build_log_data
-from src.sandbox.metrics import (
-    ast_audit_fail_total, ast_audit_success_total, ast_audit_duration_seconds
-)
+
+from src.common import generate_uuid, get_logger, get_utc_now
+from src.sandbox.exceptions import AuditFailError, SandboxBaseError, SyntaxParseError
+from src.sandbox.metrics import ast_audit_duration_seconds, ast_audit_fail_total, ast_audit_success_total
 from src.sandbox.schema import AuditResult
-from src.common import get_logger, generate_uuid, get_utc_now
+from src.sandbox.security_policy import load_sandbox_security_policy_surface
+from src.sandbox.utils import build_log_data, validate_code, validate_tenant_id
 
 logger = get_logger(__name__)
 
-def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dict[str, Any]:
+def audit_code(code: str, tenant_id: str, trace_id: str | None = None) -> dict[str, Any]:
     """
     AST安全审计核心函数
     
@@ -32,6 +28,10 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
     log_extra = {"trace_id": trace_id}
     start_time = get_utc_now()
     log_data = build_log_data(tenant_id, "ast_audit", code, trace_id)
+    security_surface = load_sandbox_security_policy_surface()
+    high_risk_modules = set(security_surface.high_risk_modules)
+    high_risk_builtins = set(security_surface.high_risk_builtins)
+    high_risk_methods = set(security_surface.high_risk_methods)
 
     try:
         # 输入校验
@@ -46,23 +46,23 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
             raise SyntaxParseError(
                 f"代码语法错误：行{e.lineno}，列{e.offset}，原因：{e.msg}",
                 trace_id
-            )
+            ) from e
 
         # 初始化追踪映射表
-        imported_aliases: Dict[str, str] = {}
-        imported_method_aliases: Dict[str, Tuple[str, str]] = {}
-        var_module_mapping: Dict[str, str] = {}
-        var_method_mapping: Dict[str, Tuple[str, str]] = {}
-        wildcard_imported_modules: Set[str] = set()
+        imported_aliases: dict[str, str] = {}
+        imported_method_aliases: dict[str, tuple[str, str]] = {}
+        var_module_mapping: dict[str, str] = {}
+        var_method_mapping: dict[str, tuple[str, str]] = {}
+        wildcard_imported_modules: set[str] = set()
 
         # 遍历AST节点
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                _check_import_node(node, imported_aliases, var_module_mapping, trace_id)
+                _check_import_node(node, imported_aliases, var_module_mapping, trace_id, high_risk_modules)
             elif isinstance(node, ast.ImportFrom):
                 _check_import_from_node(
                     node, imported_method_aliases, var_method_mapping,
-                    wildcard_imported_modules, trace_id
+                    wildcard_imported_modules, trace_id, high_risk_modules
                 )
             elif isinstance(node, ast.Assign):
                 _check_assign_node(
@@ -71,7 +71,7 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
             elif isinstance(node, ast.Call):
                 _check_call_node(
                     node, var_module_mapping, var_method_mapping,
-                    wildcard_imported_modules, trace_id
+                    wildcard_imported_modules, trace_id, high_risk_builtins, high_risk_methods
                 )
 
         # 审计通过
@@ -90,6 +90,8 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
         return AuditResult(
             safe=True,
             reason=success_reason,
+            source_layer="ast_auditor",
+            source_config=security_surface.source_config,
             trace_id=trace_id,
             duration_seconds=round(duration_seconds, 3)
         ).model_dump()
@@ -114,6 +116,8 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
             safe=False,
             reason=e.message,
             risk_type=risk_type,
+            source_layer="ast_auditor",
+            source_config=security_surface.source_config,
             trace_id=trace_id,
             duration_seconds=round(duration_seconds, 3)
         ).model_dump()
@@ -137,21 +141,24 @@ def audit_code(code: str, tenant_id: str, trace_id: Optional[str] = None) -> Dic
             safe=False,
             reason=reason,
             risk_type=error_type,
+            source_layer="ast_auditor",
+            source_config=security_surface.source_config,
             trace_id=trace_id,
             duration_seconds=round(duration_seconds, 3)
         ).model_dump()
 
 def _check_import_node(
     node: ast.Import,
-    imported_aliases: Dict[str, str],
-    var_module_mapping: Dict[str, str],
-    trace_id: str
+    imported_aliases: dict[str, str],
+    var_module_mapping: dict[str, str],
+    trace_id: str,
+    high_risk_modules: set[str],
 ) -> None:
     """检查Import节点"""
     for alias in node.names:
         module_name = alias.name
         alias_name = alias.asname or module_name
-        if module_name in HIGH_RISK_MODULES:
+        if module_name in high_risk_modules:
             raise AuditFailError(
                 f"禁止导入高危模块：{module_name} (别名：{alias_name})",
                 trace_id,
@@ -162,10 +169,11 @@ def _check_import_node(
 
 def _check_import_from_node(
     node: ast.ImportFrom,
-    imported_method_aliases: Dict[str, Tuple[str, str]],
-    var_method_mapping: Dict[str, Tuple[str, str]],
-    wildcard_imported_modules: Set[str],
-    trace_id: str
+    imported_method_aliases: dict[str, tuple[str, str]],
+    var_method_mapping: dict[str, tuple[str, str]],
+    wildcard_imported_modules: set[str],
+    trace_id: str,
+    high_risk_modules: set[str],
 ) -> None:
     """检查ImportFrom节点"""
     module_name = node.module or ""
@@ -176,14 +184,14 @@ def _check_import_from_node(
             "relative_import_not_allowed"
         )
     if any(alias.name == "*" for alias in node.names):
-        if module_name in HIGH_RISK_MODULES:
+        if module_name in high_risk_modules:
             raise AuditFailError(
                 f"禁止从高危模块{module_name}进行通配符导入",
                 trace_id,
                 "wildbard_import_high_risk_module"
             )
         wildcard_imported_modules.add(module_name)
-    if module_name in HIGH_RISK_MODULES:
+    if module_name in high_risk_modules:
         raise AuditFailError(
             f"禁止从高危模块 {module_name} 导入内容",
             trace_id,
@@ -199,8 +207,8 @@ def _check_import_from_node(
 
 def _check_assign_node(
     node: ast.Assign,
-    var_module_mapping: Dict[str, str],
-    var_method_mapping: Dict[str, Tuple[str, str]],
+    var_module_mapping: dict[str, str],
+    var_method_mapping: dict[str, tuple[str, str]],
     trace_id: str
 ) -> None:
     """检查Assign节点"""
@@ -221,15 +229,17 @@ def _check_assign_node(
 
 def _check_call_node(
     node: ast.Call,
-    var_module_mapping: Dict[str, str],
-    var_method_mapping: Dict[str, Tuple[str, str]],
-    wildcard_imported_modules: Set[str],
-    trace_id: str
+    var_module_mapping: dict[str, str],
+    var_method_mapping: dict[str, tuple[str, str]],
+    wildcard_imported_modules: set[str],
+    trace_id: str,
+    high_risk_builtins: set[str],
+    high_risk_methods: set[tuple[str, str]],
 ) -> None:
     """检查Call节点"""
     if isinstance(node.func, ast.Name):
         func_name = node.func.id
-        if func_name in HIGH_RISK_BUILTINS:
+        if func_name in high_risk_builtins:
             raise AuditFailError(
                 f"禁止调用高危内置函数：{func_name}",
                 trace_id,
@@ -237,25 +247,25 @@ def _check_call_node(
             )
         if func_name in var_method_mapping:
             original_module, original_method = var_method_mapping[func_name]
-            if (original_module, original_method) in HIGH_RISK_METHODS:
+            if (original_module, original_method) in high_risk_methods:
                 raise AuditFailError(
                     f"禁止调用高危方法：{original_module}.{original_method} (别名：{func_name})",
                     trace_id,
                     "call_high_risk_method"
                 )
         for module_name in wildcard_imported_modules:
-            if (module_name, func_name) in HIGH_RISK_METHODS:
+            if (module_name, func_name) in high_risk_methods:
                 raise AuditFailError(
                     f"禁止调用通配符导入的高危方法：{module_name}.{func_name}",
                     trace_id,
                     "call_wildcard_imported_high_risk_method"
                 )
         if func_name == "getattr" and len(node.args) >= 2:
-            _check_getattr_call(node, var_module_mapping, trace_id)
+            _check_getattr_call(node, var_module_mapping, trace_id, high_risk_methods)
     elif isinstance(node.func, ast.Attribute):
         root_module = _get_attribute_root_module(node.func.value, var_module_mapping, trace_id=trace_id)
         method_name = node.func.attr
-        if root_module and (root_module, method_name) in HIGH_RISK_METHODS:
+        if root_module and (root_module, method_name) in high_risk_methods:
             raise AuditFailError(
                 f"禁止调用高危方法：{root_module}.{method_name}",
                 trace_id,
@@ -264,8 +274,9 @@ def _check_call_node(
 
 def _check_getattr_call(
     node: ast.Call,
-    var_module_mapping: Dict[str, str],
-    trace_id: str
+    var_module_mapping: dict[str, str],
+    trace_id: str,
+    high_risk_methods: set[tuple[str, str]],
 ) -> None:
     """检查getattr反射调用"""
     target_node = node.args[0]
@@ -275,7 +286,7 @@ def _check_getattr_call(
         attr_name = attr_node.value
         if target_name in var_module_mapping:
             original_module = var_module_mapping[target_name]
-            if (original_module, attr_name) in HIGH_RISK_METHODS:
+            if (original_module, attr_name) in high_risk_methods:
                 raise AuditFailError(
                     f"禁止通过反射调用高危方法：{original_module}.{attr_name}",
                     trace_id,
@@ -290,10 +301,10 @@ def _check_getattr_call(
 
 def _get_attribute_root_module(
     node: ast.AST,
-    var_module_mapping: Dict[str, str],
+    var_module_mapping: dict[str, str],
     trace_id: str,
     depth: int = 0,
-) -> Optional[str]:
+) -> str | None:
     """递归解析属性访问的根模块名"""
     if depth > MAX_RECURSION_DEPTH:
         raise AuditFailError(

@@ -7,15 +7,15 @@ src/kag/builder/embedding.py
 2. MRL 降维：把叶子节点的向量截断到 256 维
 3. 存储：降维后的向量存入 Qdrant
 """
-import numpy as np
-from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
+from typing import Any
 
-from src.common import get_logger, generate_uuid
-from src.common.llm_client import LiteLLMClient
+import numpy as np
+from config.settings import EMBEDDING_BATCH_SIZE, EMBEDDING_DIM, EMBEDDING_MODEL_NAME, MRL_DIMENSION
+
+from src.common import get_logger
 from src.kag.framework.llama_index_adapter import DashScopeLiteLLMEmbedding, chunks_to_nodes
 from src.storage.schema import DocChunk
-from config.settings import EMBEDDING_MODEL_NAME, EMBEDDING_BATCH_SIZE, MRL_DIMENSION, EMBEDDING_DIM
 
 logger = get_logger(__name__)
 
@@ -25,7 +25,7 @@ class EmbeddingResult:
     chunk_id: str
     original_embedding: np.ndarray  # 原始高维向量
     reduced_embedding: np.ndarray   # 降维后的向量
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 class EmbeddingGenerator:
     """向量化生成器"""
@@ -49,7 +49,7 @@ class EmbeddingGenerator:
         
         logger.info(f"[Embedding] 初始化向量化生成器，模型: {self.model_name}")
     
-    def generate_embeddings(self, chunks: List[DocChunk]) -> List[EmbeddingResult]:
+    def generate_embeddings(self, chunks: list[DocChunk]) -> list[EmbeddingResult]:
         """
         为chunk列表生成向量
         
@@ -86,15 +86,13 @@ class EmbeddingGenerator:
         logger.info(f"[Embedding] 向量化完成，共生成 {len(results)} 个向量")
         return results
     
-    def _filter_leaf_chunks(self, chunks: List[DocChunk]) -> List[DocChunk]:
+    def _filter_leaf_chunks(self, chunks: list[DocChunk]) -> list[DocChunk]:
         """筛选叶子节点chunk"""
         leaf_chunks = []
         
         for chunk in chunks:
             # 根据chunk类型判断是否为叶子节点
             chunk_type = chunk.metadata.get('chunk_type', '')
-            chunking_strategy = chunk.metadata.get('chunking_strategy', '')
-            
             # 叶子节点判断逻辑：
             # 1. 没有指定chunk_type的（默认就是叶子节点）
             # 2. chunk_type为'child'的（父子分块中的子节点）
@@ -104,7 +102,7 @@ class EmbeddingGenerator:
         
         return leaf_chunks
     
-    def _process_batch(self, chunks: List[DocChunk]) -> List[EmbeddingResult]:
+    def _process_batch(self, chunks: list[DocChunk]) -> list[EmbeddingResult]:
         """处理一个批次的chunk"""
         # 提取文本内容
         texts = [chunk.content for chunk in chunks]
@@ -135,7 +133,7 @@ class EmbeddingGenerator:
         
         return results
     
-    def _generate_original_embeddings(self, texts: List[str]) -> List[np.ndarray]:
+    def _generate_original_embeddings(self, texts: list[str]) -> list[np.ndarray]:
         """生成原始高维向量"""
         try:
             embeddings = self._llama_index_embedder.get_text_embeddings(texts)
@@ -154,7 +152,7 @@ class EmbeddingGenerator:
         logger.info(f"[Embedding] 当前使用 LiteLLM + DashScope，不再加载本地 Transformer 模型: {self.model_name}")
         return None
     
-    def _fallback_embedding(self, texts: List[str]) -> List[np.ndarray]:
+    def _fallback_embedding(self, texts: list[str]) -> list[np.ndarray]:
         """降级方案：简单的词向量平均"""
         logger.warning("[Embedding] 使用降级方案生成向量")
         
@@ -190,7 +188,7 @@ class EmbeddingGenerator:
         
         return embeddings
 
-    def embed_query(self, query: str) -> List[float]:
+    def embed_query(self, query: str) -> list[float]:
         """为检索 query 生成向量。"""
         try:
             vector = self._llama_index_embedder.get_query_embedding(query)
@@ -202,7 +200,7 @@ class EmbeddingGenerator:
             reduced = self._apply_mrl_reduction([fallback])[0]
             return reduced.tolist()
     
-    def _apply_mrl_reduction(self, embeddings: List[np.ndarray]) -> List[np.ndarray]:
+    def _apply_mrl_reduction(self, embeddings: list[np.ndarray]) -> list[np.ndarray]:
         """应用MRL降维"""
         reduced_embeddings = []
         
@@ -227,7 +225,7 @@ class EmbeddingGenerator:
         norms[norms == 0] = 1  # 避免除以零
         return embeddings / norms
     
-    def save_to_qdrant(self, embedding_results: List[EmbeddingResult], collection_name: str):
+    def save_to_qdrant(self, embedding_results: list[EmbeddingResult], collection_name: str):
         """
         将向量保存到Qdrant
         
@@ -236,14 +234,14 @@ class EmbeddingGenerator:
             collection_name: Qdrant集合名称
         """
         try:
+            from config.settings import QDRANT_HOST, QDRANT_PORT
             from qdrant_client import QdrantClient
             from qdrant_client.http import models as qdrant_models
-            from config.settings import QDRANT_HOST, QDRANT_PORT
             
             logger.info(f"[Embedding] 保存向量到Qdrant: {collection_name}")
             
             # 连接Qdrant
-            client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+            client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, check_compatibility=False)
             
             # 准备数据
             points = []
@@ -276,7 +274,7 @@ class EmbeddingGenerator:
             logger.error(f"[Embedding] 保存到Qdrant失败: {e}")
             raise
     
-    def get_embedding_stats(self, embedding_results: List[EmbeddingResult]) -> Dict[str, Any]:
+    def get_embedding_stats(self, embedding_results: list[EmbeddingResult]) -> dict[str, Any]:
         """获取向量化统计信息"""
         if not embedding_results:
             return {}

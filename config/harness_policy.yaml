@@ -10,7 +10,7 @@ profiles:
     host_bash_access: forbidden
     sandbox_execute: false
   researcher:
-    allowed_tools:
+    allowed_tools: # 统一在 src/common/capability_registry.py 中注册工具
       - web_search
       - web_fetch
       - knowledge_query
@@ -42,6 +42,12 @@ dynamic:
 sandbox:
   require_policy_check: true
   max_code_chars: 153600
+  # 语义级扩展口：
+  # - deny_modules / deny_builtins / deny_methods 会并入 AST 审计主规则面
+  # - deny_patterns 仅作为 substring 级补充阻断
+  deny_modules: []
+  deny_builtins: []
+  deny_methods: []
   deny_patterns:
     - "__import__('os')"
     - "subprocess.Popen"

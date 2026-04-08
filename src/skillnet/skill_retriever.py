@@ -1,7 +1,8 @@
 """Simple retrieval helpers for capability-aware skill candidates."""
 from __future__ import annotations
 
-from typing import Any, Iterable
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from src.common import capability_registry
 from src.skillnet.preset_skills import load_preset_skills
@@ -90,7 +91,7 @@ class SkillRetriever:
             score = 0
             reasons: list[str] = []
             required = set(descriptor.required_capabilities)
-            recommended = descriptor.metadata.get("recommended", {}) if isinstance(descriptor.metadata, dict) else {}
+            recommended = descriptor.metadata.get("recommended", {}) if isinstance(descriptor.metadata, Mapping) else {}
             if source_task_type and recommended.get("source_task_type") == source_task_type:
                 score += 3
                 reasons.append(f"source_task_type={source_task_type}")
@@ -230,7 +231,7 @@ class SkillRetriever:
                     "name": descriptor.name,
                     "required_capabilities": list(descriptor.required_capabilities),
                     "promotion": dict(descriptor.promotion),
-                    "usage": dict(descriptor.metadata.get("usage", {}) or {}),
+                    "usage": dict(descriptor.metadata.get("usage", {}) or {}) if isinstance(descriptor.metadata, Mapping) else {},
                     "match_source": str(ranked.get("match_source") or "historical_repo"),
                     "match_reason": str(ranked.get("match_reason") or "historical_match"),
                     "match_score": int(ranked.get("match_score") or 0),

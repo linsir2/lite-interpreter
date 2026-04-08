@@ -1,8 +1,6 @@
 """知识融合：对候选三元组做归一化、去重与轻量合并。"""
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 from src.common import get_logger
 from src.storage.schema import KnowledgeTriple
 
@@ -11,8 +9,8 @@ logger = get_logger(__name__)
 
 class KnowledgeFusion:
     @classmethod
-    def fuse(cls, triples: List[KnowledgeTriple]) -> List[KnowledgeTriple]:
-        unique: Dict[Tuple[str, str, str, str], KnowledgeTriple] = {}
+    def fuse(cls, triples: list[KnowledgeTriple]) -> list[KnowledgeTriple]:
+        unique: dict[tuple[str, str, str, str], KnowledgeTriple] = {}
         for triple in triples:
             key = (
                 triple.head.strip().lower(),
