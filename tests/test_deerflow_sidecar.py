@@ -98,3 +98,32 @@ def test_sidecar_chat_endpoint_uses_embedded_client_contract(monkeypatch):
     assert body["response"]["message"] == "hello sidecar"
     assert body["response"]["thread_id"] == "thread-1"
     assert body["response"]["thinking_enabled"] is False
+
+
+def test_sidecar_stream_endpoint_emits_ndjson_events(monkeypatch):
+    _install_fake_deerflow_client(monkeypatch)
+    module = _load_sidecar_module()
+    class _CapturedStreamingResponse:
+        def __init__(self, content, media_type: str):
+            self.status_code = 200
+            self.media_type = media_type
+            self.body = "".join(content).encode("utf-8")
+
+    monkeypatch.setattr(module, "StreamingResponse", _CapturedStreamingResponse)
+    response = asyncio.run(
+        module.stream(
+            _make_json_request(
+                "/v1/stream",
+                {"message": "hello stream", "thread_id": "thread-2", "plan_mode": False},
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.media_type == "application/x-ndjson"
+    events = [json.loads(line) for line in response.body.decode("utf-8").strip().splitlines()]
+    assert events[0]["type"] == "messages-tuple"
+    assert events[0]["data"]["content"] == "echo:hello stream"
+    assert events[1]["type"] == "values"
+    assert events[1]["data"]["thread_id"] == "thread-2"
+    assert events[1]["data"]["plan_mode"] is False

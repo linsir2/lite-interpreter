@@ -31,7 +31,7 @@ test-docker:
 	conda run -n $(PYTHON_ENV) python -m pytest -q tests/test_sandbox.py tests/test_e2e.py::test_static_task_flow_e2e_via_api_with_real_sandbox
 
 test-integration:
-	conda run -n $(PYTHON_ENV) python -m pytest -q tests/test_sandbox.py tests/test_e2e.py::test_static_task_flow_e2e_via_api_with_real_sandbox tests/test_deerflow_bridge.py::DeerflowBridgeTests::test_run_uses_sidecar_over_real_local_http_transport
+	conda run -n $(PYTHON_ENV) python -m pytest -q tests/test_sandbox.py tests/test_e2e.py::test_static_task_flow_e2e_via_api_with_real_sandbox tests/test_deerflow_bridge.py::DeerflowBridgeTests::test_run_uses_sidecar_over_real_local_http_transport tests/test_deerflow_sidecar.py
 
 lint:
 	conda run -n $(PYTHON_ENV) python -m ruff check $(HOTSPOT_LINT_PATHS)
