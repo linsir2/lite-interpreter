@@ -5,12 +5,23 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
 from src.api.routers.analysis_router import _run_task_flow, create_task, get_task_result
 from src.api.routers.execution_router import get_execution, list_task_executions
 from src.blackboard import MemoryData, execution_blackboard, memory_blackboard
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
+from src.sandbox.docker_executor import get_docker_client
 from starlette.requests import Request
+
+
+def _docker_available() -> bool:
+    try:
+        client = get_docker_client()
+        client.ping()
+        return True
+    except Exception:
+        return False
 
 
 def _run_task_flow_inline(monkeypatch, coroutine):
@@ -154,6 +165,81 @@ def test_static_task_flow_e2e_via_api(monkeypatch):
     )
     execution_body = json.loads(execution_response.body.decode())
     assert execution_body["kind"] == "sandbox"
+
+
+def test_static_task_flow_e2e_via_api_with_real_sandbox(monkeypatch):
+    if not _docker_available():
+        pytest.skip("Docker unavailable in current environment")
+
+    tenant_id = "tenant-e2e-static-real"
+    workspace_id = "ws-e2e-static-real"
+    request = _make_request(
+        method="POST",
+        path="/api/tasks",
+        body={
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "input_query": "请做简单分析",
+            "autorun": False,
+        },
+    )
+    response = asyncio.run(create_task(request))
+    body = json.loads(response.body.decode())
+    task_id = body["task_id"]
+
+    _run_task_flow_inline(
+        monkeypatch,
+        _run_task_flow(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id=workspace_id,
+            query="请做简单分析",
+            allowed_tools=[],
+            governance_profile="researcher",
+        ),
+    )
+
+    result_request = _make_request(
+        method="GET",
+        path=f"/api/tasks/{task_id}/result",
+        path_params={"task_id": task_id},
+        query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
+    )
+    result_response = asyncio.run(get_task_result(result_request))
+    result_body = json.loads(result_response.body.decode())
+
+    assert result_body["status"]["global_status"] == "success"
+    assert result_body["response"]["mode"] == "static"
+    assert result_body["response"]["details"]["execution_success"] is True
+    assert result_body["control"]["execution_intent"]["intent"] == "static_flow"
+
+    executions_response = asyncio.run(
+        list_task_executions(
+            _make_request(
+                method="GET",
+                path=f"/api/tasks/{task_id}/executions",
+                path_params={"task_id": task_id},
+                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
+            )
+        )
+    )
+    executions_body = json.loads(executions_response.body.decode())
+    execution_id = executions_body["executions"][0]["execution_id"]
+
+    execution_response = asyncio.run(
+        get_execution(
+            _make_request(
+                method="GET",
+                path=f"/api/executions/{execution_id}",
+                path_params={"execution_id": execution_id},
+                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
+            )
+        )
+    )
+    execution_body = json.loads(execution_response.body.decode())
+
+    assert execution_body["kind"] == "sandbox"
+    assert execution_body["success"] is True
 
 
 def test_dynamic_task_flow_e2e_via_api(monkeypatch):

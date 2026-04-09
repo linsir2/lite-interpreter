@@ -8,7 +8,8 @@
 
 - 最后人工验证日期：`2026-04-09`
 - 验证命令：`conda run -n lite_interpreter python -m pytest -q`
-- 最新结果：`258 passed`
+- 最新结果：`261 passed`
+- 说明：该最强基线包含可访问本地 Docker daemon 的真实 sandbox 验证；快速复验命令为 `make test-docker`
 
 这份文档是仓库内关于“当前成熟度、测试基线、已知热点、非目标”的唯一真相源；`README.md`、`docs/project_plan.md`、`docs/future_roadmap.md` 只引用此处，不再各自维护单独版本。
 
