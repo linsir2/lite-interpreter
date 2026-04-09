@@ -239,6 +239,57 @@ class DeerflowBridgeTests(unittest.TestCase):
         self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "auto")
         self.assertIn("sidecar down", result.runtime_metadata["sidecar_fallback_reason"])
 
+    def test_run_sidecar_mode_returns_unavailable_result_when_sidecar_fails(self):
+        bridge = DeerflowBridge(
+            runtime_config=DeerflowRuntimeConfig(
+                runtime_mode="sidecar",
+                sidecar_url="http://127.0.0.1:8765",
+                max_events=8,
+            )
+        )
+        request = DeerflowTaskRequest(
+            task_id="task-5",
+            tenant_id="tenant-5",
+            query="analyze something",
+            system_context={"constraints": {}},
+        )
+        with patch("src.dynamic_engine.deerflow_bridge.httpx.stream", side_effect=RuntimeError("sidecar down")):
+            result = bridge.run(request)
+
+        self.assertEqual(result.status, "unavailable")
+        self.assertIn("Failed to reach DeerFlow sidecar", result.summary)
+        self.assertEqual(result.trace_refs, ["dynamic-preview:task-5"])
+        self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "sidecar")
+        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "unavailable")
+        self.assertIn("sidecar down", result.runtime_metadata["sidecar_fallback_reason"])
+        self.assertEqual(result.runtime_metadata["sidecar_url"], "http://127.0.0.1:8765")
+
+    def test_run_auto_mode_reports_both_sidecar_and_embedded_failures(self):
+        bridge = DeerflowBridge(
+            runtime_config=DeerflowRuntimeConfig(
+                module_name="missing.deerflow.client",
+                runtime_mode="auto",
+                sidecar_url="http://127.0.0.1:8765",
+                max_events=8,
+            )
+        )
+        request = DeerflowTaskRequest(
+            task_id="task-6",
+            tenant_id="tenant-6",
+            query="analyze something",
+            system_context={"constraints": {}},
+        )
+        with patch("src.dynamic_engine.deerflow_bridge.httpx.stream", side_effect=RuntimeError("sidecar timeout")):
+            result = bridge.run(request)
+
+        self.assertEqual(result.status, "unavailable")
+        self.assertIn("Failed to use DeerFlow runtime in `auto` mode", result.summary)
+        self.assertEqual(result.trace_refs, ["dynamic-preview:task-6"])
+        self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "auto")
+        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "unavailable")
+        self.assertIn("sidecar timeout", result.runtime_metadata["sidecar_fallback_reason"])
+        self.assertIn("No module named", result.runtime_metadata["embedded_error"])
+
 
 if __name__ == "__main__":
     unittest.main()
