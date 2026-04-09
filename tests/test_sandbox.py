@@ -7,6 +7,24 @@ from src.sandbox.docker_executor import _tenant_concurrency, get_docker_client
 from src.sandbox.session_manager import sandbox_session_manager
 
 
+def _patch_executor_preflight(monkeypatch):
+    class _Decision:
+        allowed = True
+        reasons = []
+
+        def to_record(self):
+            return {"allowed": True, "reasons": []}
+
+    monkeypatch.setattr(
+        "src.sandbox.docker_executor.HarnessGovernor.evaluate_sandbox_execution", lambda **kwargs: _Decision()
+    )
+    monkeypatch.setattr("src.sandbox.docker_executor.validate_code_basic", lambda code, trace_id: None)
+    monkeypatch.setattr("src.sandbox.docker_executor.validate_tenant_id", lambda tenant_id, trace_id: None)
+    monkeypatch.setattr("src.sandbox.docker_executor.current_tenant_concurrency", lambda tenant_id: 0)
+    monkeypatch.setattr("src.sandbox.docker_executor.increment_tenant_concurrency", lambda tenant_id: None)
+    monkeypatch.setattr("src.sandbox.docker_executor.decrement_tenant_concurrency", lambda tenant_id: None)
+
+
 def _docker_available() -> bool:
     try:
         client = get_docker_client()
@@ -119,21 +137,7 @@ def test_core_executor_timeout_path_returns_structured_failure(monkeypatch):
     from requests.exceptions import Timeout as RequestsTimeout
     from src.sandbox.docker_executor import _execute_code_in_docker
 
-    class _Decision:
-        allowed = True
-        reasons = []
-
-        def to_record(self):
-            return {"allowed": True, "reasons": []}
-
-    monkeypatch.setattr(
-        "src.sandbox.docker_executor.HarnessGovernor.evaluate_sandbox_execution", lambda **kwargs: _Decision()
-    )
-    monkeypatch.setattr("src.sandbox.docker_executor.validate_code_basic", lambda code, trace_id: None)
-    monkeypatch.setattr("src.sandbox.docker_executor.validate_tenant_id", lambda tenant_id, trace_id: None)
-    monkeypatch.setattr("src.sandbox.docker_executor.current_tenant_concurrency", lambda tenant_id: 0)
-    monkeypatch.setattr("src.sandbox.docker_executor.increment_tenant_concurrency", lambda tenant_id: None)
-    monkeypatch.setattr("src.sandbox.docker_executor.decrement_tenant_concurrency", lambda tenant_id: None)
+    _patch_executor_preflight(monkeypatch)
     monkeypatch.setattr(
         "src.sandbox.docker_executor.get_docker_client", lambda: (_ for _ in ()).throw(RequestsTimeout("timeout"))
     )
@@ -142,3 +146,39 @@ def test_core_executor_timeout_path_returns_structured_failure(monkeypatch):
 
     assert result["success"] is False
     assert "代码执行超时" in result["error"]
+
+
+def test_core_executor_docker_exception_path_returns_structured_failure(monkeypatch):
+    from docker.errors import DockerException
+    from src.sandbox.docker_executor import _execute_code_in_docker
+
+    _patch_executor_preflight(monkeypatch)
+
+    def _raise_docker_exception(**kwargs):
+        raise DockerException("daemon down")
+
+    monkeypatch.setattr("src.sandbox.docker_executor._start_sandbox_container", _raise_docker_exception)
+    result = _execute_code_in_docker("print('ok')", "tenant_docker_error", "ws_docker_error")
+
+    assert result["success"] is False
+    assert "Docker服务异常" in result["error"]
+    assert result["sandbox_session"]["status"] == "failed"
+    assert result["sandbox_session"]["metadata"]["phase"] == "docker_exception"
+
+
+def test_core_executor_unknown_exception_path_returns_structured_failure(monkeypatch):
+    from src.sandbox.docker_executor import _execute_code_in_docker
+
+    _patch_executor_preflight(monkeypatch)
+
+    def _raise_unknown_exception(**kwargs):
+        raise RuntimeError("unexpected start failure")
+
+    monkeypatch.setattr("src.sandbox.docker_executor._start_sandbox_container", _raise_unknown_exception)
+    result = _execute_code_in_docker("print('ok')", "tenant_unknown_error", "ws_unknown_error")
+
+    assert result["success"] is False
+    assert "未知执行异常" in result["error"]
+    assert "unexpected start failure" in result["error"]
+    assert result["sandbox_session"]["status"] == "failed"
+    assert result["sandbox_session"]["metadata"]["phase"] == "unknown_exception"
