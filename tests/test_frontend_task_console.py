@@ -1,4 +1,5 @@
 """Task console result formatting tests."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,14 +38,18 @@ def test_collect_result_sections_extracts_lists():
         "executions": [{"execution_id": "sandbox:session-1", "kind": "sandbox"}],
         "tool_calls": [{"tool_name": "web_search", "phase": "start"}],
         "status": {
-            "task_lease": {"owner_id": "host:pid", "lease_expires_at": "2026-04-05T00:00:00Z", "backend": "memory_fallback"}
+            "task_lease": {
+                "owner_id": "host:pid",
+                "lease_expires_at": "2026-04-05T00:00:00Z",
+                "backend": "memory_fallback",
+            }
         },
         "response": {
             "key_findings": ["f1", "f2"],
             "outputs": [{"type": "dataset", "name": "sales.csv"}],
             "caveats": ["limited"],
             "evidence_refs": ["chunk-1"],
-        }
+        },
     }
 
     sections = collect_result_sections(payload)
@@ -138,8 +143,13 @@ def test_fetch_task_console_bundle_uses_execution_endpoints(monkeypatch):
     assert payload["executions"][0]["execution_id"] == "runtime:task-1"
     assert payload["tool_calls"][0]["tool_name"] == "web_search"
     assert any(url.endswith("/api/tasks/task-1/result?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
-    assert any(url.endswith("/api/tasks/task-1/executions?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
-    assert any(url.endswith("/api/executions/runtime:task-1/tool-calls?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
+    assert any(
+        url.endswith("/api/tasks/task-1/executions?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls
+    )
+    assert any(
+        url.endswith("/api/executions/runtime:task-1/tool-calls?tenant_id=tenant-1&workspace_id=ws-1")
+        for url in requested_urls
+    )
 
 
 def test_collect_result_sections_extracts_parser_reports():
@@ -147,7 +157,11 @@ def test_collect_result_sections_extracts_parser_reports():
         "response": {
             "details": {
                 "parser_reports": [
-                    {"file_name": "rule.pdf", "parse_mode": "ocr+vision", "parser_diagnostics": {"image_description_count": 2}}
+                    {
+                        "file_name": "rule.pdf",
+                        "parse_mode": "ocr+vision",
+                        "parser_diagnostics": {"image_description_count": 2},
+                    }
                 ]
             }
         }

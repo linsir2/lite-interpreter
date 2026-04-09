@@ -1,4 +1,5 @@
 """Built-in visualization skill seeds."""
+
 from __future__ import annotations
 
 from src.skillnet.skill_schema import SkillDescriptor

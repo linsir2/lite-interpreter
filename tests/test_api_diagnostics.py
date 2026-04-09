@@ -1,4 +1,5 @@
 """Tests for diagnostics and conformance endpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -52,7 +53,10 @@ def test_get_diagnostics_returns_environment_and_dependency_summary():
     assert "KnowledgeSnapshotState" in body["strict_state"]["core_typed_state_surfaces"]
     assert "MemoryData" in body["strict_state"]["core_typed_state_surfaces"]
     assert "DynamicRequestState" in body["strict_state"]["core_typed_state_surfaces"]
-    assert any(item["field"] == "NodeOutputPatchState.final_response" for item in body["strict_state"]["allowed_flexible_fields"])
+    assert any(
+        item["field"] == "NodeOutputPatchState.final_response"
+        for item in body["strict_state"]["allowed_flexible_fields"]
+    )
     assert "startup_recovery" in body
     assert "task_leases" in body["startup_recovery"]
 

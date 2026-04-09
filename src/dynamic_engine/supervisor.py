@@ -3,6 +3,7 @@
 This module keeps the DAG in charge while isolating the decisions required to
 prepare a bounded dynamic run.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -79,7 +80,9 @@ class DynamicSupervisor:
             allowed_tools=list(state.get("allowed_tools") or []),
             redaction_rules=list(state.get("redaction_rules") or policy.get("redaction_rules") or []),
             token_budget=state.get("token_budget"),
-            max_dynamic_steps=int(state.get("max_dynamic_steps") or (policy.get("dynamic", {}) or {}).get("max_steps", 6)),
+            max_dynamic_steps=int(
+                state.get("max_dynamic_steps") or (policy.get("dynamic", {}) or {}).get("max_steps", 6)
+            ),
             metadata={
                 "routing_mode": state.get("routing_mode", "dynamic"),
                 "runtime_backend": str(state.get("runtime_backend") or "deerflow"),
@@ -114,22 +117,20 @@ class DynamicSupervisor:
             task_id=str(task_envelope.task_id),
             workspace_id=str(task_envelope.workspace_id),
         ).model_dump(mode="json")
-        base_decision_log = decision_log_records(
-            execution_state.get("decision_log") or state.get("decision_log")
-        )
+        base_decision_log = decision_log_records(execution_state.get("decision_log") or state.get("decision_log"))
         return {
             **dict(state),
             "task_envelope": task_envelope.model_dump(mode="json"),
             "execution_intent": execution_state.get("execution_intent") or state.get("execution_intent"),
-            "knowledge_snapshot": dict(
-                persisted_knowledge_snapshot or current_knowledge_snapshot or {}
-            ),
+            "knowledge_snapshot": dict(persisted_knowledge_snapshot or current_knowledge_snapshot or {}),
             "memory_snapshot": memory_snapshot,
             "allowed_tools": list(governance_decision.allowed_tools),
             "governance_profile": governance_decision.profile,
             "decision_log": [*base_decision_log, governance_decision.to_record()],
             "routing_mode": str(task_envelope.metadata.get("routing_mode") or state.get("routing_mode") or "dynamic"),
-            "runtime_backend": str(task_envelope.metadata.get("runtime_backend") or state.get("runtime_backend") or "deerflow"),
+            "runtime_backend": str(
+                task_envelope.metadata.get("runtime_backend") or state.get("runtime_backend") or "deerflow"
+            ),
             "token_budget": task_envelope.token_budget,
             "max_dynamic_steps": task_envelope.max_dynamic_steps,
         }

@@ -1,4 +1,5 @@
 """Memory-plane orchestration helpers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -200,10 +201,7 @@ class MemoryService:
             used_capabilities=SkillRetriever.infer_query_capabilities(query),
             match_reason_detail="coder incorporated historical skills into the code-generation payload",
         )
-        skill_lookup = {
-            descriptor.name: descriptor.to_payload()
-            for descriptor in merged_skills
-        }
+        skill_lookup = {descriptor.name: descriptor.to_payload() for descriptor in merged_skills}
         for match in memory_data.historical_matches:
             if not match.used_in_codegen:
                 continue
@@ -215,7 +213,9 @@ class MemoryService:
             ]
             if replay_case_ids:
                 match.used_replay_case_ids = replay_case_ids
-            capabilities = [str(item) for item in (skill_payload.get("required_capabilities", []) or []) if str(item).strip()]
+            capabilities = [
+                str(item) for item in (skill_payload.get("required_capabilities", []) or []) if str(item).strip()
+            ]
             if capabilities:
                 match.used_capabilities = capabilities
         return cls.persist_task_memory(memory_data)

@@ -1,4 +1,5 @@
 """Authentication helpers and middleware for API routes."""
+
 from __future__ import annotations
 
 import base64
@@ -38,7 +39,7 @@ class AuthContext:
     auth_type: str = "token"
 
 
-ROLE_HIERARCHY = {
+ROLE_HIERARCHY = {  # 用户权限
     "viewer": 10,
     "operator": 20,
     "admin": 30,
@@ -144,10 +145,7 @@ def issue_session_token(*, username: str, subject: str, role: str, grants: tuple
         "sub": subject,
         "usr": username,
         "role": role,
-        "grants": [
-            {"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id}
-            for grant in grants
-        ],
+        "grants": [{"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id} for grant in grants],
         "iat": int(issued_at.timestamp()),
         "exp": int((issued_at + timedelta(seconds=API_SESSION_TTL_SECONDS)).timestamp()),
     }
@@ -291,10 +289,7 @@ def auth_context_allows_scope(auth_context: AuthContext | None, tenant_id: str, 
         return True
     if not auth_context.grants:
         return auth_context.tenant_id == tenant_id and auth_context.workspace_id == workspace_id
-    return any(
-        grant.tenant_id == tenant_id and grant.workspace_id == workspace_id
-        for grant in auth_context.grants
-    )
+    return any(grant.tenant_id == tenant_id and grant.workspace_id == workspace_id for grant in auth_context.grants)
 
 
 class ApiAuthMiddleware(BaseHTTPMiddleware):

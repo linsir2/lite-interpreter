@@ -1,11 +1,12 @@
 """Task console page and result formatting helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
-from urllib.parse import urlencode
 
 from src.frontend.auth_client import api_auth_headers, render_auth_panel
 from src.frontend.components.file_uploader import render_file_uploader
@@ -16,7 +17,9 @@ def summarize_result_header(task_result: dict[str, Any]) -> dict[str, str]:
     final_response = task_result.get("response") or task_result.get("final_response") or {}
     status = dict(task_result.get("status") or {})
     return {
-        "mode": str(final_response.get("mode") or status.get("global_status") or task_result.get("global_status") or "unknown"),
+        "mode": str(
+            final_response.get("mode") or status.get("global_status") or task_result.get("global_status") or "unknown"
+        ),
         "headline": str(final_response.get("headline") or "No headline available"),
         "answer": str(final_response.get("answer") or final_response.get("headline") or "No answer available"),
     }
@@ -35,7 +38,11 @@ def select_stream_target(task_result: dict[str, Any] | None, *, preferred_execut
         if not execution_id:
             execution_id = str(executions[0].get("execution_id", "")).strip()
         if execution_id:
-            return {"stream_kind": "execution", "execution_id": execution_id, "task_id": str(task_payload.get("task_id") or (task_result or {}).get("task_id", ""))}
+            return {
+                "stream_kind": "execution",
+                "execution_id": execution_id,
+                "task_id": str(task_payload.get("task_id") or (task_result or {}).get("task_id", "")),
+            }
     return {
         "stream_kind": "task",
         "execution_id": "",
@@ -90,7 +97,12 @@ def fetch_task_console_bundle(
             continue
         try:
             tool_calls_payload = fetch_json_payload(
-                _scoped_url(base_url, f"/api/executions/{execution_id}/tool-calls", tenant_id=tenant_id, workspace_id=workspace_id),
+                _scoped_url(
+                    base_url,
+                    f"/api/executions/{execution_id}/tool-calls",
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                ),
                 timeout=timeout,
                 api_token=api_token,
             )
@@ -110,9 +122,7 @@ def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]
     skills = dict(task_result.get("skills") or {})
     status = dict(task_result.get("status") or {})
     analysis_brief = dict(
-        (final_response.get("details") or {}).get("analysis_brief")
-        or knowledge.get("analysis_brief")
-        or {}
+        (final_response.get("details") or {}).get("analysis_brief") or knowledge.get("analysis_brief") or {}
     )
     knowledge_snapshot = dict(
         (final_response.get("details") or {}).get("knowledge_snapshot")
@@ -133,9 +143,13 @@ def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]
         "filter_checks": list((final_response.get("details") or {}).get("filter_checks") or []),
         "analysis_brief": [analysis_brief] if analysis_brief else [],
         "knowledge_snapshot": [knowledge_snapshot] if knowledge_snapshot else [],
-        "historical_skill_matches": list(skills.get("historical_matches") or task_result.get("historical_skill_matches") or []),
+        "historical_skill_matches": list(
+            skills.get("historical_matches") or task_result.get("historical_skill_matches") or []
+        ),
         "used_historical_skills": list((final_response.get("details") or {}).get("used_historical_skills") or []),
-        "task_lease": [dict(status.get("task_lease") or task_result.get("task_lease") or {})] if (status.get("task_lease") or task_result.get("task_lease")) else [],
+        "task_lease": [dict(status.get("task_lease") or task_result.get("task_lease") or {})]
+        if (status.get("task_lease") or task_result.get("task_lease"))
+        else [],
     }
 
 
@@ -221,7 +235,9 @@ def render_task_console() -> None:
         default_workspace = "demo-workspace"
     tenant_id = st.text_input("Tenant ID", value=default_tenant)
     workspace_id = st.text_input("Workspace ID", value=default_workspace)
-    governance_profile = st.selectbox("Governance Profile", options=["researcher", "planner", "executor", "reviewer"], index=0)
+    governance_profile = st.selectbox(
+        "Governance Profile", options=["researcher", "planner", "executor", "reviewer"], index=0
+    )
     allowed_tools_text = st.text_input("Allowed Tools (comma separated)", value="web_search,knowledge_query")
     default_task = st.session_state.get("task_id", "")
     task_id = st.text_input("Task ID", value=default_task)
@@ -423,7 +439,9 @@ def render_task_console() -> None:
                         if execution.get("summary"):
                             st.caption(str(execution.get("summary"))[:240])
                         if execution.get("artifact_count") is not None:
-                            st.caption(f"artifacts={execution.get('artifact_count')} tool_calls={execution.get('tool_call_count', 0)}")
+                            st.caption(
+                                f"artifacts={execution.get('artifact_count')} tool_calls={execution.get('tool_call_count', 0)}"
+                            )
                 else:
                     st.caption("No execution resources recorded.")
 
@@ -465,8 +483,7 @@ def render_task_console() -> None:
                 if sections["rule_checks"]:
                     for check in sections["rule_checks"]:
                         st.markdown(
-                            f"- **Rule**: {check.get('rule', 'unknown')}  \n"
-                            f"  Issues: `{check.get('issue_count', 0)}`"
+                            f"- **Rule**: {check.get('rule', 'unknown')}  \n  Issues: `{check.get('issue_count', 0)}`"
                         )
                         matched_datasets = check.get("matched_datasets", []) or []
                         matched_documents = check.get("matched_documents", []) or []
@@ -476,7 +493,7 @@ def render_task_console() -> None:
                             st.caption(f"documents: {', '.join(str(item) for item in matched_documents)}")
                         warnings = check.get("warnings", []) or []
                         for warning in warnings[:3]:
-                                st.caption(f"warning: {warning}")
+                            st.caption(f"warning: {warning}")
                 else:
                     st.caption("No rule checks recorded.")
 
@@ -499,9 +516,7 @@ def render_task_console() -> None:
                 st.markdown("#### Filter Checks")
                 if sections["filter_checks"]:
                     for check in sections["filter_checks"]:
-                        st.markdown(
-                            f"- **Filter**: {check.get('filter', 'unknown')}"
-                        )
+                        st.markdown(f"- **Filter**: {check.get('filter', 'unknown')}")
                         matched_datasets = check.get("matched_datasets", []) or []
                         matched_documents = check.get("matched_documents", []) or []
                         matched_values = check.get("matched_values", []) or []
@@ -517,7 +532,9 @@ def render_task_console() -> None:
             with info_col2:
                 st.markdown("#### Outputs")
                 if sections["outputs"]:
-                    for raw_output, card in zip(sections["outputs"], build_output_cards(sections["outputs"]), strict=False):
+                    for raw_output, card in zip(
+                        sections["outputs"], build_output_cards(sections["outputs"]), strict=False
+                    ):
                         asset = describe_output_asset(raw_output)
                         st.markdown(
                             "\n".join(
@@ -579,7 +596,11 @@ def render_task_console() -> None:
     if task_id and isinstance(task_result, dict):
         executions = list(task_result.get("executions") or [])
         if executions:
-            execution_options = [str(item.get("execution_id", "")).strip() for item in executions if str(item.get("execution_id", "")).strip()]
+            execution_options = [
+                str(item.get("execution_id", "")).strip()
+                for item in executions
+                if str(item.get("execution_id", "")).strip()
+            ]
             if execution_options:
                 preferred_execution_id = st.selectbox(
                     "Execution Stream Target",

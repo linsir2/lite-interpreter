@@ -4,6 +4,7 @@ src/storage/schema.py
 
 职责：规定上层业务实体必须转化为以下标准结构，才能交由 Storage 层入库。
 """
+
 from datetime import datetime
 from typing import Any
 
@@ -17,11 +18,11 @@ class DocChunk(BaseModel):
     chunk_id: str = Field(description="Chunk 的全局唯一 ID")
     doc_id: str = Field(description="所属物理文档的唯一ID")
     content: str = Field(description="纯文本切片内容")
-    
+
     created_at: datetime = Field(default_factory=get_utc_now, description="入库时间戳")
     metadata: dict[str, Any] = Field(
         default_factory=dict,
-        description="必须包含: file_name, upload_batch_id, author 等用于后续 Filter 过滤的溯源信息"
+        description="必须包含: file_name, upload_batch_id, author 等用于后续 Filter 过滤的溯源信息",
     )
 
     # ==========================================
@@ -47,26 +48,32 @@ class DocChunk(BaseModel):
             metadata=getattr(node, "metadata", {}) or {},
         )
 
+
 class EntityNode(BaseModel):
     """图谱实体节点模型"""
+
     id: str = Field(description="实体的业务主键")
     label: str = Field(description="实体类型/标签")
-    properties: dict[str, Any] = Field(default_factory=dict) # chunk_id啥的都在这里面
+    properties: dict[str, Any] = Field(default_factory=dict)  # chunk_id啥的都在这里面
     created_at: datetime = Field(default_factory=get_utc_now)
+
 
 class KnowledgeTriple(BaseModel):
     """知识三元组模型"""
-    head: str 
-    head_label: str 
-    relation: str 
-    tail: str 
-    tail_label: str 
+
+    head: str
+    head_label: str
+    relation: str
+    tail: str
+    tail_label: str
     properties: dict[str, Any] = Field(default_factory=dict, description="边的属性")
     # 🚀 【你的优化1】：图谱边也必须有时间戳，支持图谱的时间旅行查询（Temporal Graph）
     created_at: datetime = Field(default_factory=get_utc_now)
 
+
 class StructuredDatasetMeta(BaseModel):
     """🚀 结构化数据表元数据（供大模型分析时查阅）"""
+
     tenant_id: str
     original_file_name: str = Field(description="用户上传的原始文件名 (如 sales.csv)")
     db_table_name: str = Field(description="在数据库中实际映射的表名 (如 tenant_1_sales_20260327)")
@@ -75,7 +82,9 @@ class StructuredDatasetMeta(BaseModel):
     columns: list[str] = Field(description="表头字段名列表")
     created_at: datetime = Field(default_factory=get_utc_now)
 
-    semantic_summary: str = Field(description="LLM自动生成的摘要（例：记录了2023年Q3上海厂区的所有发电机检修与故障数据）")
+    semantic_summary: str = Field(
+        description="LLM自动生成的摘要（例：记录了2023年Q3上海厂区的所有发电机检修与故障数据）"
+    )
     time_coverage: str = Field(description="数据涵盖的时间范围（例：2023-07 至 2023-09）")
     keywords: list[str] = Field(description="核心实体词（例：['发电机', '上海', 'Q3', '检修']）")
 

@@ -1,4 +1,5 @@
 """Validation helpers for harvested skill candidates."""
+
 from __future__ import annotations
 
 from typing import Any

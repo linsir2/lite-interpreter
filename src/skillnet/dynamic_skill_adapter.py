@@ -35,13 +35,13 @@ def build_dynamic_skill_candidate(
     """Summarize successful dynamic traces into a future static skill candidate."""
 
     normalized_trace_records = [
-        record.model_dump(mode="json") if hasattr(record, "model_dump") else dict(record)
-        for record in trace_records
+        record.model_dump(mode="json") if hasattr(record, "model_dump") else dict(record) for record in trace_records
     ]
     winning_steps = [
         str(record.get("step_name"))
         for record in normalized_trace_records
-        if str(record.get("event_type") or "") in {
+        if str(record.get("event_type") or "")
+        in {
             "success",
             "completed",
             "selected",

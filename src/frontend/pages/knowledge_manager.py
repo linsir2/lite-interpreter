@@ -1,4 +1,5 @@
 """Knowledge asset page for uploaded files and parser/index status."""
+
 from __future__ import annotations
 
 import httpx
@@ -49,7 +50,9 @@ def render_knowledge_manager() -> None:
                     if load_kwargs:
                         st.caption(f"load_kwargs={load_kwargs}")
                 else:
-                    st.caption(f"status={asset.get('status', 'unknown')} parse_mode={asset.get('parse_mode', 'default')}")
+                    st.caption(
+                        f"status={asset.get('status', 'unknown')} parse_mode={asset.get('parse_mode', 'default')}"
+                    )
                     diagnostics = asset.get("parser_diagnostics") or {}
                     if diagnostics:
                         st.caption(str(diagnostics))

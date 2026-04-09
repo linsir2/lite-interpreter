@@ -1,4 +1,5 @@
 """Context Builder：把检索生肉压缩成 Analyst 可直接消费的业务上下文。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -70,7 +71,8 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
     analysis_brief = build_analysis_brief(
         query=query,
         exec_data=exec_data,
-        knowledge_snapshot=knowledge_snapshot or {"evidence_refs": [item.get("chunk_id") for item in compressed if item.get("chunk_id")]},
+        knowledge_snapshot=knowledge_snapshot
+        or {"evidence_refs": [item.get("chunk_id") for item in compressed if item.get("chunk_id")]},
         business_context=business_context_state.model_dump(mode="json"),
         analysis_mode=runtime_decision.analysis_mode,
         known_gaps=runtime_decision.known_gaps,
@@ -96,9 +98,7 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
         snapshot_payload["hits"] = list(raw_candidates)
     if not knowledge_evidence_refs(snapshot_payload):
         snapshot_payload["evidence_refs"] = [
-            str(item)
-            for item in [item.get("chunk_id") for item in compressed if item.get("chunk_id")]
-            if item
+            str(item) for item in [item.get("chunk_id") for item in compressed if item.get("chunk_id")] if item
         ]
     snapshot = KnowledgeSnapshotState.model_validate(snapshot_payload)
     exec_data.knowledge.knowledge_snapshot = snapshot

@@ -5,6 +5,7 @@
 
 优化说明：补齐Agent反思链路核心字段、修正知识流概念误区、补充业务场景必需的状态节点
 """
+
 from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
@@ -23,25 +24,26 @@ class GlobalStatus(StrEnum):
     """
     任务全局总状态，定义任务的整体阶段
     """
-    PENDING = "pending"                # 待处理，刚创建任务
-    ROUTING = "routing"                # 意图路由（Router节点评估需求）
-    PREPARING_CONTEXT = "preparing_context" # 抽取结构化文件中的表格结构，像表头信息，使用data_inspector
-    RETRIEVING = "retrieving"          # 检索，使用kag
-    
-    ANALYZING = "analyzing"            # 需求分析中（Analyst Agent负责）
-    CODING = "coding"                  # 代码生成中（Coder Agent负责）
-    AUDITING = "auditing"              # 代码审计中（Auditor Agent负责）
-    EXECUTING = "executing"            # 沙箱执行中（Executor Agent负责）
-    DEBUGGING = "debugging"            # 代码调试中（Coder Agent负责，前端展示用）
-    
-    EVALUATING = "evaluating"          # 结果评估中（Evaluator Agent负责）
-    SUMMARIZING = "summarizing"              # 总结回复中（生成最终自然语言报告）
-    HARVESTING = "harvesting"                # 经验沉淀中（后台Skill Harvester异步提取技能）
+
+    PENDING = "pending"  # 待处理，刚创建任务
+    ROUTING = "routing"  # 意图路由（Router节点评估需求）
+    PREPARING_CONTEXT = "preparing_context"  # 抽取结构化文件中的表格结构，像表头信息，使用data_inspector
+    RETRIEVING = "retrieving"  # 检索，使用kag
+
+    ANALYZING = "analyzing"  # 需求分析中（Analyst Agent负责）
+    CODING = "coding"  # 代码生成中（Coder Agent负责）
+    AUDITING = "auditing"  # 代码审计中（Auditor Agent负责）
+    EXECUTING = "executing"  # 沙箱执行中（Executor Agent负责）
+    DEBUGGING = "debugging"  # 代码调试中（Coder Agent负责，前端展示用）
+
+    EVALUATING = "evaluating"  # 结果评估中（Evaluator Agent负责）
+    SUMMARIZING = "summarizing"  # 总结回复中（生成最终自然语言报告）
+    HARVESTING = "harvesting"  # 经验沉淀中（后台Skill Harvester异步提取技能）
 
     WAITING_FOR_HUMAN = "waiting_for_human"  # 新增：阻断/异常时等待人工介入
-    SUCCESS = "success"                # 任务成功完成
-    FAILED = "failed"                  # 任务失败
-    ARCHIVED = "archived"              # 任务已归档
+    SUCCESS = "success"  # 任务成功完成
+    FAILED = "failed"  # 任务失败
+    ARCHIVED = "archived"  # 任务已归档
 
 
 # -------------------------- 核心数据模型 --------------------------
@@ -437,14 +439,18 @@ class NodeOutputPatchState(StrictStateModel):
         if self.task_envelope is not None and not isinstance(self.task_envelope, TaskEnvelope):
             object.__setattr__(self, "task_envelope", TaskEnvelope.model_validate(self.task_envelope))
         if self.knowledge_snapshot is not None and not isinstance(self.knowledge_snapshot, KnowledgeSnapshotState):
-            object.__setattr__(self, "knowledge_snapshot", KnowledgeSnapshotState.model_validate(self.knowledge_snapshot))
+            object.__setattr__(
+                self, "knowledge_snapshot", KnowledgeSnapshotState.model_validate(self.knowledge_snapshot)
+            )
         if self.execution_record is not None and not isinstance(self.execution_record, ExecutionRecord):
             object.__setattr__(self, "execution_record", ExecutionRecord.model_validate(self.execution_record))
         if not isinstance(self.audit_result, AuditResultState):
             object.__setattr__(self, "audit_result", AuditResultState.model_validate(self.audit_result))
         if self.dynamic_request is not None and not isinstance(self.dynamic_request, DynamicRequestState):
             object.__setattr__(self, "dynamic_request", DynamicRequestState.model_validate(self.dynamic_request))
-        if self.dynamic_runtime_metadata is not None and not isinstance(self.dynamic_runtime_metadata, RuntimeMetadataState):
+        if self.dynamic_runtime_metadata is not None and not isinstance(
+            self.dynamic_runtime_metadata, RuntimeMetadataState
+        ):
             object.__setattr__(
                 self,
                 "dynamic_runtime_metadata",
@@ -477,13 +483,14 @@ def _as_mapping_dict(value: Any) -> dict[str, Any]:
 
 class TaskGlobalState(StrictStateModel):
     """任务全局状态模型（Global Blackboard存储）"""
+
     task_id: str = Field(description="任务唯一ID")
     tenant_id: str = Field(description="租户ID")
     workspace_id: str = Field(description="让事件具备空间隔离属性", default="default_ws")
     input_query: str = Field(description="用户原始查询")
     global_status: GlobalStatus = Field(default=GlobalStatus.PENDING, description="全局总状态")
     sub_status: str | None = Field(default=None, description="当前子状态，用于前端进度展示")
-    
+
     # 细化重试控制，防止代码修复链路陷入无限回退死循环。
     # 这里的语义已经明确收窄：
     # - 只统计 Auditor <-> Debugger 之间的修复重试
@@ -493,27 +500,29 @@ class TaskGlobalState(StrictStateModel):
 
     # 作用：前端直接取这两个字段展示友好的报错，运维看这个字段秒懂卡在哪一步
     failure_type: str | None = Field(
-        default=None, 
-        description="失败类型/节点，如: routing / retrieval / coding / executing / other"
+        default=None, description="失败类型/节点，如: routing / retrieval / coding / executing / other"
     )
     error_message: str | None = Field(
-        default=None, 
-        description="失败极简描述（200字内），如 '代码重试3次仍未能修复语法错误'"
+        default=None, description="失败极简描述（200字内），如 '代码重试3次仍未能修复语法错误'"
     )
     idempotency_key: str | None = Field(default=None, description="客户端可选传入的幂等键")
     request_fingerprint: str | None = Field(default=None, description="用于校验同一幂等键下请求体是否一致")
-    
+
     created_at: datetime = Field(default_factory=get_utc_now, description="创建时间")
     updated_at: datetime = Field(default_factory=get_utc_now, description="更新时间")
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
+
 class RetrievalPlan(BaseModel):
     """DAG 传递给 Query Engine 的高级可控检索执行计划"""
+
     enable_qu: bool = Field(default=True, description="是否启用前置查询理解(QU)")
     enable_rewrite: bool = Field(default=True, description="是否启用 Query 重写")
     enable_filter: bool = Field(default=True, description="是否提取并下发 Filter")
-    recall_strategies: list[str] = Field(default=["bm25", "splade", "vector", "graph"], description="授权启用的召回通道")
+    recall_strategies: list[str] = Field(
+        default=["bm25", "splade", "vector", "graph"], description="授权启用的召回通道"
+    )
     routing_strategy: str = Field(default="hybrid", description="路由策略: rule / llm / hybrid")
     enable_rerank: bool = Field(default=True, description="是否启用交叉重排")
     top_k: int = Field(default=15, description="最终保留的文档片段数")
@@ -543,7 +552,9 @@ class ExecutionControlState(StrictStateModel):
             self,
             "node_checkpoints",
             {
-                str(name): checkpoint if isinstance(checkpoint, NodeCheckpointState) else NodeCheckpointState.model_validate(checkpoint)
+                str(name): checkpoint
+                if isinstance(checkpoint, NodeCheckpointState)
+                else NodeCheckpointState.model_validate(checkpoint)
                 for name, checkpoint in dict(self.node_checkpoints or {}).items()
             },
         )
@@ -589,7 +600,9 @@ class ExecutionKnowledgeState(StrictStateModel):
         if not isinstance(self.business_context, BusinessContextState):
             object.__setattr__(self, "business_context", BusinessContextState.model_validate(self.business_context))
         if not isinstance(self.knowledge_snapshot, KnowledgeSnapshotState):
-            object.__setattr__(self, "knowledge_snapshot", KnowledgeSnapshotState.model_validate(self.knowledge_snapshot))
+            object.__setattr__(
+                self, "knowledge_snapshot", KnowledgeSnapshotState.model_validate(self.knowledge_snapshot)
+            )
         if not isinstance(self.analysis_brief, AnalysisBriefState):
             object.__setattr__(self, "analysis_brief", AnalysisBriefState.model_validate(self.analysis_brief))
         return self
@@ -651,6 +664,7 @@ class ExecutionData(StrictStateModel):
 
     采用指针模式，防止黑板膨胀
     """
+
     task_id: str
     tenant_id: str
     workspace_id: str = Field(default="default_ws", description="当前任务所属的工作空间")
@@ -659,6 +673,7 @@ class ExecutionData(StrictStateModel):
     knowledge: ExecutionKnowledgeState = Field(default_factory=ExecutionKnowledgeState)
     static: ExecutionStaticState = Field(default_factory=ExecutionStaticState)
     dynamic: ExecutionDynamicState = Field(default_factory=ExecutionDynamicState)
+
     @model_validator(mode="after")
     def _coerce_typed_payloads(self) -> "ExecutionData":
         if not isinstance(self.control, ExecutionControlState):
@@ -708,6 +723,7 @@ class KnowledgeData(StrictStateModel):
         description="最近一次知识检索返回的 EvidencePacket 投影",
     )
     updated_at: datetime = Field(default_factory=get_utc_now)
+
     @property
     def parser_reports(self) -> list[dict[str, Any]]:
         # 不再额外持久化 parser_reports。
@@ -776,6 +792,7 @@ class MemoryData(StrictStateModel):
     workspace_preferences: list[WorkspacePreferenceState] = Field(default_factory=list)
     cache_hints: list[MemoryCacheHintState] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=get_utc_now)
+
     @model_validator(mode="after")
     def _coerce_typed_payloads(self) -> "MemoryData":
         object.__setattr__(

@@ -1,4 +1,5 @@
 """Skill harvesting node for both static and dynamic execution paths."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -46,7 +47,7 @@ def skill_harvester_node(state: Mapping[str, Any]) -> dict[str, Any]:
             candidate_copy["authorization"] = default_mcp_client.call_tool(
                 "skill_auth",
                 {
-                "skill": candidate_copy,
+                    "skill": candidate_copy,
                     "profile_name": task_governance_profile(execution_data.control.task_envelope, "reviewer"),
                 },
                 context={"tenant_id": tenant_id, "task_id": task_id, "workspace_id": execution_data.workspace_id},
@@ -67,8 +68,7 @@ def skill_harvester_node(state: Mapping[str, Any]) -> dict[str, Any]:
             )
             authorized_candidates.append(candidate_copy)
         approved_skills = [
-            descriptor.to_payload()
-            for descriptor in SkillRetriever.filter_approved(authorized_candidates)
+            descriptor.to_payload() for descriptor in SkillRetriever.filter_approved(authorized_candidates)
         ]
         MemoryService.store_harvest_result(
             tenant_id=tenant_id,

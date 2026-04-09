@@ -5,6 +5,7 @@ src/storage/repository/state_repo.py
 职责：
 持久化 DAG 引擎和 Blackboard 的运行状态，实现防崩溃、断点续传。
 """
+
 import json
 from datetime import datetime, timedelta
 from typing import Any
@@ -16,6 +17,7 @@ from src.common.utils import get_utc_now
 from src.storage.postgres_client import pg_client
 
 logger = get_logger(__name__)
+
 
 class StateRepo:
     _memory_store: dict[str, dict[str, dict[str, Any]]] = {}
@@ -68,7 +70,7 @@ class StateRepo:
     def _ensure_state_table(cls):
         if not pg_client.engine:
             return
-        
+
         sql = """
         CREATE TABLE IF NOT EXISTS kag_execution_states (
             tenant_id VARCHAR(255) NOT NULL,
@@ -420,15 +422,9 @@ class StateRepo:
     @classmethod
     def task_lease_owned_by(cls, task_id: str, owner_id: str) -> bool:
         return cls.task_lease_status(task_id, owner_id).get("status") == "owned"
-    
+
     @classmethod
-    def save_blackboard_state(
-        cls, 
-        tenant_id: str,
-        task_id: str,
-        workspace_id: str,
-        state_dict: dict[str, Any]
-    ):
+    def save_blackboard_state(cls, tenant_id: str, task_id: str, workspace_id: str, state_dict: dict[str, Any]):
         """将黑板数据序列化并落库，实现任务级持久化"""
         normalized_state = cls._normalize_state(state_dict)
 
@@ -438,7 +434,7 @@ class StateRepo:
             tenant_bucket[task_id] = normalized_state
             return
         cls._ensure_state_table()
-        
+
         sql = text("""
             INSERT INTO kag_execution_states (tenant_id, task_id, workspace_id, state_data, updated_at)
             VALUES (:tenant_id, :task_id, :workspace_id, :state_data, :updated_at)
@@ -458,9 +454,9 @@ class StateRepo:
                         "task_id": task_id,
                         "workspace_id": workspace_id,
                         # 避免 datetime 等特殊类型报错
-                        "state_data": json.dumps(normalized_state, default=str), 
-                        "updated_at": get_utc_now()
-                    }
+                        "state_data": json.dumps(normalized_state, default=str),
+                        "updated_at": get_utc_now(),
+                    },
                 )
             tenant_bucket = cls._memory_store.setdefault(tenant_id, {})
             tenant_bucket[task_id] = normalized_state
@@ -474,7 +470,7 @@ class StateRepo:
         cls._ensure_state_table()
         if not pg_client.engine:
             return cls._memory_store.get(tenant_id, {}).get(task_id)
-        
+
         sql = text("""
             SELECT state_data FROM kag_execution_states 
             WHERE tenant_id = :tenant_id AND task_id = :task_id
@@ -526,11 +522,7 @@ class StateRepo:
     @classmethod
     def list_blackboard_states(cls) -> list[dict[str, Any]]:
         """列出当前已持久化的所有黑板状态。"""
-        memory_items = [
-            state
-            for tenant_bucket in cls._memory_store.values()
-            for state in tenant_bucket.values()
-        ]
+        memory_items = [state for tenant_bucket in cls._memory_store.values() for state in tenant_bucket.values()]
 
         cls._require_backend("list_blackboard_states")
         cls._ensure_state_table()

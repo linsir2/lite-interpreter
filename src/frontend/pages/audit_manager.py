@@ -1,4 +1,5 @@
 """Audit log page for admin inspection."""
+
 from __future__ import annotations
 
 import httpx
@@ -69,9 +70,7 @@ def render_audit_manager() -> None:
                 return
             for record in records:
                 st.markdown(f"**{record.get('action', 'unknown')}**")
-                st.caption(
-                    f"outcome={record.get('outcome')} subject={record.get('subject')} role={record.get('role')}"
-                )
+                st.caption(f"outcome={record.get('outcome')} subject={record.get('subject')} role={record.get('role')}")
                 st.caption(
                     f"resource_type={record.get('resource_type')} resource_id={record.get('resource_id')} recorded_at={record.get('recorded_at')}"
                 )

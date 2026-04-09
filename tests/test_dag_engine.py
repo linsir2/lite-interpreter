@@ -1,4 +1,5 @@
 """Hybrid DAG routing and harvesting tests."""
+
 from unittest.mock import patch
 
 from src.blackboard import ExecutionData, MemoryData, execution_blackboard, global_blackboard, memory_blackboard
@@ -72,7 +73,13 @@ def test_router_can_load_historical_approved_skills():
     MemoryRepo.save_approved_skills(
         tenant_id,
         "ws_router_history",
-        [{"name": "historical_skill", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "historical_skill",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     task_id = global_blackboard.create_task(tenant_id, "ws_router_history", "placeholder")
     execution_blackboard.write(
@@ -170,12 +177,8 @@ def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
             task_id=task_id,
             workspace_id="ws_hybrid_long",
             inputs={
-                "structured_datasets": [
-                    {"file_name": "expenses.csv", "path": "/tmp/expenses.csv"}
-                ],
-                "business_documents": [
-                    {"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"}
-                ],
+                "structured_datasets": [{"file_name": "expenses.csv", "path": "/tmp/expenses.csv"}],
+                "business_documents": [{"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"}],
             },
         ),
     )
@@ -385,7 +388,9 @@ def test_dynamic_swarm_node_aborts_when_lease_is_lost_mid_event(monkeypatch):
 
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.ensure_task_lease_owned", fake_lease_guard)
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", fake_run)
-    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.default_mcp_client.call_tool", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.dynamic_swarm_node.default_mcp_client.call_tool", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.event_bus.publish", lambda **kwargs: "evt-1")
 
     try:
@@ -420,10 +425,10 @@ def test_data_inspector_persists_successful_schema_updates(tmp_path):
             workspace_id="ws_inspector",
             inputs={
                 "structured_datasets": [
-                {
-                    "file_name": "sales.csv",
-                    "path": str(csv_path),
-                }
+                    {
+                        "file_name": "sales.csv",
+                        "path": str(csv_path),
+                    }
                 ],
             },
         ),
@@ -491,8 +496,14 @@ def test_data_inspector_persists_partial_progress_before_later_failure(tmp_path,
         raise RuntimeError("duckdb failed")
 
     monkeypatch.setattr("src.dag_engine.nodes.data_inspector.duckdb.connect", fake_connect)
-    monkeypatch.setattr("src.dag_engine.nodes.data_inspector.pd.read_csv", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pandas failed")))
-    monkeypatch.setattr("src.dag_engine.nodes.data_inspector.fast_llm_call", lambda prompt: (_ for _ in ()).throw(RuntimeError("llm failed")))
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.data_inspector.pd.read_csv",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pandas failed")),
+    )
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.data_inspector.fast_llm_call",
+        lambda prompt: (_ for _ in ()).throw(RuntimeError("llm failed")),
+    )
 
     result = data_inspector_node(
         {
@@ -676,7 +687,14 @@ def test_static_nodes_form_minimal_safe_chain():
     MemoryRepo.save_approved_skills(
         tenant_id,
         "ws_static",
-        [{"name": "historical_skill_demo", "required_capabilities": ["knowledge_query"], "replay_cases": [{"case_id": "replay_hist_1"}], "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}}}],
+        [
+            {
+                "name": "historical_skill_demo",
+                "required_capabilities": ["knowledge_query"],
+                "replay_cases": [{"case_id": "replay_hist_1"}],
+                "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}},
+            }
+        ],
     )
     task_id = global_blackboard.create_task(tenant_id, "ws_static", "总结报销规则")
     execution_blackboard.write(
@@ -696,7 +714,9 @@ def test_static_nodes_form_minimal_safe_chain():
                     }
                 ],
             },
-            knowledge={"business_context": {"rules": ["报销金额需含税"], "metrics": [], "filters": [], "sources": ["rule.pdf"]}},
+            knowledge={
+                "business_context": {"rules": ["报销金额需含税"], "metrics": [], "filters": [], "sources": ["rule.pdf"]}
+            },
         ),
     )
     memory_blackboard.write(
@@ -706,7 +726,13 @@ def test_static_nodes_form_minimal_safe_chain():
             tenant_id=tenant_id,
             task_id=task_id,
             workspace_id="ws_static",
-            approved_skills=[{"name": "approved_skill_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}}}],
+            approved_skills=[
+                {
+                    "name": "approved_skill_demo",
+                    "required_capabilities": ["knowledge_query"],
+                    "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}},
+                }
+            ],
         ),
     )
     state = {
@@ -823,11 +849,35 @@ def test_summarizer_node_builds_static_final_response():
                     success=True,
                     trace_id="trace-summary-static",
                     duration_seconds=0.2,
-                    output="{\"status\":\"ok\",\"datasets\":[{\"file_name\":\"sales.csv\",\"row_count\":3,\"columns\":[\"a\",\"tax_amount\",\"contract_id\",\"biz_date\"],\"numeric_profiles\":[{\"column\":\"a\",\"mean\":2.0}],\"categorical_profiles\":[{\"column\":\"contract_id\",\"top_values\":[[\"A\",2]]}],\"date_profiles\":[{\"column\":\"biz_date\",\"min\":\"2024-01-01T00:00:00\",\"max\":\"2024-01-03T00:00:00\"}],\"group_summaries\":[{\"group_by\":\"contract_id\",\"measure\":\"a\",\"top_groups\":[[\"A\",4.0,2]]}],\"missing_counts\":{\"a\":0},\"tax_missing_count\":1,\"contract_missing_count\":1}],\"documents\":[{\"file_name\":\"rule.txt\",\"preview\":\"报销规则\",\"keyword_hits\":[\"报销规则\",\"上海\"]}],\"derived_findings\":[\"数据集 sales.csv 识别出 1 个数值列，可进行统计分析。\",\"数据集 sales.csv 识别出 1 个日期列，可进行趋势/时序分析。\",\"数据集 sales.csv 可按 contract_id 对 a 做分组统计。\"],\"rule_checks\":[{\"rule\":\"报销金额必须含税并上传合同\",\"issue_count\":2,\"warnings\":[\"sales.csv 存在 1 行税额缺失/为0\",\"sales.csv 存在 1 行合同字段缺失\"]}],\"metric_checks\":[{\"metric\":\"审批时效口径\",\"matched_columns\":[\"a\",\"biz_date\"],\"matched_groups\":[\"contract_id -> a\"],\"matched_date_columns\":[\"biz_date\"],\"highlights\":[\"sales.csv.a mean=2.0\",\"sales.csv.biz_date range=2024-01-01T00:00:00 -> 2024-01-03T00:00:00\",\"sales.csv 按 contract_id 分组后，A 的 a 最高=4.0\"]}],\"filter_checks\":[{\"filter\":\"上海\",\"matched_datasets\":[],\"matched_documents\":[\"rule.txt\"],\"matched_date_ranges\":[\"biz_date => 2024-01-01T00:00:00 -> 2024-01-03T00:00:00\"]}]}",
+                    output='{"status":"ok","datasets":[{"file_name":"sales.csv","row_count":3,"columns":["a","tax_amount","contract_id","biz_date"],"numeric_profiles":[{"column":"a","mean":2.0}],"categorical_profiles":[{"column":"contract_id","top_values":[["A",2]]}],"date_profiles":[{"column":"biz_date","min":"2024-01-01T00:00:00","max":"2024-01-03T00:00:00"}],"group_summaries":[{"group_by":"contract_id","measure":"a","top_groups":[["A",4.0,2]]}],"missing_counts":{"a":0},"tax_missing_count":1,"contract_missing_count":1}],"documents":[{"file_name":"rule.txt","preview":"报销规则","keyword_hits":["报销规则","上海"]}],"derived_findings":["数据集 sales.csv 识别出 1 个数值列，可进行统计分析。","数据集 sales.csv 识别出 1 个日期列，可进行趋势/时序分析。","数据集 sales.csv 可按 contract_id 对 a 做分组统计。"],"rule_checks":[{"rule":"报销金额必须含税并上传合同","issue_count":2,"warnings":["sales.csv 存在 1 行税额缺失/为0","sales.csv 存在 1 行合同字段缺失"]}],"metric_checks":[{"metric":"审批时效口径","matched_columns":["a","biz_date"],"matched_groups":["contract_id -> a"],"matched_date_columns":["biz_date"],"highlights":["sales.csv.a mean=2.0","sales.csv.biz_date range=2024-01-01T00:00:00 -> 2024-01-03T00:00:00","sales.csv 按 contract_id 分组后，A 的 a 最高=4.0"]}],"filter_checks":[{"filter":"上海","matched_datasets":[],"matched_documents":["rule.txt"],"matched_date_ranges":["biz_date => 2024-01-01T00:00:00 -> 2024-01-03T00:00:00"]}]}',
                 ),
             },
-            knowledge={"business_context": {"rules": ["rule1"], "metrics": ["审批时效口径"], "filters": ["上海"], "sources": ["rule.pdf"]}, "knowledge_snapshot": {"rewritten_query": "报销 规则 上海", "recall_strategies": ["bm25", "vector"], "cache_hit": True, "metadata": {"selected_count": 2}, "evidence_refs": ["chunk-1"]}},
-            inputs={"business_documents": [{"file_name": "rule.pdf", "path": "/tmp/rule.pdf", "status": "parsed", "parse_mode": "ocr+vision", "parser_diagnostics": {"image_description_count": 2}}]},
+            knowledge={
+                "business_context": {
+                    "rules": ["rule1"],
+                    "metrics": ["审批时效口径"],
+                    "filters": ["上海"],
+                    "sources": ["rule.pdf"],
+                },
+                "knowledge_snapshot": {
+                    "rewritten_query": "报销 规则 上海",
+                    "recall_strategies": ["bm25", "vector"],
+                    "cache_hit": True,
+                    "metadata": {"selected_count": 2},
+                    "evidence_refs": ["chunk-1"],
+                },
+            },
+            inputs={
+                "business_documents": [
+                    {
+                        "file_name": "rule.pdf",
+                        "path": "/tmp/rule.pdf",
+                        "status": "parsed",
+                        "parse_mode": "ocr+vision",
+                        "parser_diagnostics": {"image_description_count": 2},
+                    }
+                ]
+            },
         ),
     )
     memory_blackboard.write(
@@ -837,7 +887,13 @@ def test_summarizer_node_builds_static_final_response():
             tenant_id=tenant_id,
             task_id=task_id,
             workspace_id="ws_summary_static",
-            approved_skills=[{"name": "approved_skill_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}}}],
+            approved_skills=[
+                {
+                    "name": "approved_skill_demo",
+                    "required_capabilities": ["knowledge_query"],
+                    "promotion": {"status": "approved", "provenance": {"validation_status": "validated"}},
+                }
+            ],
         ),
     )
     result = summarizer_node(
@@ -886,7 +942,12 @@ def test_summarizer_node_builds_dynamic_final_response():
             tenant_id=tenant_id,
             task_id=task_id,
             workspace_id="ws_summary_dynamic",
-            dynamic={"summary": "dynamic done", "status": "completed", "trace_refs": ["trace-1"], "artifacts": ["/tmp/a.md"]},
+            dynamic={
+                "summary": "dynamic done",
+                "status": "completed",
+                "trace_refs": ["trace-1"],
+                "artifacts": ["/tmp/a.md"],
+            },
         ),
     )
     result = summarizer_node(

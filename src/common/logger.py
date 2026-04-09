@@ -7,6 +7,7 @@
 
 3. 提供get_logger函数，所有模块直接调用
 """
+
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -15,10 +16,11 @@ from config.settings import DATETIME_FORMAT, LOG_LEVEL, LOG_MAX_LENGTH, PROJECT_
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+
 def get_logger(name: str) -> logging.Logger:
     """
     配置日志器（添加轮转、统一格式）
-    
+
     :param name: 日志器名称
     :return: 配置后的日志器
     """
@@ -32,7 +34,7 @@ def get_logger(name: str) -> logging.Logger:
     # 格式器：统一trace_id字段
     formatter = logging.Formatter(
         "%(asctime)s - %(name)s - [%(levelname)s] - tenant:%(tenant_id)s | ws:%(workspace_id)s | trace:%(trace_id)s - %(message)s",
-        datefmt=DATETIME_FORMAT
+        datefmt=DATETIME_FORMAT,
     )
 
     # 控制台处理器
@@ -43,10 +45,7 @@ def get_logger(name: str) -> logging.Logger:
     # 文件轮转处理器（修改：添加日志轮转，避免日志文件过大）
     log_file_path = LOG_DIR / "system.log"
     file_handler = RotatingFileHandler(
-        filename=str(log_file_path),
-        maxBytes=LOG_MAX_LENGTH,  
-        backupCount=10, 
-        encoding="utf-8"
+        filename=str(log_file_path), maxBytes=LOG_MAX_LENGTH, backupCount=10, encoding="utf-8"
     )
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)

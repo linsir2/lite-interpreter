@@ -1,11 +1,12 @@
 """通用工具函数"""
+
 from __future__ import annotations
 
 import datetime
+import os
 import re
 import time
 import uuid
-import os
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -64,7 +65,12 @@ def _count_with_litellm(
     model_name: str,
     messages: list[dict[str, Any]] | None = None,
 ) -> int | None:
-    if str(os.getenv("LITE_INTERPRETER_DISABLE_LITELLM_TOKEN_COUNTER", "")).strip().lower() in {"1", "true", "yes", "on"}:
+    if str(os.getenv("LITE_INTERPRETER_DISABLE_LITELLM_TOKEN_COUNTER", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
         return None
     try:
         from litellm import token_counter
@@ -85,10 +91,7 @@ def _count_with_litellm(
 
 def count_message_tokens_exact(messages: Sequence[dict[str, Any]], model_name: str | None = None) -> int:
     """尽量按目标模型精确计数，失败时降级到启发式估算。"""
-    normalized = [
-        {"role": str(item.get("role", "user")), "content": str(item.get("content", ""))}
-        for item in messages
-    ]
+    normalized = [{"role": str(item.get("role", "user")), "content": str(item.get("content", ""))} for item in messages]
     if model_name:
         exact = _count_with_litellm(model_name=model_name, messages=normalized)
         if exact is not None:

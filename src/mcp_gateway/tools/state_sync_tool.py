@@ -1,4 +1,5 @@
 """Blackboard state sync helpers for DAG and dynamic-swarm writeback."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

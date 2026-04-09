@@ -1,4 +1,5 @@
 """Tests for the in-process MCP gateway."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -9,7 +10,9 @@ from src.mcp_gateway import MCPClient, default_mcp_server
 
 def test_mcp_server_lists_registered_tools():
     names = [tool["name"] for tool in default_mcp_server.list_tools()]
-    assert {"knowledge_query", "sandbox_exec", "state_sync", "dynamic_trace", "memory_sync", "skill_auth"}.issubset(set(names))
+    assert {"knowledge_query", "sandbox_exec", "state_sync", "dynamic_trace", "memory_sync", "skill_auth"}.issubset(
+        set(names)
+    )
 
 
 def test_mcp_client_can_call_skill_auth():
@@ -68,8 +71,12 @@ def test_mcp_client_state_sync_restores_execution_state_before_patch():
 
 
 def test_mcp_sandbox_exec_forces_ast_audit_even_if_caller_disables_it():
-    with patch("src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox", return_value={"success": True}) as raw_mock:
-        with patch("src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox_with_audit", return_value={"success": False}) as audit_mock:
+    with patch(
+        "src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox", return_value={"success": True}
+    ) as raw_mock:
+        with patch(
+            "src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox_with_audit", return_value={"success": False}
+        ) as audit_mock:
             default_mcp_server.call_tool(
                 "sandbox_exec",
                 {"code": "print('x')", "tenant_id": "tenant_mcp", "use_audit": False},

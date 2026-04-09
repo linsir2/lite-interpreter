@@ -11,12 +11,13 @@
 第一次进入仓库，推荐顺序：
 
 1. `README.md`
-2. `directory.txt`
-3. `docs/architecture.md`
-4. `docs/runtime_support_matrix.md`
-5. `config/settings.py`
-6. `src/common/contracts.py`
-7. `src/blackboard/schema.py`
+2. `docs/project_status.md`
+3. `directory.txt`
+4. `docs/architecture.md`
+5. `docs/runtime_support_matrix.md`
+6. `config/settings.py`
+7. `src/common/contracts.py`
+8. `src/blackboard/schema.py`
 
 这几步看完后，你会知道：
 

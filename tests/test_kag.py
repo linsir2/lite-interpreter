@@ -1,4 +1,4 @@
-
+import pytest
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.knowledge_blackboard import knowledge_blackboard
@@ -6,6 +6,7 @@ from src.blackboard.schema import ExecutionData, RetrievalPlan
 from src.common import EvidencePacket
 from src.dag_engine.nodes.context_builder_node import context_builder_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
+from src.kag.builder.chunker import ChunkingStrategy, DocumentChunker
 from src.kag.builder.classifier import DocProcessClass, DocumentClassifier
 from src.kag.builder.orchestrator import KagBuilderOrchestrator
 from src.kag.builder.parser import DocumentParser
@@ -46,15 +47,21 @@ def test_kag_orchestrator_small_document(monkeypatch, tmp_path):
 def test_query_engine_uses_rrf_and_rerank(monkeypatch):
     monkeypatch.setattr(
         "src.kag.retriever.recall.bm25_search.recall",
-        lambda *args, **kwargs: [{"chunk_id": "a", "text": "报销规则", "score": 1.0, "source": "bm25", "retrieval_type": "bm25"}],
+        lambda *args, **kwargs: [
+            {"chunk_id": "a", "text": "报销规则", "score": 1.0, "source": "bm25", "retrieval_type": "bm25"}
+        ],
     )
     monkeypatch.setattr(
         "src.kag.retriever.recall.hybrid_search.vector_recall",
-        lambda *args, **kwargs: [{"chunk_id": "a", "text": "报销规则", "score": 0.9, "source": "vector", "retrieval_type": "vector"}],
+        lambda *args, **kwargs: [
+            {"chunk_id": "a", "text": "报销规则", "score": 0.9, "source": "vector", "retrieval_type": "vector"}
+        ],
     )
     monkeypatch.setattr(
         "src.kag.retriever.recall.graph_search.recall",
-        lambda *args, **kwargs: [{"chunk_id": "b", "text": "审批链路", "score": 0.8, "source": "graph", "retrieval_type": "graph"}],
+        lambda *args, **kwargs: [
+            {"chunk_id": "b", "text": "审批链路", "score": 0.8, "source": "graph", "retrieval_type": "graph"}
+        ],
     )
 
     plan = RetrievalPlan(recall_strategies=["bm25", "vector", "graph"], top_k=3)
@@ -67,7 +74,9 @@ def test_query_engine_uses_rrf_and_rerank(monkeypatch):
 def test_query_engine_returns_evidence_packet(monkeypatch):
     monkeypatch.setattr(
         "src.kag.retriever.recall.bm25_search.recall",
-        lambda *args, **kwargs: [{"chunk_id": "a", "text": "报销规则", "score": 1.0, "source": "bm25", "retrieval_type": "bm25"}],
+        lambda *args, **kwargs: [
+            {"chunk_id": "a", "text": "报销规则", "score": 1.0, "source": "bm25", "retrieval_type": "bm25"}
+        ],
     )
     monkeypatch.setattr(
         "src.kag.retriever.recall.hybrid_search.vector_recall",
@@ -120,8 +129,20 @@ def test_context_builder_writes_business_context():
         "workspace_id": "default_ws",
         "input_query": "请总结报销规则和指标口径",
         "raw_retrieved_candidates": [
-            {"chunk_id": "c1", "text": "报销规则：发票金额必须含税。", "score": 1.0, "source": "rule.pdf", "retrieval_type": "bm25"},
-            {"chunk_id": "c2", "text": "指标口径：审批时效按提交到通过计算。", "score": 0.9, "source": "metric.pdf", "retrieval_type": "vector"},
+            {
+                "chunk_id": "c1",
+                "text": "报销规则：发票金额必须含税。",
+                "score": 1.0,
+                "source": "rule.pdf",
+                "retrieval_type": "bm25",
+            },
+            {
+                "chunk_id": "c2",
+                "text": "指标口径：审批时效按提交到通过计算。",
+                "score": 0.9,
+                "source": "metric.pdf",
+                "retrieval_type": "vector",
+            },
         ],
         "next_actions": [],
         "retry_count": 0,
@@ -153,16 +174,16 @@ def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
             tenant_id=tenant_id,
             knowledge={
                 "knowledge_snapshot": {
-                "hits": [
-                    {
-                        "chunk_id": "c9",
-                        "text": "报销规则：合同必须上传。",
-                        "score": 1.0,
-                        "source": "rule.pdf",
-                        "retrieval_type": "bm25",
-                    }
-                ],
-                "evidence_refs": ["c9"],
+                    "hits": [
+                        {
+                            "chunk_id": "c9",
+                            "text": "报销规则：合同必须上传。",
+                            "score": 1.0,
+                            "source": "rule.pdf",
+                            "retrieval_type": "bm25",
+                        }
+                    ],
+                    "evidence_refs": ["c9"],
                 },
             },
         ),
@@ -207,8 +228,12 @@ def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
         task_id,
         ExecutionData(task_id=task_id, tenant_id=tenant_id, workspace_id="ws"),
     )
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(
         "src.kag.retriever.query_engine.QueryEngine.execute_with_evidence",
         lambda *args, **kwargs: EvidencePacket(
@@ -216,7 +241,15 @@ def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
             rewritten_query="规则",
             tenant_id=tenant_id,
             workspace_id="ws",
-            hits=[{"chunk_id": "chunk-9", "text": "规则文本", "score": 1.0, "source": "rule.pdf", "retrieval_type": "bm25"}],
+            hits=[
+                {
+                    "chunk_id": "chunk-9",
+                    "text": "规则文本",
+                    "score": 1.0,
+                    "source": "rule.pdf",
+                    "retrieval_type": "bm25",
+                }
+            ],
             evidence_refs=["chunk-9"],
             recall_strategies=["bm25", "splade"],
             metadata={"selected_count": 1},
@@ -253,14 +286,20 @@ def test_kag_retriever_persists_document_progress_incrementally(monkeypatch, tmp
             task_id=task_id,
             tenant_id=tenant_id,
             workspace_id="ws",
-            inputs={"business_documents": [
-                {"file_name": "rule-a.txt", "path": str(first_doc), "status": "pending"},
-                {"file_name": "rule-b.txt", "path": str(second_doc), "status": "pending"},
-            ]},
+            inputs={
+                "business_documents": [
+                    {"file_name": "rule-a.txt", "path": str(first_doc), "status": "pending"},
+                    {"file_name": "rule-b.txt", "path": str(second_doc), "status": "pending"},
+                ]
+            },
         ),
     )
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(
         "src.kag.retriever.query_engine.QueryEngine.execute_with_evidence",
         lambda *args, **kwargs: EvidencePacket(
@@ -312,13 +351,19 @@ def test_kag_retriever_blocks_when_new_document_ingest_fails(monkeypatch, tmp_pa
             task_id=task_id,
             tenant_id=tenant_id,
             workspace_id="ws",
-            inputs={"business_documents": [
-                {"file_name": "rule-fail.txt", "path": str(failed_doc), "status": "pending"},
-            ]},
+            inputs={
+                "business_documents": [
+                    {"file_name": "rule-fail.txt", "path": str(failed_doc), "status": "pending"},
+                ]
+            },
         ),
     )
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
-    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False
+    )
+    monkeypatch.setattr(
+        "src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False
+    )
     monkeypatch.setattr(
         "src.kag.builder.orchestrator.KagBuilderOrchestrator.ingest_documents",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ingest failed")),
@@ -355,8 +400,20 @@ def test_context_builder_applies_final_budget_fit(monkeypatch):
         "input_query": "请总结规则",
         "token_budget": 128,
         "raw_retrieved_candidates": [
-            {"chunk_id": "c1", "text": "规则一：金额必须含税。", "score": 1.0, "source": "rule.pdf", "retrieval_type": "bm25"},
-            {"chunk_id": "c2", "text": "规则二：必须上传合同。", "score": 0.9, "source": "rule.pdf", "retrieval_type": "bm25"},
+            {
+                "chunk_id": "c1",
+                "text": "规则一：金额必须含税。",
+                "score": 1.0,
+                "source": "rule.pdf",
+                "retrieval_type": "bm25",
+            },
+            {
+                "chunk_id": "c2",
+                "text": "规则二：必须上传合同。",
+                "score": 0.9,
+                "source": "rule.pdf",
+                "retrieval_type": "bm25",
+            },
         ],
         "next_actions": [],
         "retry_count": 0,
@@ -378,6 +435,48 @@ def test_document_parser_returns_typed_document(tmp_path):
     assert isinstance(parsed, ParsedDocument)
     assert parsed.sections
     assert parsed.sections[0].level == 1
+
+
+def test_document_parser_distinguishes_title_and_heading_levels(tmp_path):
+    pytest.importorskip("docling.document_converter")
+
+    doc_file = tmp_path / "outline.md"
+    doc_file.write_text(
+        "# Title\n\nIntro paragraph.\n\n## Section One\n\nSection one body.\n\n### Subsection A\n\nSubsection body.\n",
+        encoding="utf-8",
+    )
+
+    parsed = DocumentParser.parse(str(doc_file), tenant_id="tenant_a", upload_batch_id="batch_1")
+
+    assert [section.title for section in parsed.sections] == ["Title", "Section One", "Subsection A"]
+    assert [section.level for section in parsed.sections] == [0, 1, 2]
+    assert parsed.sections[0].metadata["section_kind"] == "document_title"
+    assert parsed.sections[1].metadata["docling_level"] == 1
+    assert parsed.sections[2].metadata["docling_level"] == 2
+
+
+def test_document_chunker_detects_docling_outline_structure():
+    strategy = DocumentChunker._select_strategy(
+        sections=[
+            {
+                "id": "s1",
+                "title": "Title",
+                "content": "intro",
+                "level": 0,
+                "metadata": {"section_kind": "document_title"},
+            },
+            {
+                "id": "s2",
+                "title": "Section One",
+                "content": "body",
+                "level": 1,
+                "metadata": {"section_kind": "section_header"},
+            },
+        ],
+        content="intro\nbody",
+    )
+
+    assert strategy == ChunkingStrategy.LAYOUT_AWARE
 
 
 def test_document_parser_infers_scanned_pdf_profile(monkeypatch):
@@ -446,7 +545,17 @@ def test_document_parser_builds_default_pdf_converter_profile(monkeypatch, tmp_p
 
     monkeypatch.setattr(
         "src.kag.builder.parser.DocumentParser.infer_pdf_parse_profile",
-        lambda _: type("Profile", (), {"mode": "ocr", "use_ocr": True, "use_picture_description": False, "generate_picture_images": False, "diagnostics": {"scanned_like": True}})(),
+        lambda _: type(
+            "Profile",
+            (),
+            {
+                "mode": "ocr",
+                "use_ocr": True,
+                "use_picture_description": False,
+                "generate_picture_images": False,
+                "diagnostics": {"scanned_like": True},
+            },
+        )(),
     )
     monkeypatch.setattr("docling.document_converter.DocumentConverter", FakeConverter)
 
@@ -472,3 +581,61 @@ def test_document_parser_extracts_picture_description_into_images_and_content():
     content = DocumentParser._augment_content_with_image_descriptions("正文内容", images)
     assert "图片说明" in content
     assert "流程图" in content
+
+
+def test_document_parser_extracts_table_title_from_docling_caption():
+    class FakeTableData(list):
+        def __init__(self):
+            super().__init__([["A", "B"], ["1", "2"]])
+            self.num_rows = 2
+            self.num_cols = 2
+
+    class FakeTable:
+        data = FakeTableData()
+        prov = []
+
+        def caption_text(self, document):
+            return "统计表"
+
+    tables = DocumentParser._extract_tables([FakeTable()], document=object())
+    assert tables[0].title == "统计表"
+    assert tables[0].rows == 2
+    assert tables[0].columns == 2
+
+
+def test_document_parser_extracts_picture_caption_and_meta_description():
+    class FakeBBox:
+        def model_dump(self):
+            return {"l": 1, "t": 2, "r": 3, "b": 4}
+
+    class FakeProv:
+        bbox = FakeBBox()
+        page_no = 1
+
+    class FakeSize:
+        def model_dump(self):
+            return {"width": 256, "height": 128}
+
+    class FakeImageRef:
+        size = FakeSize()
+
+    class FakeDescription:
+        text = "图中展示了审批流转。"
+
+    class FakeMeta:
+        description = FakeDescription()
+
+    class FakeImage:
+        meta = FakeMeta()
+        annotations = []
+        prov = [FakeProv()]
+        image = FakeImageRef()
+
+        def caption_text(self, document):
+            return "审批流程图"
+
+    images = DocumentParser._extract_images([FakeImage()], document=object())
+    assert images[0].caption == "审批流程图"
+    assert images[0].description == "图中展示了审批流转。"
+    assert images[0].position == {"l": 1, "t": 2, "r": 3, "b": 4}
+    assert images[0].size == {"width": 256, "height": 128}

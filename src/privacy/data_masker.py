@@ -1,4 +1,5 @@
 """Recursive payload masking helpers used before data leaves the control plane."""
+
 from __future__ import annotations
 
 from collections import Counter

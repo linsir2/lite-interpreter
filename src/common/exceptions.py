@@ -5,6 +5,7 @@
 
 class BaseAppException(Exception):
     """全局基础异常类（所有自定义异常的基类）"""
+
     error_type: str = "base_error"
 
     def __init__(self, message: str, trace_id: str | None = None):

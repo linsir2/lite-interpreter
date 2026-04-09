@@ -1,4 +1,5 @@
 """In-process MCP-style tool registry for lite-interpreter."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -43,7 +44,9 @@ class MCPToolServer:
     def list_tools(self) -> list[dict[str, str]]:
         return [tool.metadata() for tool in sorted(self._tools.values(), key=lambda item: item.name)]
 
-    def call_tool(self, name: str, arguments: dict[str, Any] | None = None, context: dict[str, Any] | None = None) -> Any:
+    def call_tool(
+        self, name: str, arguments: dict[str, Any] | None = None, context: dict[str, Any] | None = None
+    ) -> Any:
         normalized = str(name).strip()
         if normalized not in self._tools:
             raise KeyError(f"Unknown MCP tool: {name}")

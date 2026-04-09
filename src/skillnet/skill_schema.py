@@ -1,4 +1,5 @@
 """Skill schema models used by SkillNet and capability-aware governance."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

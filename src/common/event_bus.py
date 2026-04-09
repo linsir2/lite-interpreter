@@ -7,6 +7,7 @@
 
 - 线程安全，支持多并发
 """
+
 import asyncio
 import contextlib
 import datetime
@@ -25,14 +26,15 @@ from src.privacy import mask_payload
 
 logger = get_logger(__name__)
 
+
 @dataclass
 class Event:
     event_id: str
-    topic: EventTopic # 事件类型
+    topic: EventTopic  # 事件类型
     tenant_id: str
     task_id: str
     workspace_id: str  # 🚀 新增：让事件具备空间隔离属性
-    payload: dict[str, Any] # 事件上下文数据
+    payload: dict[str, Any]  # 事件上下文数据
     timestamp: datetime.datetime
     trace_id: str
 
@@ -48,8 +50,10 @@ class Event:
             payload=dict(self.payload),
         )
 
+
 class AsyncEventBus:
     """异步事件总线单例"""
+
     _instance: Optional["AsyncEventBus"] = None
     _lock = threading.Lock()
 
@@ -60,10 +64,10 @@ class AsyncEventBus:
                     cls._instance = super().__new__(cls)
                     cls._instance._init()
         return cls._instance
-    
+
     def _init(self):
         """初始化"""
-         # 订阅者映射：EventTopic -> 回调函数列表
+        # 订阅者映射：EventTopic -> 回调函数列表
         self._subscribers: dict[EventTopic, list[Callable[[Event], None]]] = {}
         # 全局订阅者：接收所有事件
         self._global_subscribers: list[Callable[[Event], None]] = []
@@ -98,7 +102,7 @@ class AsyncEventBus:
         """后台事件循环"""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        
+
         # queue属于后台线程，不是主线程，要实现queue传递信息，需要跨线程
         self._event_queue = asyncio.Queue()
         # 启动事件处理协程
@@ -116,7 +120,7 @@ class AsyncEventBus:
                 with contextlib.suppress(Exception):
                     self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self._loop.close()
-    
+
     async def _process_events(self):
         """持续处理队列中的事件"""
         while self._running or (self._event_queue is not None and not self._event_queue.empty()):
@@ -134,7 +138,7 @@ class AsyncEventBus:
             try:
                 await self._dispatch_event(event)
             except Exception as e:
-                logger.error(f"事件处理异常: {str(e)}", extra={"trace_id": getattr(event, 'trace_id', 'system')})
+                logger.error(f"事件处理异常: {str(e)}", extra={"trace_id": getattr(event, "trace_id", "system")})
             finally:
                 self._event_queue.task_done()
 
@@ -145,7 +149,7 @@ class AsyncEventBus:
             callbacks = self._global_subscribers.copy()
             if event.topic in self._subscribers:
                 callbacks.extend(self._subscribers[event.topic])
-        
+
         pending_callbacks: list[tuple[Callable[[Event], None], asyncio.Task[Any]]] = []
         for callback in callbacks:
             try:
@@ -169,7 +173,7 @@ class AsyncEventBus:
                     f"事件回调执行失败 event={event.topic.value}, callback={getattr(callback, '__name__', repr(callback))}: {result}",
                     extra={"trace_id": event.trace_id},
                 )
-    
+
     def publish(
         self,
         topic: EventTopic,
@@ -177,11 +181,11 @@ class AsyncEventBus:
         task_id: str,
         workspace_id: str,
         payload: dict[str, Any],
-        trace_id: str | None = None, 
+        trace_id: str | None = None,
     ) -> str:
         """
         发布事件（非阻塞）
-        
+
         :return: 事件ID
         """
         trace_id = trace_id or generate_uuid()
@@ -230,7 +234,7 @@ class AsyncEventBus:
     def _discard_pending_put(self, future: Any) -> None:
         with self._lock:
             self._pending_puts.discard(future)
-    
+
     def subscribe(self, topic: EventTopic, callback: Callable[[Event], None]) -> None:
         """订阅指定类型的事件"""
         self.ensure_running()
@@ -256,7 +260,7 @@ class AsyncEventBus:
                 f"事件取消订阅成功 event_type={topic.value}",
                 extra={"trace_id": "system"},
             )
-    
+
     def subscribe_all(self, callback: Callable[[Event], None]):
         """订阅所有事件（用于日志、监控"""
         self.ensure_running()
@@ -277,7 +281,7 @@ class AsyncEventBus:
                 "全局事件取消订阅成功",
                 extra={"trace_id": "system"},
             )
-    
+
     def stop(self, timeout: float = 5.0):
         """停止事件总线（服务关闭时调用）"""
         if not self._loop or not self._executor.is_alive():
@@ -291,6 +295,7 @@ class AsyncEventBus:
             with contextlib.suppress(Exception):
                 future.result(timeout=timeout)
         if self._event_queue is not None:
+
             async def _shutdown() -> None:
                 await self._event_queue.join()
                 if self._processor_task and not self._processor_task.done():

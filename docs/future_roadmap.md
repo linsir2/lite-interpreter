@@ -16,10 +16,7 @@
 - 隐私脱敏 hooks
 - 上传、知识资产页、技能页、任务台
 
-当前测试基线已经达到：
-
-- `conda run -n lite_interpreter python -m pytest -q`
-- `154 passed, 3 skipped`
+当前验证基线与成熟度分层统一记录在 `docs/project_status.md`，本文件只讨论后续路线，不再单独维护测试结果数字。
 
 ## 2. 近期路线图
 

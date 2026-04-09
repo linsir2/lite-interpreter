@@ -6,6 +6,7 @@ Qdrant 向量数据库客户端
 KAG 约定仅把经过 MRL 截断后的叶子块向量写入 Qdrant，因此 collection 维度应与
 MRL_DIMENSION 保持一致，而不是原始 embedding 维度。
 """
+
 from __future__ import annotations
 
 from typing import Any

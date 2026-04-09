@@ -1,4 +1,5 @@
 """Tests for execution resource endpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -319,9 +320,7 @@ def test_list_execution_tool_calls_returns_runtime_tool_calls():
 
 def test_list_execution_artifacts_returns_404_for_missing_execution():
     response = asyncio.run(
-        list_execution_artifacts(
-            _make_request("/api/executions/missing/artifacts", execution_id="missing")
-        )
+        list_execution_artifacts(_make_request("/api/executions/missing/artifacts", execution_id="missing"))
     )
     assert response.status_code == 404
 

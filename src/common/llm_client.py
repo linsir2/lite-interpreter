@@ -1,4 +1,5 @@
 """Unified LiteLLM client for DashScope-backed chat and embeddings."""
+
 from __future__ import annotations
 
 import asyncio
@@ -35,8 +36,8 @@ class LiteLLMClient:
         if not config_path.exists():
             raise FileNotFoundError(f"LiteLLM config not found: {config_path}")
 
-        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {} # 读取
-        model_list = raw_config.get("model_list", []) 
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}  # 读取
+        model_list = raw_config.get("model_list", [])
         configs: dict[str, LiteLLMModelConfig] = {}
         for item in model_list:
             alias = str(item.get("model_name"))

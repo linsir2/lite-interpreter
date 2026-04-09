@@ -1,4 +1,5 @@
 """Append-only task event journal used for SSE replay and audit."""
+
 from __future__ import annotations
 
 import threading

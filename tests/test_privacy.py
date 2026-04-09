@@ -1,4 +1,5 @@
 """Tests for privacy masking and redaction hooks."""
+
 from __future__ import annotations
 
 from src.dynamic_engine.blackboard_context import build_dynamic_context

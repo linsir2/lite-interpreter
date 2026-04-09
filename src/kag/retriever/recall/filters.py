@@ -1,4 +1,5 @@
 """检索过滤器工具。"""
+
 from __future__ import annotations
 
 from typing import Any

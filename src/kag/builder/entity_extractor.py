@@ -3,6 +3,7 @@
 
 为了避免幻觉，默认优先使用强约束规则；若未来接入真实 LLM，也必须返回同构结构。
 """
+
 from __future__ import annotations
 
 import re
@@ -143,7 +144,9 @@ class EntityExtractor:
                 unique[key] = entity
         return list(unique.values())
 
-    def _convert_to_entity_nodes(self, extracted_entities: list[ExtractedEntity], doc_id: str, chunk_id: str) -> list[EntityNode]:
+    def _convert_to_entity_nodes(
+        self, extracted_entities: list[ExtractedEntity], doc_id: str, chunk_id: str
+    ) -> list[EntityNode]:
         nodes: list[EntityNode] = []
         for entity in extracted_entities:
             nodes.append(

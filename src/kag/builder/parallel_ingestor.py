@@ -1,4 +1,5 @@
 """KAG 并行文档预处理。"""
+
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,7 +36,9 @@ class ParallelIngestor:
             return parsed
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_parse, path): path for path in doc_paths}  # 期物，每个path都会给一个标识，票据，非阻塞对象
+            futures = {
+                executor.submit(_parse, path): path for path in doc_paths
+            }  # 期物，每个path都会给一个标识，票据，非阻塞对象
             for future in as_completed(futures):
                 path = futures[future]
                 try:

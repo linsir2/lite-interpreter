@@ -1,11 +1,11 @@
-
 from pydantic import BaseModel
 
 from src.common.contracts import ExecutionRecord
 
 
-class AuditResult(BaseModel): 
+class AuditResult(BaseModel):
     """审计结果类型注解"""
+
     safe: bool
     reason: str
     risk_type: str | None = None
@@ -13,6 +13,7 @@ class AuditResult(BaseModel):
     source_config: str | None = None
     trace_id: str
     duration_seconds: float
+
 
 class SandboxResult(BaseModel):
     success: bool

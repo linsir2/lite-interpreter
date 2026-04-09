@@ -1,15 +1,16 @@
 """Tests for API authentication and auth-bound scope handling."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 
 from src.api.auth import AuthContext, AuthGrant, authenticate_request, request_bearer_token
+from src.api.routers.analysis_router import create_task, get_task_result
 from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
 from src.api.routers.policy_router import get_harness_policy
 from src.api.routers.session_router import get_session_me, login_session
 from src.api.routers.sse_router import trigger_demo_trace
-from src.api.routers.analysis_router import create_task, get_task_result
 from src.blackboard import ExecutionData, GlobalStatus, execution_blackboard, global_blackboard
 from starlette.requests import Request
 

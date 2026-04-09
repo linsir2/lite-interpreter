@@ -1,4 +1,5 @@
 """Upload and lightweight asset-inspection endpoints."""
+
 from __future__ import annotations
 
 import hashlib
@@ -73,7 +74,9 @@ def _append_uploaded_asset(
             )
             for item in execution_data.inputs.structured_datasets
         }
-        if (file_sha256, file_name, file_path) in existing or any(item[0] == file_sha256 and file_sha256 for item in existing):
+        if (file_sha256, file_name, file_path) in existing or any(
+            item[0] == file_sha256 and file_sha256 for item in existing
+        ):
             return execution_data
         execution_data.inputs.structured_datasets.append(
             StructuredDatasetState(
@@ -96,7 +99,9 @@ def _append_uploaded_asset(
             )
             for item in execution_data.inputs.business_documents
         }
-        if (file_sha256, file_name, file_path) in existing or any(item[0] == file_sha256 and file_sha256 for item in existing):
+        if (file_sha256, file_name, file_path) in existing or any(
+            item[0] == file_sha256 and file_sha256 for item in existing
+        ):
             return execution_data
         execution_data.inputs.business_documents.append(
             BusinessDocumentState(
@@ -431,7 +436,12 @@ async def upload_asset(request: Request) -> JSONResponse:
             except ValueError:
                 _cleanup_temp_upload(temp_path)
                 return JSONResponse(
-                    {"error": "file_name_conflict", "file_name": safe_name, "tenant_id": tenant_id, "workspace_id": workspace_id},
+                    {
+                        "error": "file_name_conflict",
+                        "file_name": safe_name,
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                    },
                     status_code=409,
                 )
             if deduplicated:
@@ -442,7 +452,12 @@ async def upload_asset(request: Request) -> JSONResponse:
                 except ValueError:
                     _cleanup_temp_upload(temp_path)
                     return JSONResponse(
-                        {"error": "file_name_conflict", "file_name": safe_name, "tenant_id": tenant_id, "workspace_id": workspace_id},
+                        {
+                            "error": "file_name_conflict",
+                            "file_name": safe_name,
+                            "tenant_id": tenant_id,
+                            "workspace_id": workspace_id,
+                        },
                         status_code=409,
                     )
             if asset_kind == "business_document":
@@ -567,10 +582,7 @@ async def list_knowledge_assets(request: Request) -> JSONResponse:
             if existing.get("status") != "parsed" and candidate.get("status") == "parsed":
                 business_assets_by_path[asset_key] = candidate
                 continue
-            if (
-                existing.get("parse_mode") == "default"
-                and candidate.get("parse_mode") != "default"
-            ):
+            if existing.get("parse_mode") == "default" and candidate.get("parse_mode") != "default":
                 business_assets_by_path[asset_key] = candidate
     assets.extend(business_assets_by_path.values())
 

@@ -1,4 +1,5 @@
 """Tests for LiteLLM + DashScope client configuration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -32,9 +33,7 @@ def test_litellm_client_achat_prefers_async_api():
         completion=lambda **_: {"choices": [{"message": {"content": "sync"}}]},
     )
     with patch.dict("sys.modules", {"litellm": fake_module}):
-        content = asyncio.run(
-            LiteLLMClient.achat("fast_model", [{"role": "user", "content": "hello"}])
-        )
+        content = asyncio.run(LiteLLMClient.achat("fast_model", [{"role": "user", "content": "hello"}]))
     assert content == "async-ok"
 
 

@@ -10,6 +10,7 @@
 
 - 直接执行命令时用 `conda run -n lite_interpreter ...`
 - 长时间本地调试时可先 `conda activate lite_interpreter`
+- 阅读当前成熟度、测试基线与非目标时，优先看 `docs/project_status.md`
 
 ## 2. 开发原则
 
@@ -178,5 +179,6 @@ conda run -n lite_interpreter python -m pytest -q
 - 架构边界变动：更新 `docs/architecture.md`
 - 启动命令变动：更新 `README.md` 与 `docs/deployment.md`
 - 项目阶段变化：更新 `docs/project_plan.md`
+- 当前测试基线或成熟度判断变化：更新 `docs/project_status.md`
 
 这一步非常重要，不然下一次阅读代码的人会被旧文档误导。

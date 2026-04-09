@@ -1,4 +1,5 @@
 """Tests for the local harness governance layer."""
+
 from __future__ import annotations
 
 import textwrap
@@ -90,8 +91,12 @@ def test_sandbox_denial_publishes_governance_event_for_task():
 
 
 def test_sandbox_exec_tool_honors_use_audit_flag():
-    with patch("src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox", return_value={"success": True}) as raw_mock:
-        with patch("src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox_with_audit", return_value={"success": False}) as audit_mock:
+    with patch(
+        "src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox", return_value={"success": True}
+    ) as raw_mock:
+        with patch(
+            "src.mcp_gateway.tools.sandbox_exec_tool.execute_in_sandbox_with_audit", return_value={"success": False}
+        ) as audit_mock:
             SandboxExecTool.run_sync(code="print('x')", tenant_id="tenant_x", use_audit=False)
     assert raw_mock.called
     assert not audit_mock.called

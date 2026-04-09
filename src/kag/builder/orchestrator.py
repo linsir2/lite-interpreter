@@ -1,4 +1,5 @@
 """KAG Builder 总调度器。"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

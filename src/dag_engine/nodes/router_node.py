@@ -5,6 +5,7 @@ Router 意图路由节点
 1. 优先识别需要动态探索的高复杂度任务
 2. 否则走既有静态链路（数据探查 / 知识检索 / Analyst）
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -127,7 +128,11 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
 
     if runtime_decision.routing_mode == "dynamic":
         routing_mode = "dynamic"
-        dynamic_reason = " | ".join(complexity_reasons) if complexity_reasons else runtime_decision.decision_reason or "任务需要未知多步探索"
+        dynamic_reason = (
+            " | ".join(complexity_reasons)
+            if complexity_reasons
+            else runtime_decision.decision_reason or "任务需要未知多步探索"
+        )
         destinations = ["dynamic_swarm"]
         routing_reasons.append(f"触发动态超级节点: {dynamic_reason}")
     else:
@@ -156,9 +161,17 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
             routing_reasons.append("信息已齐备或无需前置检索，直通 Analyst")
 
     execution_intent = ExecutionIntent(
-        intent="dynamic_flow" if routing_mode == "dynamic" else "hybrid_flow" if len(destinations) > 1 else "static_flow",
+        intent="dynamic_flow"
+        if routing_mode == "dynamic"
+        else "hybrid_flow"
+        if len(destinations) > 1
+        else "static_flow",
         destinations=destinations,
-        reason=" | ".join([runtime_decision.decision_reason, *routing_reasons] if runtime_decision.decision_reason else routing_reasons),
+        reason=" | ".join(
+            [runtime_decision.decision_reason, *routing_reasons]
+            if runtime_decision.decision_reason
+            else routing_reasons
+        ),
         complexity_score=complexity_score,
         candidate_skills=candidate_skills,
         metadata={

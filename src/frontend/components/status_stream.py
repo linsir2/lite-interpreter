@@ -1,4 +1,5 @@
 """HTML-based task status stream component for Streamlit or notebook-style embedding."""
+
 from __future__ import annotations
 
 import html

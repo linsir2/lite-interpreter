@@ -1,4 +1,5 @@
 """基于 PG 真相源的稀疏文本召回。"""
+
 from __future__ import annotations
 
 from typing import Any

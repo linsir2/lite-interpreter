@@ -1,4 +1,5 @@
 """Audit log read-model endpoints."""
+
 from __future__ import annotations
 
 from starlette.requests import Request

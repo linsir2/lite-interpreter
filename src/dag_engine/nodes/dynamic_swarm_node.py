@@ -34,9 +34,7 @@ def dynamic_swarm_node(state: Mapping[str, Any]) -> dict[str, Any]:
     if execution_data is None and execution_blackboard.restore(tenant_id, task_id):
         execution_data = execution_blackboard.read(tenant_id, task_id)
     execution_state = (
-        execution_data.model_dump(mode="json")
-        if execution_data
-        else dict(state.get("execution_snapshot") or {})
+        execution_data.model_dump(mode="json") if execution_data else dict(state.get("execution_snapshot") or {})
     )
     plan = DynamicSupervisor.prepare(state, execution_state)
 

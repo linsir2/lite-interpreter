@@ -1,4 +1,5 @@
 """Skill inventory page for approved reusable skills."""
+
 from __future__ import annotations
 
 import httpx

@@ -1,4 +1,5 @@
 """Built-in desensitization rules used by lite-interpreter."""
+
 from __future__ import annotations
 
 import re

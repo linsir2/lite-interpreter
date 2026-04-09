@@ -1,4 +1,5 @@
 """API schema helpers for task streaming endpoints."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass

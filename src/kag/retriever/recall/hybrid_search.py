@@ -1,4 +1,5 @@
 """混合检索与 RRF 融合。"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -35,7 +36,9 @@ def vector_recall(
     return results
 
 
-def fuse_results(result_sets: list[list[dict[str, object]]], top_k: int = 15, rrf_k: int = HYBRID_RRF_K) -> list[dict[str, object]]:
+def fuse_results(
+    result_sets: list[list[dict[str, object]]], top_k: int = 15, rrf_k: int = HYBRID_RRF_K
+) -> list[dict[str, object]]:
     score_board: dict[str, float] = defaultdict(float)
     payloads: dict[str, dict[str, object]] = {}
     for result_set in result_sets:

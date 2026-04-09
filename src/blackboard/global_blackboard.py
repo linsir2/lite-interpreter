@@ -7,6 +7,7 @@
 
 - 事件统一分发 -> 与前端交互 ：前端、SSE、监控、恢复逻辑需要一个很轻量、稳定、统一的任务状态对象
 """
+
 import threading
 from typing import Optional
 
@@ -19,8 +20,10 @@ from src.storage.repository.state_repo import StateRepo
 
 logger = get_logger(__name__)
 
+
 class GlobalBlackboard:
     """全局黑板单例"""
+
     _instance: Optional["GlobalBlackboard"] = None
     _lock = threading.Lock()
 
@@ -31,10 +34,10 @@ class GlobalBlackboard:
                     cls._instance = super().__new__(cls)
                     cls._instance._init()
         return cls._instance
-    
+
     def _init(self):
-        self._sub_boards: dict[str, BaseSubBlackboard] = {} # board_name -> 子黑板实例
-        self._task_states: dict[str, TaskGlobalState] = {} # task_id -> TaskGlobalState
+        self._sub_boards: dict[str, BaseSubBlackboard] = {}  # board_name -> 子黑板实例
+        self._task_states: dict[str, TaskGlobalState] = {}  # task_id -> TaskGlobalState
         self._rw_lock = threading.RLock()
         logger.info("全局黑板初始化完成", extra={"trace_id": "system"})
 
@@ -113,14 +116,14 @@ class GlobalBlackboard:
                 logger.warning(f"子黑板 {board_name} 已注册，将覆盖原有实例", extra={"trace_id": "system"})
             self._sub_boards[board_name] = sub_board
             logger.info(f"子黑板 {board_name} 注册成功", extra={"trace_id": "system"})
-    
+
     def get_sub_board(self, board_name: str) -> BaseSubBlackboard:
         with self._rw_lock:
             board = self._sub_boards.get(board_name)
             if not board:
                 raise SubBoardNotRegisteredError(f"sub_blackboard {board_name} 未注册")
             return board
-    
+
     # -------------------------- 任务生命周期管理 --------------------------
     def create_task(
         self,
@@ -167,16 +170,10 @@ class GlobalBlackboard:
                 tenant_id=tenant_id,
                 task_id=task_id,
                 workspace_id=workspace_id,
-                payload={
-                    "task_info": task_state.model_dump(),
-                    "message": "任务已创建，等待处理"
-                },
-                trace_id=task_id
+                payload={"task_info": task_state.model_dump(), "message": "任务已创建，等待处理"},
+                trace_id=task_id,
             )
-            logger.info(
-                f"任务创建成功 task_id={task_id}",
-                extra={"trace_id": task_id, "tenant_id": tenant_id}
-            )
+            logger.info(f"任务创建成功 task_id={task_id}", extra={"trace_id": task_id, "tenant_id": tenant_id})
             self._persist_task_state(task_state)
             return task_id
 
@@ -197,13 +194,15 @@ class GlobalBlackboard:
                     continue
                 return task
         return None
-    
+
     def get_task_state(self, task_id: str) -> TaskGlobalState:
         """获取任务全局状态"""
         with self._rw_lock:
             return self._get_task_state_locked(task_id)
-    
-    def update_global_status(self, task_id: str, new_status: GlobalStatus, sub_status: str | None = None, **kwargs) -> None:
+
+    def update_global_status(
+        self, task_id: str, new_status: GlobalStatus, sub_status: str | None = None, **kwargs
+    ) -> None:
         """
         更新任务全局状态
 
@@ -214,7 +213,7 @@ class GlobalBlackboard:
         """
         with self._rw_lock:
             task = self._get_task_state_locked(task_id)
-            
+
             old_status = task.global_status
 
             task.global_status = new_status
@@ -224,16 +223,16 @@ class GlobalBlackboard:
             for key, value in kwargs.items():
                 if hasattr(task, key):
                     setattr(task, key, value)
-            
+
             display_message = sub_status if sub_status else f"任务状态更新为 {new_status.value}"
             old_status_value = old_status.value if hasattr(old_status, "value") else str(old_status)
-            
+
             status_payload = {
                 "old_status": old_status_value,
                 "new_status": new_status.value,
                 "sub_status": sub_status,
                 "message": display_message,  # 前端友好提示
-                **kwargs
+                **kwargs,
             }
 
             event_bus.publish(
@@ -242,7 +241,7 @@ class GlobalBlackboard:
                 task_id=task_id,
                 workspace_id=task.workspace_id,
                 payload=status_payload,
-                trace_id=task_id
+                trace_id=task_id,
             )
 
             if new_status in [GlobalStatus.SUCCESS, GlobalStatus.FAILED]:
@@ -264,7 +263,7 @@ class GlobalBlackboard:
                     task_id=task_id,
                     workspace_id=task.workspace_id,
                     payload=finish_payload,
-                    trace_id=task_id
+                    trace_id=task_id,
                 )
                 # 失败任务额外发布监控告警事件
                 if new_status == GlobalStatus.FAILED:
@@ -278,14 +277,14 @@ class GlobalBlackboard:
                             "failure_type": task.failure_type,
                             "error_message": task.error_message,
                             "tenant_id": task.tenant_id,
-                            "timestamp": task.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+                            "timestamp": task.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
                         },
-                        trace_id=task_id
+                        trace_id=task_id,
                     )
 
             logger.info(
                 f"任务状态更新 task_id={task_id} {old_status.value} -> {new_status.value}",
-                extra={"trace_id": task_id, "tenant_id": task.tenant_id}
+                extra={"trace_id": task_id, "tenant_id": task.tenant_id},
             )
             self._persist_task_state(task)
 
@@ -294,14 +293,14 @@ class GlobalBlackboard:
         with self._rw_lock:
             # 必须包含所有处于 "流转中" 的节点状态
             unfinished_status = [
-                GlobalStatus.PENDING, 
-                GlobalStatus.ROUTING,             # Router 阶段
-                GlobalStatus.PREPARING_CONTEXT,   # Data Inspector 阶段
-                GlobalStatus.RETRIEVING,          # KAG Retriever 阶段
-                GlobalStatus.ANALYZING, 
+                GlobalStatus.PENDING,
+                GlobalStatus.ROUTING,  # Router 阶段
+                GlobalStatus.PREPARING_CONTEXT,  # Data Inspector 阶段
+                GlobalStatus.RETRIEVING,  # KAG Retriever 阶段
+                GlobalStatus.ANALYZING,
                 GlobalStatus.CODING,
-                GlobalStatus.AUDITING, 
-                GlobalStatus.EXECUTING, 
+                GlobalStatus.AUDITING,
+                GlobalStatus.EXECUTING,
                 GlobalStatus.DEBUGGING,
                 GlobalStatus.EVALUATING,
                 GlobalStatus.HARVESTING,
@@ -310,18 +309,15 @@ class GlobalBlackboard:
                 # SUCCESS, FAILED, ARCHIVED 属于终态
             ]
             known_tasks = {task.task_id: task for task in self._iter_known_global_states_locked()}
-            return [
-                task for task in known_tasks.values()
-                if task.global_status in unfinished_status
-            ]
-    
+            return [task for task in known_tasks.values() if task.global_status in unfinished_status]
+
     def archive_task(self, task_id: str) -> None:
         """归档已完成的任务"""
         with self._rw_lock:
             task = self._get_task_state_locked(task_id)
             if task.global_status not in [GlobalStatus.SUCCESS, GlobalStatus.FAILED]:
                 raise StatusUpdateError(f"仅成功/失败的任务可归档，当前状态：{task.global_status.value}")
-            
+
             task.global_status = GlobalStatus.ARCHIVED
             task.updated_at = get_utc_now()
 
@@ -333,12 +329,13 @@ class GlobalBlackboard:
                 payload={
                     "task_id": task_id,
                     "archive_time": task.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-                    "final_status": task.global_status.value
+                    "final_status": task.global_status.value,
                 },
-                trace_id=task_id
+                trace_id=task_id,
             )
 
             logger.info(f"任务已归档 task_id={task_id}", extra={"trace_id": task_id})
             self._persist_task_state(task)
+
 
 global_blackboard = GlobalBlackboard()

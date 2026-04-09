@@ -1,11 +1,22 @@
 """Helpers for static coder payload assembly and code template rendering."""
+
 from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from src.mcp_gateway.tools.sandbox_exec_tool import build_input_mount_manifest
+from src.memory import MemoryService
+
+
+@dataclass(frozen=True)
+class PreparedStaticCodegen:
+    """All artifacts required by the static coder node."""
+
+    generated_code: str
+    input_mounts: list[dict[str, Any]]
 
 
 def serialize_preview(text: str, limit: int = 160) -> str:
@@ -27,7 +38,9 @@ def build_skill_strategy_hints(approved_skills: list[dict[str, Any]]) -> list[di
         replay_cases = skill.get("replay_cases", []) or []
         expected_signals = []
         if replay_cases and isinstance(replay_cases[0], Mapping):
-            expected_signals = [str(item) for item in replay_cases[0].get("expected_signals", [])[:3] if str(item).strip()]
+            expected_signals = [
+                str(item) for item in replay_cases[0].get("expected_signals", [])[:3] if str(item).strip()
+            ]
         hints.append(
             {
                 "name": str(skill.get("name", "unknown_skill")),
@@ -97,6 +110,44 @@ def build_static_coder_payload(
     if exec_data.static.latest_error_traceback:
         payload["previous_error"] = serialize_preview(exec_data.static.latest_error_traceback, limit=400)
     return payload
+
+
+def prepare_static_codegen(
+    *,
+    exec_data: Any,
+    state: Mapping[str, Any],
+) -> PreparedStaticCodegen:
+    """Recall reusable skills, assemble payloads, and render the code template."""
+    query = str(state.get("input_query", ""))
+    task_envelope = getattr(exec_data.control, "task_envelope", None)
+    available_capabilities = list(task_envelope.allowed_tools) if task_envelope else []
+
+    recall_result = MemoryService.recall_skills(
+        tenant_id=exec_data.tenant_id,
+        task_id=exec_data.task_id,
+        workspace_id=exec_data.workspace_id,
+        query=query,
+        stage="coder",
+        available_capabilities=available_capabilities,
+        match_reason_detail="coder incorporated historical skills into the code-generation payload",
+    )
+    memory_data = MemoryService.mark_matches_used_in_codegen(
+        memory_data=recall_result.memory_data,
+        query=query,
+        merged_skills=recall_result.merged_skills,
+    )
+
+    input_mounts = build_static_input_mounts(exec_data)
+    payload = build_static_coder_payload(
+        exec_data=exec_data,
+        state=state,
+        input_mounts=input_mounts,
+        approved_skills=list(memory_data.approved_skills or []),
+    )
+    return PreparedStaticCodegen(
+        generated_code=build_dataset_aware_code(payload),
+        input_mounts=input_mounts,
+    )
 
 
 def build_dataset_aware_code(payload: dict[str, Any]) -> str:

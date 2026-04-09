@@ -1,7 +1,7 @@
 lite-interpreter
 ├── README.md                           # 项目总览：定位、当前能力、环境、快速启动、运行命令
 ├── AGENTS.md                           # 项目级协作约束，要求关注 directory.txt、模块边界与验证流程
-├── Makefile                            # 标准运行入口，默认通过 conda 的 lite_interpreter 环境启动 API/sidecar/frontend/tests
+├── Makefile                            # 标准运行入口，默认通过 conda 的 lite_interpreter 环境启动 API/sidecar/frontend/tests/lint
 ├── requirements.txt                    # 运行时依赖清单，覆盖 KAG / DeerFlow / FastAPI / Streamlit / Sandbox
 ├── pyproject.toml                      # 工程配置：pytest、ruff、black 入口；要求使用 Python 3.12+
 ├── .env.example                        # 环境变量示例：DashScope、Neo4j、Qdrant、Postgres、Sandbox、DeerFlow
@@ -197,6 +197,7 @@ lite-interpreter
 │   ├── test_blackboard.py              # Global/Execution Blackboard 与 Event Bus 测试
 │   ├── test_dag_engine.py              # router/static/dynamic/summary 等 DAG 节点测试
 │   ├── test_deerflow_bridge.py         # DeerFlow bridge sidecar/embedded/degraded 测试
+│   ├── test_docs_consistency.py        # 文档真相源与测试基线引用一致性检查
 │   ├── test_dynamic_runtime.py         # DynamicSupervisor / RuntimeGateway / TraceNormalizer 测试
 │   ├── test_e2e.py                     # static/dynamic 最小端到端测试
 │   ├── test_frontend_stream.py         # Streamlit stream HTML 组件测试
@@ -214,6 +215,7 @@ lite-interpreter
 │   ├── development_guide.md            # 开发规范、提交流程、测试方式、常见改动入口
 │   ├── future_roadmap.md               # 后续演进方向：lease/worker、执行面、长链验收、产品化路线
 │   ├── interview_narrative.md          # 面试/汇报叙事：为什么这样设计、怎么讲模块协作与治理
+│   ├── project_status.md               # 当前成熟度真相源：最新验证基线、核心/支撑/实验分层、已知热点与非目标
 │   └── project_plan.md                 # 项目计划书：现状、问题、改造计划、验收标准
 └── data                                # 本地数据目录（运行时生成，不入 git）
     ├── uploads                         # 上传文件

@@ -1,4 +1,5 @@
 """Execution resource endpoints derived from task execution state."""
+
 from __future__ import annotations
 
 import asyncio
@@ -72,7 +73,9 @@ async def list_task_executions(request: Request) -> JSONResponse:
     execution_data = read_task_execution_data(task.tenant_id, task_id)
     payload, _ = mask_payload(
         to_jsonable_payload({"task_id": task_id, "executions": build_task_execution_summaries(execution_data)}),
-        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data and execution_data.control.task_envelope else None,
+        list(execution_data.control.task_envelope.redaction_rules or [])
+        if execution_data and execution_data.control.task_envelope
+        else None,
     )
     record_api_audit(
         request,
@@ -120,12 +123,14 @@ async def get_execution(request: Request) -> JSONResponse:
     payload, _ = mask_payload(
         to_jsonable_payload(
             {
-            **summary,
-            "artifacts": artifacts,
-            "tool_calls": build_execution_tool_calls(execution_data, execution_id),
+                **summary,
+                "artifacts": artifacts,
+                "tool_calls": build_execution_tool_calls(execution_data, execution_id),
             }
         ),
-        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+        list(execution_data.control.task_envelope.redaction_rules or [])
+        if execution_data.control.task_envelope
+        else None,
     )
     record_api_audit(
         request,
@@ -173,11 +178,13 @@ async def list_execution_artifacts(request: Request) -> JSONResponse:
     payload, _ = mask_payload(
         to_jsonable_payload(
             {
-            "execution_id": execution_id,
-            "artifacts": build_execution_artifacts(execution_data, execution_id),
+                "execution_id": execution_id,
+                "artifacts": build_execution_artifacts(execution_data, execution_id),
             }
         ),
-        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+        list(execution_data.control.task_envelope.redaction_rules or [])
+        if execution_data.control.task_envelope
+        else None,
     )
     record_api_audit(
         request,
@@ -225,11 +232,13 @@ async def list_execution_tool_calls(request: Request) -> JSONResponse:
     payload, _ = mask_payload(
         to_jsonable_payload(
             {
-            "execution_id": execution_id,
-            "tool_calls": build_execution_tool_calls(execution_data, execution_id),
+                "execution_id": execution_id,
+                "tool_calls": build_execution_tool_calls(execution_data, execution_id),
             }
         ),
-        list(execution_data.control.task_envelope.redaction_rules or []) if execution_data.control.task_envelope else None,
+        list(execution_data.control.task_envelope.redaction_rules or [])
+        if execution_data.control.task_envelope
+        else None,
     )
     record_api_audit(
         request,
@@ -335,9 +344,7 @@ async def stream_execution_events(request: Request) -> StreamingResponse:
                 workspace_id=identity["workspace_id"],
             )
             filtered_backlog = [
-                record
-                for record in backlog
-                if matches_execution_stream_record(execution_data, execution_id, record)
+                record for record in backlog if matches_execution_stream_record(execution_data, execution_id, record)
             ]
             for record in filter_records_after_event_id(filtered_backlog, after_event_id):
                 yield _encode_sse(ExecutionStreamEvent.from_task_record(record, execution_id=execution_id).to_dict())

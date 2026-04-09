@@ -1,4 +1,5 @@
 """SSE router for task status and dynamic trace streaming."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,12 +7,12 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from src.api.audit_logging import record_api_audit
-from src.api.auth import require_request_role
 from config.settings import API_ENABLE_DEMO_TRACE
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 
+from src.api.audit_logging import record_api_audit
+from src.api.auth import require_request_role
 from src.api.request_scope import endpoint_disabled, ensure_resource_scope
 from src.api.schemas import TaskStreamEvent
 from src.blackboard import TaskNotExistError, global_blackboard

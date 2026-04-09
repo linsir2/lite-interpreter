@@ -1,4 +1,5 @@
 """Streamlit file-uploader component wired to the upload API."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -62,7 +63,9 @@ def render_file_uploader(
     if uploaded_file is None:
         return
 
-    if st.button("Send Upload", use_container_width=True, key=f"upload-button-{uploaded_file.name}-{task_id or 'global'}"):
+    if st.button(
+        "Send Upload", use_container_width=True, key=f"upload-button-{uploaded_file.name}-{task_id or 'global'}"
+    ):
         try:
             payload = upload_file_via_api(
                 api_base_url=api_base_url,

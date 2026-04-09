@@ -1,4 +1,5 @@
 """Tests for dynamic runtime supervision helpers."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -180,7 +181,12 @@ def test_trace_normalizer_maps_tool_call_payloads_to_v2():
             "agent_name": "deerflow",
             "step_name": "search_result",
             "event_type": "values",
-            "payload": {"tool_name": "web_search", "tool_call_id": "call-1", "result": {"items": 3}, "status": "completed"},
+            "payload": {
+                "tool_name": "web_search",
+                "tool_call_id": "call-1",
+                "result": {"items": 3},
+                "status": "completed",
+            },
         }
     )
 

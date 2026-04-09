@@ -1,4 +1,5 @@
 """Typed contracts for lite-interpreter's local harness governance layer."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

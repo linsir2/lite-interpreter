@@ -1,4 +1,5 @@
 """Tests for startup recovery and strict persistence behavior."""
+
 from __future__ import annotations
 
 import asyncio
@@ -19,7 +20,9 @@ def test_state_repo_strict_persistence_raises_without_postgres(monkeypatch):
     monkeypatch.setattr("src.storage.repository.state_repo.STRICT_PERSISTENCE", True)
     monkeypatch.setattr("src.storage.repository.state_repo.pg_client.engine", None)
     with pytest.raises(RuntimeError):
-        StateRepo.save_blackboard_state("tenant-strict", "task-strict", "ws-strict", {"global": {"task_id": "task-strict"}})
+        StateRepo.save_blackboard_state(
+            "tenant-strict", "task-strict", "ws-strict", {"global": {"task_id": "task-strict"}}
+        )
     assert StateRepo._memory_store.get("tenant-strict", {}).get("task-strict") is None
 
 
@@ -39,7 +42,9 @@ def test_state_repo_strict_persistence_raises_on_write_failure(monkeypatch):
 
     monkeypatch.setattr("src.storage.repository.state_repo.pg_client.engine", _BrokenEngine())
     with pytest.raises(RuntimeError):
-        StateRepo.save_blackboard_state("tenant-strict", "task-strict", "ws-strict", {"global": {"task_id": "task-strict"}})
+        StateRepo.save_blackboard_state(
+            "tenant-strict", "task-strict", "ws-strict", {"global": {"task_id": "task-strict"}}
+        )
 
 
 def test_state_repo_strict_persistence_raises_for_task_lease_without_postgres(monkeypatch):
@@ -262,7 +267,10 @@ def test_run_task_flow_uses_dedicated_task_flow_executor():
 
 
 def test_get_startup_recovery_status_captures_task_lease_error(monkeypatch):
-    monkeypatch.setattr("src.api.routers.analysis_router.StateRepo.list_task_leases", lambda: (_ for _ in ()).throw(RuntimeError("lease unavailable")))
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.StateRepo.list_task_leases",
+        lambda: (_ for _ in ()).throw(RuntimeError("lease unavailable")),
+    )
     status = analysis_router.get_startup_recovery_status()
     assert status["task_leases"] == []
     assert "lease unavailable" in status["task_lease_error"]
@@ -282,7 +290,10 @@ def test_execute_task_flow_reuses_completed_node_checkpoints():
                 "node_checkpoints": {
                     "router": {
                         "status": "completed",
-                        "output_patch": {"next_actions": ["analyst"], "execution_intent": {"intent": "static_flow", "destinations": ["analyst"]}},
+                        "output_patch": {
+                            "next_actions": ["analyst"],
+                            "execution_intent": {"intent": "static_flow", "destinations": ["analyst"]},
+                        },
                     },
                     "analyst": {
                         "status": "completed",

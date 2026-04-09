@@ -1,4 +1,5 @@
 """Capability registry for tools, skills, and runtime-facing actions."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -18,7 +19,7 @@ class CapabilityDescriptor:
     network_access: str = "none"
     writes_state: bool = False
     executes_code: bool = False
-    metadata: dict[str, object] = field(default_factory=dict) # 防止多个实例底层共享同一个dict
+    metadata: dict[str, object] = field(default_factory=dict)  # 防止多个实例底层共享同一个dict
 
     def matches(self, name: str) -> bool:
         lowered = str(name).strip().lower()
@@ -51,7 +52,7 @@ class CapabilityRegistry:
         resolved: list[CapabilityDescriptor] = []
         unknown: list[str] = []
         seen: set[str] = set()
-        for name in names or []: # 如果names为空，则遍历 [] (空列表)
+        for name in names or []:  # 如果names为空，则遍历 [] (空列表)
             descriptor = self.get(name)
             if descriptor is None:
                 normalized = str(name).strip()

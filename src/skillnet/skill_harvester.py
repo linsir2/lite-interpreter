@@ -1,4 +1,5 @@
 """Harvest reusable skill candidates from static and dynamic execution traces."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -34,9 +35,7 @@ class SkillHarvester:
         required_capabilities: list[str],
     ) -> list[SkillReplayCase]:
         expected_signals = [
-            str(item.step_name)
-            for item in execution_data.dynamic.trace[:5]
-            if getattr(item, "step_name", "")
+            str(item.step_name) for item in execution_data.dynamic.trace[:5] if getattr(item, "step_name", "")
         ]
         if execution_data.dynamic.summary:
             expected_signals.append(str(execution_data.dynamic.summary)[:120])
@@ -45,8 +44,13 @@ class SkillHarvester:
             description="Replay the harvested dynamic path against a similar query.",
             input_query=(
                 str(getattr(execution_data.control, "task_envelope", None).input_query).strip()
-                if getattr(execution_data.control, "task_envelope", None) and str(getattr(execution_data.control, "task_envelope", None).input_query or "").strip()
-                else str(execution_intent_dynamic_reason(execution_data.control.execution_intent) or execution_data.dynamic.summary or execution_data.task_id)
+                if getattr(execution_data.control, "task_envelope", None)
+                and str(getattr(execution_data.control, "task_envelope", None).input_query or "").strip()
+                else str(
+                    execution_intent_dynamic_reason(execution_data.control.execution_intent)
+                    or execution_data.dynamic.summary
+                    or execution_data.task_id
+                )
             ),
             expected_signals=list(dict.fromkeys(signal for signal in expected_signals if signal)),
             required_capabilities=required_capabilities,
@@ -79,8 +83,16 @@ class SkillHarvester:
 
         recommended = execution_data.dynamic.recommended_static_skill or {}
         candidate_name = recommended.get("name") or f"dynamic_skill_{execution_data.task_id[:8]}"
-        source_task_type = recommended.get("source_task_type") or execution_intent_dynamic_reason(execution_data.control.execution_intent) or "dynamic_task"
-        code_refs = [artifact.get("path", "") for artifact in static_artifacts(execution_data.static.execution_record) if artifact.get("path")]
+        source_task_type = (
+            recommended.get("source_task_type")
+            or execution_intent_dynamic_reason(execution_data.control.execution_intent)
+            or "dynamic_task"
+        )
+        code_refs = [
+            artifact.get("path", "")
+            for artifact in static_artifacts(execution_data.static.execution_record)
+            if artifact.get("path")
+        ]
         code_refs.extend(execution_data.dynamic.artifacts)
         required_capabilities = SkillHarvester._required_capabilities(execution_data, recommended)
         replay_cases = SkillHarvester._build_replay_cases(

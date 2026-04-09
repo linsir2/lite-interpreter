@@ -1,4 +1,5 @@
 """Seed evaluation cases for the data-analysis workflow."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -28,7 +29,9 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         query="分析这份销售数据，统计各地区销售额并给出趋势结论",
         expected_analysis_mode="dataset_analysis",
         expected_route="analyst",
-        structured_datasets=({"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "region,amount,biz_date"},),
+        structured_datasets=(
+            {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "region,amount,biz_date"},
+        ),
     ),
     EvalCase(
         case_id="route_rules_only",
@@ -68,7 +71,9 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         query="基于这份销售数据自己找行业公开数据做benchmark并验证趋势结论",
         expected_analysis_mode="dynamic_research_analysis",
         expected_route="dynamic_swarm",
-        structured_datasets=({"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "region,amount,biz_date"},),
+        structured_datasets=(
+            {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "region,amount,biz_date"},
+        ),
     ),
     EvalCase(
         case_id="route_rules_without_doc_asset",
@@ -83,7 +88,9 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         query="结合当前数据和已抽取规则，检查合同缺失与税额缺失问题",
         expected_analysis_mode="hybrid_analysis",
         expected_route="analyst",
-        structured_datasets=({"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},),
+        structured_datasets=(
+            {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},
+        ),
         business_documents=({"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"},),
     ),
     EvalCase(
@@ -93,8 +100,20 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         expected_analysis_mode="document_rule_analysis",
         expected_route="kag_retriever",
         knowledge_hits=(
-            {"chunk_id": "c1", "text": "报销规则：发票金额必须含税。", "score": 1.0, "source": "rule.pdf", "retrieval_type": "bm25"},
-            {"chunk_id": "c2", "text": "指标口径：审批时效按提交到通过计算。", "score": 0.9, "source": "metric.pdf", "retrieval_type": "vector"},
+            {
+                "chunk_id": "c1",
+                "text": "报销规则：发票金额必须含税。",
+                "score": 1.0,
+                "source": "rule.pdf",
+                "retrieval_type": "bm25",
+            },
+            {
+                "chunk_id": "c2",
+                "text": "指标口径：审批时效按提交到通过计算。",
+                "score": 0.9,
+                "source": "metric.pdf",
+                "retrieval_type": "vector",
+            },
         ),
         expected_evidence_refs=("c1", "c2"),
         expected_known_gap_substrings=("缺少业务文档输入",),
@@ -105,10 +124,18 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         query="结合费用数据和规则，检查合同缺失",
         expected_analysis_mode="hybrid_analysis",
         expected_route="analyst",
-        structured_datasets=({"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},),
+        structured_datasets=(
+            {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},
+        ),
         business_documents=({"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"},),
         knowledge_hits=(
-            {"chunk_id": "rule-1", "text": "规则：必须上传合同。", "score": 1.0, "source": "policy.pdf", "retrieval_type": "bm25"},
+            {
+                "chunk_id": "rule-1",
+                "text": "规则：必须上传合同。",
+                "score": 1.0,
+                "source": "policy.pdf",
+                "retrieval_type": "bm25",
+            },
         ),
         expected_evidence_refs=("rule-1",),
         expected_dataset_summary_min=1,

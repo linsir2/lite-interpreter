@@ -1,4 +1,5 @@
 """Policy management endpoints for harness policy inspection and updates."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,8 +12,8 @@ from starlette.responses import JSONResponse
 
 from src.api.audit_logging import record_api_audit
 from src.api.auth import require_request_role
-from src.api.schemas import PolicyUpdateRequest, validation_error_payload
 from src.api.request_scope import endpoint_disabled
+from src.api.schemas import PolicyUpdateRequest, validation_error_payload
 from src.harness.policy import load_harness_policy, refresh_harness_policy
 
 
@@ -28,8 +29,16 @@ async def get_harness_policy(_request: Request) -> JSONResponse:
         _request,
         action="policy.read",
         outcome="success",
-        tenant_id=str(getattr(getattr(_request, "state", None), "auth_context", None).tenant_id if getattr(getattr(_request, "state", None), "auth_context", None) else ""),
-        workspace_id=str(getattr(getattr(_request, "state", None), "auth_context", None).workspace_id if getattr(getattr(_request, "state", None), "auth_context", None) else ""),
+        tenant_id=str(
+            getattr(getattr(_request, "state", None), "auth_context", None).tenant_id
+            if getattr(getattr(_request, "state", None), "auth_context", None)
+            else ""
+        ),
+        workspace_id=str(
+            getattr(getattr(_request, "state", None), "auth_context", None).workspace_id
+            if getattr(getattr(_request, "state", None), "auth_context", None)
+            else ""
+        ),
         resource_type="policy",
         resource_id=str(path),
         metadata={"exists": path.exists()},

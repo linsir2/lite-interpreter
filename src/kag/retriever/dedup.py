@@ -1,4 +1,5 @@
 """检索结果去重。"""
+
 from __future__ import annotations
 
 

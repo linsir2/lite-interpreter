@@ -1,4 +1,5 @@
 """Minimal API application for task streaming and local health checks."""
+
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
@@ -11,8 +12,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from src.api.auth import ApiAuthMiddleware
-from src.api.routers.audit_router import list_audit_logs
 from src.api.routers.analysis_router import create_task, get_task_result, recover_unfinished_tasks
+from src.api.routers.audit_router import list_audit_logs
 from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
 from src.api.routers.execution_router import (
     get_execution,
@@ -69,7 +70,7 @@ app = Starlette(
             allow_origins=API_ALLOW_ORIGINS,
             allow_methods=["*"],
             allow_headers=["*"],
-        )
+        ),
     ],
     routes=[
         Route("/health", health, methods=["GET"]),

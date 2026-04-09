@@ -1,4 +1,5 @@
 """Pluggable runtime backend definitions for dynamic execution."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -97,7 +98,9 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
                         description="Attach to the normalized execution stream through lite-interpreter APIs.",
                     ),
                 ],
-                limitations=["Execution streams are replayed from task-backed journals rather than directly from the backend transport."],
+                limitations=[
+                    "Execution streams are replayed from task-backed journals rather than directly from the backend transport."
+                ],
             ),
             CapabilityDomainManifest(
                 domain_id="tool_calls",
@@ -108,7 +111,9 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
                         description="Project runtime tool-call events into normalized execution traces.",
                     )
                 ],
-                limitations=["Tool-call resources are derived from available trace events and may be partial if the backend omits tool metadata."],
+                limitations=[
+                    "Tool-call resources are derived from available trace events and may be partial if the backend omits tool metadata."
+                ],
             ),
             CapabilityDomainManifest(
                 domain_id="artifacts",
@@ -119,7 +124,9 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
                         description="Report artifact paths or references discovered during the dynamic run.",
                     )
                 ],
-                limitations=["Artifacts are currently exposed as task-level references, not yet as execution-level resources."],
+                limitations=[
+                    "Artifacts are currently exposed as task-level references, not yet as execution-level resources."
+                ],
             ),
             CapabilityDomainManifest(
                 domain_id="subagents",
@@ -131,7 +138,9 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
                         metadata={"enabled_by_default": True},
                     )
                 ],
-                limitations=["Sub-agents operate only inside DeerFlow; final code execution remains owned by lite-interpreter sandbox."],
+                limitations=[
+                    "Sub-agents operate only inside DeerFlow; final code execution remains owned by lite-interpreter sandbox."
+                ],
             ),
             CapabilityDomainManifest(
                 domain_id="sandbox_execution",
@@ -142,7 +151,9 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
                         operation_id="final_code_execution",
                         description="Execute generated code in the final execution environment.",
                         supported=False,
-                        limitations=["Not supported by DeerFlow runtime; final code execution is delegated back to lite-interpreter sandbox."],
+                        limitations=[
+                            "Not supported by DeerFlow runtime; final code execution is delegated back to lite-interpreter sandbox."
+                        ],
                     )
                 ],
                 limitations=["This runtime must not directly own final Python execution."],

@@ -1,9 +1,9 @@
 """Deterministic evaluation runner for data-analysis behavior."""
+
 from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -96,7 +96,9 @@ def run_case(case: EvalCase) -> EvalResult:
                 for expected in case.expected_known_gap_substrings
             )
         if case.expected_dataset_summary_min:
-            checks["dataset_summaries"] = len(list(brief.get("dataset_summaries") or [])) >= case.expected_dataset_summary_min
+            checks["dataset_summaries"] = (
+                len(list(brief.get("dataset_summaries") or [])) >= case.expected_dataset_summary_min
+            )
 
     return EvalResult(
         case_id=case.case_id,
@@ -128,7 +130,9 @@ def run_seed_evals(*, output_dir: str | Path | None = None) -> dict[str, Any]:
     if output_dir is not None:
         target = Path(output_dir)
         target.mkdir(parents=True, exist_ok=True)
-        (target / "seed_eval_report.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (target / "seed_eval_report.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         markdown_lines = [
             "# lite-interpreter deterministic eval report",
             "",

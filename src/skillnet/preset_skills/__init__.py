@@ -1,4 +1,5 @@
 """Preset skill seeds for cold start."""
+
 from .compliance_skills import load_compliance_skills
 from .data_clean_skills import load_data_clean_skills
 from .stats_skills import load_stats_skills

@@ -1,4 +1,5 @@
 """知识融合：对候选三元组做归一化、去重与轻量合并。"""
+
 from __future__ import annotations
 
 from src.common import get_logger

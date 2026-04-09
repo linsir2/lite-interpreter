@@ -1,9 +1,11 @@
 """Request scope and endpoint exposure helpers for API routes."""
+
 from __future__ import annotations
 
-from src.api.auth import auth_context_allows_scope, request_auth_context
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
+from src.api.auth import auth_context_allows_scope, request_auth_context
 
 
 def request_scope(request: Request) -> tuple[str, str]:
@@ -18,14 +20,10 @@ def request_scope(request: Request) -> tuple[str, str]:
             default_tenant = auth_context.tenant_id
             default_workspace = auth_context.workspace_id
     tenant_id = str(
-        request.query_params.get("tenant_id")
-        or request.headers.get("x-tenant-id")
-        or default_tenant
+        request.query_params.get("tenant_id") or request.headers.get("x-tenant-id") or default_tenant
     ).strip()
     workspace_id = str(
-        request.query_params.get("workspace_id")
-        or request.headers.get("x-workspace-id")
-        or default_workspace
+        request.query_params.get("workspace_id") or request.headers.get("x-workspace-id") or default_workspace
     ).strip()
     return tenant_id, workspace_id
 

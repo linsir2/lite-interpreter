@@ -7,10 +7,11 @@ src/storage/postgres_client.py
 2. 支持按需拉取全文与轻量文本检索。
 3. 管理结构化数据目录与任务状态基座。
 """
+
 from __future__ import annotations
 
-import json
 import importlib
+import json
 from typing import Any
 
 import pandas as pd

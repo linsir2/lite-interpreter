@@ -1,4 +1,5 @@
 """Skill authorization helpers backed by the capability registry."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable

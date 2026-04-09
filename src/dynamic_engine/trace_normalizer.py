@@ -1,4 +1,5 @@
 """Normalize runtime events before they enter the control plane."""
+
 from __future__ import annotations
 
 from typing import Any

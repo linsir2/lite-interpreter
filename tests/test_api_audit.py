@@ -1,4 +1,5 @@
 """Tests for audit log recording and query APIs."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,10 +28,7 @@ def _make_request(
     async def receive():
         return {"type": "http.request", "body": payload, "more_body": False}
 
-    query_string = "&".join(
-        f"{key}={value}"
-        for key, value in (query_params or {}).items()
-    ).encode()
+    query_string = "&".join(f"{key}={value}" for key, value in (query_params or {}).items()).encode()
     scope = {
         "type": "http",
         "method": method,

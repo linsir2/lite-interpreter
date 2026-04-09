@@ -7,6 +7,7 @@ src/storage/repository/knowledge_repo.py
 2. 调度多库协同 (PG 为真相源，Qdrant 为热缓存，Neo4j 为推理网)。
 3. 为检索层提供统一访问接口。
 """
+
 from __future__ import annotations
 
 from datetime import timedelta

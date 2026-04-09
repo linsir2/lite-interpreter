@@ -1,4 +1,5 @@
 """Local governance decisions inspired by AutoHarness-style harnessing."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
@@ -36,7 +37,9 @@ class HarnessGovernor:
         trace_ref: str | None = None,
     ) -> GovernanceDecision:
         profile_name, profile, policy = get_profile(profile_name)
-        effective_max_steps = int(max_steps if max_steps is not None else (policy.get("dynamic", {}) or {}).get("max_steps", 6))
+        effective_max_steps = int(
+            max_steps if max_steps is not None else (policy.get("dynamic", {}) or {}).get("max_steps", 6)
+        )
         allowed_capabilities, _ = capability_registry.resolve_names(profile.get("allowed_tools"))
         allowed_tools = [descriptor.capability_id for descriptor in allowed_capabilities]
         requested = _normalize_tools(requested_tools)
@@ -77,9 +80,7 @@ class HarnessGovernor:
         if denied_known:
             reasons.append(f"请求未授权能力: {', '.join(denied_known)}")
         if denied_by_profile:
-            reasons.append(
-                f"profile.network_access={profile_network_access}，无法授权: {', '.join(denied_by_profile)}"
-            )
+            reasons.append(f"profile.network_access={profile_network_access}，无法授权: {', '.join(denied_by_profile)}")
         if unknown_tools:
             reasons.append(f"请求未授权工具: {', '.join(unknown_tools)}")
             risk_score = max(risk_score, high_threshold)

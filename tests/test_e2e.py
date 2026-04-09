@@ -1,4 +1,5 @@
 """End-to-end task flow tests covering API entrypoints and result retrieval."""
+
 from __future__ import annotations
 
 import asyncio
@@ -44,10 +45,7 @@ def _make_request(
         }
 
     headers = [(b"content-type", b"application/json")] if body is not None else []
-    query_string = "&".join(
-        f"{key}={value}"
-        for key, value in (query_params or {}).items()
-    ).encode()
+    query_string = "&".join(f"{key}={value}" for key, value in (query_params or {}).items()).encode()
     return Request(
         {
             "type": "http",
@@ -191,7 +189,10 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result)
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result
+    )
+
     def fake_skill_harvester(state):
         approved_skills = [{"name": "dynamic_skill_demo"}]
         memory_blackboard.write(
@@ -208,6 +209,7 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
         return {}
 
     monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", fake_skill_harvester)
+
     def fake_summarizer(state):
         execution = execution_blackboard.read(tenant_id, task_id)
         assert execution is not None

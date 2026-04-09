@@ -1,11 +1,12 @@
 """Runtime capability inspection endpoints."""
+
 from __future__ import annotations
 
-from src.api.audit_logging import record_api_audit
-from src.api.auth import require_request_role
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from src.api.audit_logging import record_api_audit
+from src.api.auth import require_request_role
 from src.dynamic_engine.runtime_registry import runtime_registry
 
 

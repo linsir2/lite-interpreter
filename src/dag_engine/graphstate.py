@@ -1,6 +1,7 @@
 """
 LangGraph 状态图定义
 """
+
 import operator
 from typing import Annotated, Any, TypedDict
 
@@ -47,7 +48,7 @@ class DagGraphState(TypedDict, total=False):
     # --------------------------
     # 传给 context_builder_node.py 的检索生肉：
     # [{"text": text, "score": score, "source": "...", "type": "fast_path_injection"}]
-    raw_retrieved_candidates: list[dict[str, Any]] 
+    raw_retrieved_candidates: list[dict[str, Any]]
     knowledge_snapshot: dict[str, Any]
     memory_snapshot: dict[str, Any]
     analysis_brief: dict[str, Any]

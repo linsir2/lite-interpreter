@@ -317,7 +317,7 @@ Capabilities:
 - `scripts/create_task.py`
 - `scripts/check_hybrid_readiness.py`
 
-### Tests currently passing
+### Verification
 
 Use the `lite_interpreter` conda env:
 
@@ -337,59 +337,39 @@ Write reports into a specific project directory when needed:
 conda run -n lite_interpreter python -m src.evals.run --output-dir artifacts/evals
 ```
 
-Current result:
+The latest verified test baseline lives in `docs/project_status.md`.
 
-- `237 passed, 3 skipped`
+## 4. Current status
 
-## 4. What is prepared but still incomplete
+The project status source of truth is `docs/project_status.md`. In short:
 
-The repo now has a solid demo/integration spine, but some modules are still placeholders or partial:
+- the core execution loop is real and regression-tested
+- the repository is strongest today as a controlled runtime prototype, not a finished product platform
+- core/support/experimental boundaries are tracked explicitly instead of being inferred from ad-hoc prose
 
-- `src/dag_engine/nodes/analyst_node.py`
-- `src/dag_engine/nodes/coder_node.py`
-- `src/dag_engine/nodes/auditor_node.py`
-- `src/dag_engine/nodes/executor_node.py`
-- `src/dag_engine/nodes/debugger_node.py`
-- some API surfaces outside the demo path
-- some frontend pages outside Task Console
+## 5. Current maturity tiers
 
-Interpretation:
+### Core
 
-- the system-level integration path exists
-- the end-to-end production business workflow is not fully finished
-- this repository is currently strongest as a controlled prototype / architecture demo
+- deterministic DAG + DeerFlow dynamic super node
+- blackboard / event bus / event journal control plane
+- harness governance + local sandbox execution boundary
+- API / SSE main path
+- Task Console
 
-## 5. Module status overview
+### Support
 
-### Implemented and usable now
+- KAG retrieval and context assembly
+- SkillNet harvesting, validation, promotion, and historical reuse
+- execution / artifacts / tool-calls / diagnostics / conformance resources
+- deterministic evals and analysis-runtime task classification
 
-- `config/settings.py`
-- `litellm_config.yml`
-- `src/common/llm_client.py`
-- `src/dynamic_engine/deerflow_bridge.py`
-- `src/dag_engine/nodes/router_node.py`
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
-- `src/dag_engine/nodes/skill_harvester_node.py`
-- `src/mcp_gateway/tools/state_sync_tool.py`
-- `src/api/main.py`
-- `src/api/routers/sse_router.py`
-- `src/api/routers/analysis_router.py`
-- `src/frontend/pages/task_console.py`
-- `src/frontend/components/status_stream.py`
+### Experimental
 
-### Partially implemented or scaffolded
-
-- `src/dag_engine/dag_graph.py`
-- `src/kag/builder/orchestrator.py`
-- `src/kag/retriever/query_engine.py`
-- `src/skillnet/skill_harvester.py`
-
-### Mostly placeholder / future work
-
-- `src/api/routers/upload_router.py`
 - `src/frontend/pages/knowledge_manager.py`
 - `src/frontend/pages/skill_manager.py`
-- several deeper production workflow nodes
+- heavier product-style management surfaces outside the main runtime loop
+- long-horizon expansion areas that do not change whether the current runtime is valid
 
 ## 6. Recommended environment
 
@@ -440,6 +420,11 @@ make run-api
 make run-frontend
 make demo-trace
 make create-task
+make test
+make lint
+make fmt-check
+make lint-all
+make fmt-check-all
 make test-stream
 make smoke-models
 ```
@@ -486,17 +471,18 @@ make create-task
 If you want to understand the project quickly:
 
 1. `docs/code_tour.md`
-2. `docs/deerflow_integration.md`
-3. `docs/runtime_support_matrix.md`
-4. `docs/openharness_adaptation_plan.md`
-5. `config/settings.py`
-6. `litellm_config.yml`
-7. `src/common/llm_client.py`
-8. `src/kag/framework/llama_index_adapter.py`
-9. `src/dynamic_engine/deerflow_bridge.py`
-10. `src/dag_engine/nodes/dynamic_swarm_node.py`
-11. `src/api/routers/sse_router.py`
-12. `src/frontend/pages/task_console.py`
+2. `docs/project_status.md`
+3. `docs/deerflow_integration.md`
+4. `docs/runtime_support_matrix.md`
+5. `docs/openharness_adaptation_plan.md`
+6. `config/settings.py`
+7. `litellm_config.yml`
+8. `src/common/llm_client.py`
+9. `src/kag/framework/llama_index_adapter.py`
+10. `src/dynamic_engine/deerflow_bridge.py`
+11. `src/dag_engine/nodes/dynamic_swarm_node.py`
+12. `src/api/routers/sse_router.py`
+13. `src/frontend/pages/task_console.py`
 
 ## 11. Current known limitations
 
@@ -504,7 +490,8 @@ If you want to understand the project quickly:
 - the frontend is a demo-grade console, not a polished product UI
 - not all DAG business nodes are complete
 - dependency surface is broad because DeerFlow and KAG both bring heavy stacks
-- some modules in the repository are still architectural placeholders
+- experimental surfaces remain intentionally de-emphasized relative to the runtime core
+- `make lint` / `make fmt-check` currently enforce the touched hotspot files; use `make lint-all` / `make fmt-check-all` to inspect the broader repo-wide debt
 
 ## 12. Supporting docs
 

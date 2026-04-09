@@ -1,4 +1,5 @@
 """Memory-blackboard sync helpers for harvested and durable task memories."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

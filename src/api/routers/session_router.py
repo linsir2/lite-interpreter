@@ -1,6 +1,8 @@
 """Session login and identity inspection endpoints."""
+
 from __future__ import annotations
 
+from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -9,7 +11,6 @@ from src.api.auth import (
     request_auth_context,
 )
 from src.api.schemas import SessionLoginRequest, validation_error_payload
-from pydantic import ValidationError
 
 
 async def login_session(request: Request) -> JSONResponse:
@@ -33,8 +34,7 @@ async def login_session(request: Request) -> JSONResponse:
             "role": auth_context.role,
             "auth_type": auth_context.auth_type,
             "grants": [
-                {"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id}
-                for grant in auth_context.grants
+                {"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id} for grant in auth_context.grants
             ],
         }
     )
@@ -51,8 +51,7 @@ async def get_session_me(request: Request) -> JSONResponse:
             "role": auth_context.role,
             "auth_type": auth_context.auth_type,
             "grants": [
-                {"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id}
-                for grant in auth_context.grants
+                {"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id} for grant in auth_context.grants
             ],
         }
     )

@@ -1,4 +1,5 @@
 """关系抽取器：在强约束规则下为 MAGMA 四张图生成三元组。"""
+
 from __future__ import annotations
 
 from collections import defaultdict

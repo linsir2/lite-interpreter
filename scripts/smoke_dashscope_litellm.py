@@ -32,18 +32,20 @@ def main() -> int:
 
     chat_cfg = LiteLLMClient.get_model_config(args.chat_alias)
     emb_cfg = LiteLLMClient.get_model_config(args.embedding_alias)
-    print(json.dumps(
-        {
-            "chat_alias": args.chat_alias,
-            "chat_model": chat_cfg.params.get("model"),
-            "embedding_alias": args.embedding_alias,
-            "embedding_model": emb_cfg.params.get("model"),
-            "api_base": chat_cfg.params.get("api_base"),
-            "has_dashscope_key": bool(os.getenv("DASHSCOPE_API_KEY")),
-        },
-        ensure_ascii=False,
-        indent=2,
-    ))
+    print(
+        json.dumps(
+            {
+                "chat_alias": args.chat_alias,
+                "chat_model": chat_cfg.params.get("model"),
+                "embedding_alias": args.embedding_alias,
+                "embedding_model": emb_cfg.params.get("model"),
+                "api_base": chat_cfg.params.get("api_base"),
+                "has_dashscope_key": bool(os.getenv("DASHSCOPE_API_KEY")),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
     if not args.run_chat and not args.run_embedding:
         print("\nResult: CONFIG OK")

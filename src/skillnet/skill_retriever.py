@@ -1,4 +1,5 @@
 """Simple retrieval helpers for capability-aware skill candidates."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
@@ -36,11 +37,7 @@ class SkillRetriever:
             skill if isinstance(skill, SkillDescriptor) else SkillDescriptor.from_payload(dict(skill))
             for skill in skills
         ]
-        return [
-            descriptor
-            for descriptor in descriptors
-            if set(descriptor.required_capabilities).issubset(available)
-        ]
+        return [descriptor for descriptor in descriptors if set(descriptor.required_capabilities).issubset(available)]
 
     @staticmethod
     def filter_approved(skills: Iterable[SkillDescriptor | dict[str, Any]]) -> list[SkillDescriptor]:
@@ -231,7 +228,9 @@ class SkillRetriever:
                     "name": descriptor.name,
                     "required_capabilities": list(descriptor.required_capabilities),
                     "promotion": dict(descriptor.promotion),
-                    "usage": dict(descriptor.metadata.get("usage", {}) or {}) if isinstance(descriptor.metadata, Mapping) else {},
+                    "usage": dict(descriptor.metadata.get("usage", {}) or {})
+                    if isinstance(descriptor.metadata, Mapping)
+                    else {},
                     "match_source": str(ranked.get("match_source") or "historical_repo"),
                     "match_reason": str(ranked.get("match_reason") or "historical_match"),
                     "match_score": int(ranked.get("match_score") or 0),
@@ -256,12 +255,12 @@ class SkillRetriever:
         match_reason_detail: str | None = None,
     ) -> list[dict[str, Any]]:
         merged: dict[str, dict[str, Any]] = {
-            str(item.get("name", "")): dict(item)
-            for item in existing_matches
-            if str(item.get("name", "")).strip()
+            str(item.get("name", "")): dict(item) for item in existing_matches if str(item.get("name", "")).strip()
         }
         replay_case_ids = [str(item) for item in (used_replay_case_ids or []) if str(item).strip()]
-        capability_ids = [str(item) for item in capability_registry.normalize_names(used_capabilities or []) if str(item).strip()]
+        capability_ids = [
+            str(item) for item in capability_registry.normalize_names(used_capabilities or []) if str(item).strip()
+        ]
         for match in new_matches:
             name = str(match.get("name", "")).strip()
             if not name:

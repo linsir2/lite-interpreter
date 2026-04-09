@@ -1,4 +1,5 @@
 """Built-in statistics skill seeds."""
+
 from __future__ import annotations
 
 from src.skillnet.skill_schema import SkillDescriptor

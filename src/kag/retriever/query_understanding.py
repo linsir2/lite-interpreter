@@ -1,4 +1,5 @@
 """查询理解：坚持规则优先，避免无依据生成过滤条件。"""
+
 from __future__ import annotations
 
 import re

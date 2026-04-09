@@ -1,4 +1,5 @@
 """KAG 文档构建缓存。"""
+
 from __future__ import annotations
 
 import os

@@ -1,4 +1,5 @@
 """Task-aware sandbox execution helper used by DAG/runtime callsites."""
+
 from __future__ import annotations
 
 import os
@@ -17,9 +18,14 @@ def build_input_mount_manifest(
     """Build a read-only host/container manifest for sandbox-visible inputs."""
     manifest: list[dict[str, str]] = []
     seen_paths: set[str] = set()
-    for kind, items in (("structured_dataset", structured_datasets or []), ("business_document", business_documents or [])):
+    for kind, items in (
+        ("structured_dataset", structured_datasets or []),
+        ("business_document", business_documents or []),
+    ):
         for index, item in enumerate(items):
-            host_path = str(getattr(item, "path", "") or (item.get("path", "") if isinstance(item, dict) else "")).strip()
+            host_path = str(
+                getattr(item, "path", "") or (item.get("path", "") if isinstance(item, dict) else "")
+            ).strip()
             if not host_path or host_path in seen_paths:
                 continue
             seen_paths.add(host_path)

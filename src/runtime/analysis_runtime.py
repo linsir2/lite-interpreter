@@ -5,6 +5,7 @@ This module intentionally stays narrow:
 - resolve per-purpose model decisions without creating a generic framework
 - build a compact analysis brief for downstream static/dynamic nodes
 """
+
 from __future__ import annotations
 
 import os
@@ -15,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from config.settings import ANALYSIS_RUNTIME_POLICY_PATH
 
 
@@ -194,12 +194,14 @@ def classify_analysis_task(
 
     dynamic_hits = [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query]
     dataset_signal = structured_count > 0 or any(token.lower() in lowered_query for token in dataset_keywords)
-    document_signal = document_count > 0 or any(token.lower() in lowered_query for token in document_keywords) or bool(rules or metrics or filters)
+    document_signal = (
+        document_count > 0
+        or any(token.lower() in lowered_query for token in document_keywords)
+        or bool(rules or metrics or filters)
+    )
 
     if dynamic_hits:
-        known_gaps.extend(
-            gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps
-        )
+        known_gaps.extend(gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps)
         profile_payload = policy["profiles"]["dynamic_research_analysis"]
         return AnalysisTaskProfile(
             analysis_mode="dynamic_research_analysis",
@@ -288,13 +290,11 @@ def resolve_runtime_decision(
     exec_data: Any | None = None,
     allowed_tools: Sequence[str] | None = None,
 ) -> AnalysisRuntimeDecision:
-    policy = load_analysis_runtime_policy()
     profile = classify_analysis_task(
         query=query,
         exec_data=exec_data,
         allowed_tools=allowed_tools or (state.get("allowed_tools") if isinstance(state, Mapping) else []) or [],
     )
-    purpose_payload = dict(policy.get("call_purposes", {}).get(call_purpose, {}) or {})
     return AnalysisRuntimeDecision(
         call_purpose=call_purpose,
         model_alias=_resolve_model_alias(call_purpose, state or {}),
@@ -338,7 +338,9 @@ def build_analysis_brief(
     else:
         rules, metrics, filters = _business_context(exec_data)
     dataset_summaries = _dataset_summaries(exec_data)
-    evidence_refs = _normalize_strings((knowledge_snapshot or {}).get("evidence_refs") if isinstance(knowledge_snapshot, Mapping) else [])
+    evidence_refs = _normalize_strings(
+        (knowledge_snapshot or {}).get("evidence_refs") if isinstance(knowledge_snapshot, Mapping) else []
+    )
     gaps = [str(item) for item in (known_gaps or []) if str(item).strip()]
     if not dataset_summaries and not rules and not metrics and not filters:
         gaps.append("当前缺少可直接消费的分析上下文")

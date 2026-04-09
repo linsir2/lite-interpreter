@@ -7,6 +7,7 @@
 
 - 生产期：完美委托给 StateRepo (PostgreSQL JSONB) 实现跨节点持久化
 """
+
 import threading
 
 from src.blackboard.base_blackboard import BaseSubBlackboard
@@ -16,11 +17,12 @@ from src.storage.repository.state_repo import StateRepo
 
 logger = get_logger(__name__)
 
+
 class ExecutionBlackboard(BaseSubBlackboard):
     board_name: str = "execution"
 
     def __init__(self):
-        self._storage: dict[str, dict[str, ExecutionData]] = {} # 内存存储：tenant_id -> {task_id -> ExecutionData}
+        self._storage: dict[str, dict[str, ExecutionData]] = {}  # 内存存储：tenant_id -> {task_id -> ExecutionData}
         self._lock = threading.RLock()
         logger.info("执行流子黑板初始化完成(已成功接入 Postgres StateRepo)", extra={"trace_id": "system"})
 
@@ -51,7 +53,7 @@ class ExecutionBlackboard(BaseSubBlackboard):
             return ExecutionData(**payload)
         except Exception:
             return None
-    
+
     def write(
         self,
         tenant_id: str,
@@ -74,37 +76,33 @@ class ExecutionBlackboard(BaseSubBlackboard):
         if not isinstance(value, ExecutionData):
             logger.error("写入数据类型错误，必须是ExecutionData", extra={"trace_id": task_id})
             return False
-        
+
         with self._lock:
             if refresh_updated_at:
                 value.control.updated_at = get_utc_now()
             if tenant_id not in self._storage:
                 self._storage[tenant_id] = {}
             self._storage[tenant_id][task_id] = value
-            logger.debug(
-                f"执行数据写入成功 tenant_id={tenant_id} task_id={task_id}",
-                extra={"trace_id": task_id}
-            )
+            logger.debug(f"执行数据写入成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
             return True
-    
+
     def delete(self, tenant_id: str, task_id: str) -> bool:
         with self._lock:
-            if tenant_id and self._storage and  task_id in self._storage[tenant_id]:
+            if tenant_id and self._storage and task_id in self._storage[tenant_id]:
                 del self._storage[tenant_id][task_id]
-                logger.info(
-                    f"执行数据删除成功 tenant_id={tenant_id} task_id={task_id}",
-                    extra={"trace_id": task_id}
-                )
+                logger.info(f"执行数据删除成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
                 return True
             return False
 
     def persist(self, tenant_id: str, task_id: str) -> bool:
         data = self.read(tenant_id, task_id)
         if not data:
-            logger.warning(f"持久化失败，数据不存在 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
+            logger.warning(
+                f"持久化失败，数据不存在 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id}
+            )
             return False
-        
-        workspace_id = getattr(data, 'workspace_id', 'default_ws')
+
+        workspace_id = getattr(data, "workspace_id", "default_ws")
 
         try:
             # 1. 从 DB 中捞出该 task_id 的全局混合状态 (避免覆盖 Knowledge 的数据)
@@ -116,18 +114,14 @@ class ExecutionBlackboard(BaseSubBlackboard):
             # 3. 整体回写给大管家，打入 Postgres
             StateRepo.save_blackboard_state(tenant_id, task_id, workspace_id, full_state)
 
-            logger.debug(
-                f"执行数据持久化成功 tenant_id={tenant_id} task_id={task_id}",
-                extra={"trace_id": task_id}
-            )
+            logger.debug(f"执行数据持久化成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
             return True
         except Exception as e:
             logger.error(
-                f"执行数据持久化失败 tenant_id={tenant_id} task_id={task_id}: {str(e)}",
-                extra={"trace_id": task_id}
+                f"执行数据持久化失败 tenant_id={tenant_id} task_id={task_id}: {str(e)}", extra={"trace_id": task_id}
             )
             return False
-    
+
     def restore(self, tenant_id: str, task_id: str) -> bool:
         """从持久化文件恢复数据"""
         try:
@@ -142,15 +136,11 @@ class ExecutionBlackboard(BaseSubBlackboard):
             # restore 的目标是把持久化态原样回填到当前单例缓存，
             # 不是制造一次新的执行状态写入。
             self.write(tenant_id, task_id, data, refresh_updated_at=False)
-            logger.info(
-                f"执行数据恢复成功 tenant_id={tenant_id} task_id={task_id}",
-                extra={"trace_id": task_id}
-            )
+            logger.info(f"执行数据恢复成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
             return True
         except Exception as e:
             logger.error(
-                f"执行数据恢复失败 tenant_id={tenant_id} task_id={task_id}: {str(e)}",
-                extra={"trace_id": task_id}
+                f"执行数据恢复失败 tenant_id={tenant_id} task_id={task_id}: {str(e)}", extra={"trace_id": task_id}
             )
             return False
 
@@ -183,5 +173,6 @@ class ExecutionBlackboard(BaseSubBlackboard):
             if current is None or self._is_newer_execution_data(data, current):
                 known[data.task_id] = data
         return list(known.values())
+
 
 execution_blackboard = ExecutionBlackboard()

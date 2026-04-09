@@ -1,4 +1,5 @@
 """Minimal auditor node that AST-checks generated code before execution."""
+
 from __future__ import annotations
 
 from typing import Any

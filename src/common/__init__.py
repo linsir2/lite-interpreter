@@ -1,4 +1,5 @@
 """公共工具层"""
+
 from .capability_registry import CapabilityDescriptor, CapabilityRegistry, capability_registry
 from .contracts import (
     ArtifactRecord,

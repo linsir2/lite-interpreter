@@ -1,4 +1,5 @@
 """全局基础配置"""
+
 import json
 import os
 import socket
@@ -65,12 +66,11 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return raw in {"1", "true", "yes", "on"}
 
+
 # 项目基础配置
 PROJECT_ROOT = Path(__file__).parent.parent
 LITELLM_CONFIG_PATH = PROJECT_ROOT / "litellm_config.yml"
-HARNESS_POLICY_PATH = Path(
-    _env_str("HARNESS_POLICY_PATH", str(PROJECT_ROOT / "config" / "harness_policy.yaml"))
-)
+HARNESS_POLICY_PATH = Path(_env_str("HARNESS_POLICY_PATH", str(PROJECT_ROOT / "config" / "harness_policy.yaml")))
 ANALYSIS_RUNTIME_POLICY_PATH = Path(
     _env_str("ANALYSIS_RUNTIME_POLICY_PATH", str(PROJECT_ROOT / "config" / "analysis_runtime.yaml"))
 )
@@ -129,8 +129,7 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = _env_str("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "kag_db")
 POSTGRES_URI = os.getenv(
-    "POSTGRES_URI", 
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+    "POSTGRES_URI", f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
 )
 
 # Neo4j 图数据库
@@ -157,8 +156,8 @@ CLASSIFIER_MEDIUM_THRESHOLD = _env_int("CLASSIFIER_MEDIUM_THRESHOLD", 50000)
 # ==========================================
 # DAG 与执行引擎配置
 # ==========================================
-MAX_RETRIES: Final[int] = _env_int("MAX_RETRIES", 3) # 节点间允许的最大容错回退次数
-CONTEXT_BUDGET_TOKENS: Final[int] = _env_int("CONTEXT_BUDGET_TOKENS", 4000) # 喂给 Coder 的上下文 Token 预算上限
+MAX_RETRIES: Final[int] = _env_int("MAX_RETRIES", 3)  # 节点间允许的最大容错回退次数
+CONTEXT_BUDGET_TOKENS: Final[int] = _env_int("CONTEXT_BUDGET_TOKENS", 4000)  # 喂给 Coder 的上下文 Token 预算上限
 
 # ==========================================
 # KAG 模块配置

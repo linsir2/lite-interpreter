@@ -1,4 +1,5 @@
 """Result/session/event helpers for sandbox execution flows."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -61,7 +62,9 @@ def publish_sandbox_task_events(
             workspace_id=workspace_id,
             payload={
                 "new_status": "executing" if success else "execution_failed",
-                "message": "Sandbox execution completed" if success else f"Sandbox execution failed: {error or 'unknown error'}",
+                "message": "Sandbox execution completed"
+                if success
+                else f"Sandbox execution failed: {error or 'unknown error'}",
                 "source": "sandbox",
             },
             trace_id=trace_id,

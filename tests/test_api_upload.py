@@ -1,4 +1,5 @@
 """Tests for upload and workspace asset endpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -82,9 +83,7 @@ def test_upload_asset_and_list_workspace_assets():
     assert payload["deduplicated"] is False
 
     assets_response = asyncio.run(
-        list_knowledge_assets(
-            _FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"})
-        )
+        list_knowledge_assets(_FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"}))
     )
     assert assets_response.status_code == 200
     assets = json.loads(assets_response.body.decode())["assets"]
@@ -105,12 +104,16 @@ def test_workspace_business_document_upload_enters_typed_knowledge_state():
     response = asyncio.run(upload_asset(request))
     assets_response = asyncio.run(
         list_knowledge_assets(
-            _FakeRequest(query_params={"tenant_id": "tenant-upload-workspace-doc", "workspace_id": "ws-upload-workspace-doc"})
+            _FakeRequest(
+                query_params={"tenant_id": "tenant-upload-workspace-doc", "workspace_id": "ws-upload-workspace-doc"}
+            )
         )
     )
     assets = json.loads(assets_response.body.decode())["assets"]
     typed_asset = next(asset for asset in assets if asset["file_name"] == "rule.txt")
-    knowledge_states = knowledge_blackboard.list_workspace_states("tenant-upload-workspace-doc", "ws-upload-workspace-doc")
+    knowledge_states = knowledge_blackboard.list_workspace_states(
+        "tenant-upload-workspace-doc", "ws-upload-workspace-doc"
+    )
 
     assert response.status_code == 200
     assert typed_asset["kind"] == "business_document"
@@ -168,7 +171,9 @@ def test_upload_asset_is_idempotent_per_task():
             _FakeRequest(query_params={"tenant_id": "tenant-upload-idempotent", "workspace_id": "ws-upload-idempotent"})
         )
     )
-    assets = [asset for asset in json.loads(assets_response.body.decode())["assets"] if asset["file_name"] == "rule.txt"]
+    assets = [
+        asset for asset in json.loads(assets_response.body.decode())["assets"] if asset["file_name"] == "rule.txt"
+    ]
     assert len(assets) == 1
     execution_data = execution_blackboard.read("tenant-upload-idempotent", task_id)
     assert execution_data is not None
@@ -335,9 +340,7 @@ def test_upload_asset_rejects_same_name_with_different_payload():
 
 def test_list_workspace_skills_includes_preset_skills():
     response = asyncio.run(
-        list_workspace_skills(
-            _FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"})
-        )
+        list_workspace_skills(_FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"}))
     )
     assert response.status_code == 200
     skills = json.loads(response.body.decode())["skills"]
@@ -360,9 +363,7 @@ def test_list_knowledge_assets_reads_via_blackboard_accessors(monkeypatch):
     monkeypatch.setattr(execution_blackboard, "list_workspace_states", fake_list_execution)
 
     response = asyncio.run(
-        list_knowledge_assets(
-            _FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"})
-        )
+        list_knowledge_assets(_FakeRequest(query_params={"tenant_id": "tenant-upload", "workspace_id": "ws-upload"}))
     )
 
     assert response.status_code == 200

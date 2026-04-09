@@ -1,4 +1,5 @@
 """Unit tests for the DeerFlow bridge using a stub embedded client."""
+
 from __future__ import annotations
 
 import sys
@@ -129,7 +130,9 @@ class DeerflowBridgeTests(unittest.TestCase):
             '{"type":"values","data":{"artifacts":[{"path":"/tmp/sidecar.md"}]}}',
             '{"type":"end","data":{"usage":{"total_tokens":1}}}',
         ]
-        with patch("src.dynamic_engine.deerflow_bridge.httpx.stream", return_value=_FakeStreamResponse(200, sidecar_lines)):
+        with patch(
+            "src.dynamic_engine.deerflow_bridge.httpx.stream", return_value=_FakeStreamResponse(200, sidecar_lines)
+        ):
             result = bridge.run(request)
 
         self.assertEqual(result.status, "completed")

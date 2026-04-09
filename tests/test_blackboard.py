@@ -1,4 +1,5 @@
 """黑板核心逻辑测试用例"""
+
 import asyncio
 import importlib
 import threading
@@ -52,14 +53,14 @@ def test_task_create_and_status_update():
     workspace_id = "ws_test"
     input_query = "帮我分析销售数据"
     task_id = global_blackboard.create_task(tenant_id, workspace_id, input_query)
-    
+
     # 2. 验证任务状态
     task = global_blackboard.get_task_state(task_id)
     assert task.tenant_id == tenant_id
     assert task.workspace_id == workspace_id
     assert task.input_query == input_query
     assert task.global_status == GlobalStatus.PENDING
-    
+
     # 3. 更新状态
     global_blackboard.update_global_status(task_id, GlobalStatus.ANALYZING)
     task = global_blackboard.get_task_state(task_id)
@@ -70,7 +71,7 @@ def test_execution_blackboard_write_read():
     """测试执行流子黑板读写"""
     tenant_id = "test_tenant_001"
     task_id = "test_task_001"
-    
+
     # 写入数据
     exec_data = ExecutionData(
         task_id=task_id,
@@ -90,7 +91,7 @@ def test_execution_blackboard_write_read():
         },
     )
     assert execution_blackboard.write(tenant_id, task_id, exec_data) is True
-    
+
     # 读取数据
     read_data = execution_blackboard.read(tenant_id, task_id)
     assert read_data is not None

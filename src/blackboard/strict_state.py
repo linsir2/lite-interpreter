@@ -11,6 +11,7 @@
 - 还没收完的技术债
 - 真正的设计倒退
 """
+
 from __future__ import annotations
 
 from typing import Any

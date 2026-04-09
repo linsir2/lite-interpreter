@@ -1,6 +1,8 @@
 """Minimal analyst node for the static execution path."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
@@ -12,6 +14,14 @@ from src.memory import MemoryService
 from src.runtime import build_analysis_brief, resolve_runtime_decision
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class PreparedAnalysisPlan:
+    """All artifacts the analyst node needs to persist."""
+
+    analysis_brief: dict[str, Any]
+    analysis_plan: str
 
 
 def _format_approved_skill_hints(approved_skills: list[dict[str, Any]]) -> str:
@@ -28,56 +38,29 @@ def _format_approved_skill_hints(approved_skills: list[dict[str, Any]]) -> str:
         required = ", ".join(str(item) for item in required_capabilities[:3]) or "none"
         promotion = skill.promotion if hasattr(skill, "promotion") else (skill.get("promotion") or {})
         provenance = promotion.provenance if hasattr(promotion, "provenance") else (promotion.get("provenance") or {})
-        validation_status = provenance.validation_status if hasattr(provenance, "validation_status") else (provenance.get("validation_status") or "unknown")
+        validation_status = (
+            provenance.validation_status
+            if hasattr(provenance, "validation_status")
+            else (provenance.get("validation_status") or "unknown")
+        )
         parts.append(f"{name}(caps={required}; validation={validation_status})")
     return "；".join(parts)
 
 
-def analyst_node(state: DagGraphState) -> dict[str, Any]:
-    tenant_id = state["tenant_id"]
-    task_id = state["task_id"]
-    query = state["input_query"]
-    refined_context = str(state.get("refined_context", "") or "")
-
-    global_blackboard.update_global_status(
-        task_id=task_id,
-        new_status=GlobalStatus.ANALYZING,
-        sub_status="正在生成静态执行计划",
-    )
-
-    exec_data = execution_blackboard.read(tenant_id, task_id)
-    if not exec_data:
-        logger.warning(f"[Analyst] 缺少任务 {task_id} 的执行上下文")
-        return {"analysis_plan": "", "next_actions": ["coder"]}
-    memory_data = MemoryService.recall_skills(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=exec_data.workspace_id,
-        query=query,
-        stage="analyst",
-        available_capabilities=exec_data.control.task_envelope.allowed_tools if exec_data.control.task_envelope else [],
-        match_reason_detail="analyst reused historical skills while drafting the analysis plan",
-    ).memory_data
-    runtime_decision = resolve_runtime_decision(
-        call_purpose="analysis_summary",
-        query=query,
-        state=state,
-        exec_data=exec_data,
-        allowed_tools=exec_data.control.task_envelope.allowed_tools if exec_data.control.task_envelope else [],
-    )
+def _resolve_analysis_brief_payload(state: DagGraphState, exec_data: Any) -> dict[str, Any] | None:
     analysis_brief_payload = state.get("analysis_brief") if isinstance(state.get("analysis_brief"), dict) else None
     if analysis_brief_payload is None and exec_data.knowledge.analysis_brief.question:
-        analysis_brief_payload = exec_data.knowledge.analysis_brief.model_dump(mode="json")
-    analysis_brief = analysis_brief_payload or build_analysis_brief(
-        query=query,
-        exec_data=exec_data,
-        knowledge_snapshot=exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
-        business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
-        analysis_mode=runtime_decision.analysis_mode,
-        known_gaps=runtime_decision.known_gaps,
-    ).to_payload()
+        return exec_data.knowledge.analysis_brief.model_dump(mode="json")
+    return analysis_brief_payload
 
-    evidence_summary = []
+
+def _build_evidence_summary(
+    *,
+    analysis_brief: dict[str, Any],
+    refined_context: str,
+    approved_skills: list[dict[str, Any]],
+) -> list[str]:
+    evidence_summary: list[str] = []
     if analysis_brief.get("business_rules"):
         evidence_summary.append(f"rules={len(analysis_brief['business_rules'])}")
     if analysis_brief.get("business_metrics"):
@@ -86,11 +69,53 @@ def analyst_node(state: DagGraphState) -> dict[str, Any]:
         evidence_summary.append(f"datasets={len(analysis_brief['dataset_summaries'])}")
     if refined_context:
         evidence_summary.append("refined_context=present")
-    if memory_data.approved_skills:
-        evidence_summary.append(f"approved_skills={len(memory_data.approved_skills)}")
+    if approved_skills:
+        evidence_summary.append(f"approved_skills={len(approved_skills)}")
     if analysis_brief.get("evidence_refs"):
         evidence_summary.append(f"evidence_refs={len(analysis_brief['evidence_refs'])}")
+    return evidence_summary
 
+
+def _prepare_analysis_plan(
+    *,
+    state: DagGraphState,
+    exec_data: Any,
+    refined_context: str,
+) -> PreparedAnalysisPlan:
+    query = state["input_query"]
+    allowed_tools = list(exec_data.control.task_envelope.allowed_tools) if exec_data.control.task_envelope else []
+    memory_data = MemoryService.recall_skills(
+        tenant_id=exec_data.tenant_id,
+        task_id=exec_data.task_id,
+        workspace_id=exec_data.workspace_id,
+        query=query,
+        stage="analyst",
+        available_capabilities=allowed_tools,
+        match_reason_detail="analyst reused historical skills while drafting the analysis plan",
+    ).memory_data
+    runtime_decision = resolve_runtime_decision(
+        call_purpose="analysis_summary",
+        query=query,
+        state=state,
+        exec_data=exec_data,
+        allowed_tools=allowed_tools,
+    )
+    analysis_brief = (
+        _resolve_analysis_brief_payload(state, exec_data)
+        or build_analysis_brief(
+            query=query,
+            exec_data=exec_data,
+            knowledge_snapshot=exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
+            business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
+            analysis_mode=runtime_decision.analysis_mode,
+            known_gaps=runtime_decision.known_gaps,
+        ).to_payload()
+    )
+    evidence_summary = _build_evidence_summary(
+        analysis_brief=analysis_brief,
+        refined_context=refined_context,
+        approved_skills=list(memory_data.approved_skills or []),
+    )
     analysis_plan = (
         f"任务类型: {analysis_brief.get('analysis_mode') or runtime_decision.analysis_mode}\n"
         f"目标: {query}\n"
@@ -107,9 +132,34 @@ def analyst_node(state: DagGraphState) -> dict[str, Any]:
         "4. 在执行前进行 AST 审计\n"
         f"5. {analysis_brief.get('recommended_next_step') or '将执行结果回写黑板与前端事件流'}"
     )
+    return PreparedAnalysisPlan(
+        analysis_brief=analysis_brief,
+        analysis_plan=analysis_plan,
+    )
 
-    exec_data.knowledge.analysis_brief = analysis_brief
-    exec_data.static.analysis_plan = analysis_plan
+
+def analyst_node(state: DagGraphState) -> dict[str, Any]:
+    tenant_id = state["tenant_id"]
+    task_id = state["task_id"]
+    refined_context = str(state.get("refined_context", "") or "")
+
+    global_blackboard.update_global_status(
+        task_id=task_id,
+        new_status=GlobalStatus.ANALYZING,
+        sub_status="正在生成静态执行计划",
+    )
+
+    exec_data = execution_blackboard.read(tenant_id, task_id)
+    if not exec_data:
+        logger.warning(f"[Analyst] 缺少任务 {task_id} 的执行上下文")
+        return {"analysis_plan": "", "next_actions": ["coder"]}
+    prepared = _prepare_analysis_plan(
+        state=state,
+        exec_data=exec_data,
+        refined_context=refined_context,
+    )
+    exec_data.knowledge.analysis_brief = prepared.analysis_brief
+    exec_data.static.analysis_plan = prepared.analysis_plan
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
-    return {"analysis_plan": analysis_plan, "next_actions": ["coder"]}
+    return {"analysis_plan": prepared.analysis_plan, "next_actions": ["coder"]}

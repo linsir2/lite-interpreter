@@ -3,12 +3,14 @@
 
 所有子黑板必须继承此类，实现固定接口
 """
+
 from abc import ABC, abstractmethod
 from typing import Any
 
 
 class BaseSubBlackboard(ABC):
     """子黑板抽象基类"""
+
     # 子黑板唯一标识，必须在子类中定义，如 "execution" / "knowledge"
     board_name: str
 

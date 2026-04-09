@@ -1,4 +1,5 @@
 """Streamlit entrypoint for lite-interpreter demo pages."""
+
 from __future__ import annotations
 
 from src.frontend.pages.audit_manager import render_audit_manager

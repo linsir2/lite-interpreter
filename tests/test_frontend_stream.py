@@ -1,4 +1,5 @@
 """Frontend stream rendering tests."""
+
 from __future__ import annotations
 
 from src.frontend.components.status_stream import build_status_stream_html

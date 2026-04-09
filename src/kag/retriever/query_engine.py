@@ -1,4 +1,5 @@
 """KAG 统一查询引擎。"""
+
 from __future__ import annotations
 
 from src.blackboard.schema import RetrievalPlan
@@ -82,23 +83,33 @@ class QueryEngine:
         sparse_results: list[dict[str, object]] = []
         if is_keyword_query(query) or difficulty_score < 0.4:
             if "bm25" in plan.recall_strategies:
-                sparse_results.extend(bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id))
+                sparse_results.extend(
+                    bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
+                )
         else:
             if "splade" in plan.recall_strategies:
-                sparse_results.extend(splade_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id))
+                sparse_results.extend(
+                    splade_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
+                )
             elif "bm25" in plan.recall_strategies:
-                sparse_results.extend(bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id))
+                sparse_results.extend(
+                    bm25_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
+                )
 
         vector_results: list[dict[str, object]] = []
         if "vector" in plan.recall_strategies and difficulty_score >= 0.3:
-            vector_results = hybrid_search.vector_recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
+            vector_results = hybrid_search.vector_recall(
+                search_query, tenant_id, filters=filters, workspace_id=workspace_id
+            )
 
         graph_results: list[dict[str, object]] = []
         if "graph" in plan.recall_strategies and (difficulty_score >= 0.7 or is_multi_hop):
             graph_results = graph_search.recall(search_query, tenant_id, filters=filters, workspace_id=workspace_id)
 
         if vector_results or graph_results:
-            candidates = hybrid_search.fuse_results([sparse_results, vector_results, graph_results], top_k=max(plan.top_k * 2, plan.top_k))
+            candidates = hybrid_search.fuse_results(
+                [sparse_results, vector_results, graph_results], top_k=max(plan.top_k * 2, plan.top_k)
+            )
         else:
             candidates = sparse_results
 
@@ -124,7 +135,9 @@ class QueryEngine:
         if plan.enable_rerank:
             ranked_docs = cross_encoder_rerank(query, unique_candidates, top_k=plan.top_k)
         else:
-            ranked_docs = sorted(unique_candidates, key=lambda item: float(item.get("score", 0.0)), reverse=True)[: plan.top_k]
+            ranked_docs = sorted(unique_candidates, key=lambda item: float(item.get("score", 0.0)), reverse=True)[
+                : plan.top_k
+            ]
 
         final_docs = enforce_budget(ranked_docs, plan.budget_tokens, query=query)
         RetrievalCache.set(cache_key, final_docs)

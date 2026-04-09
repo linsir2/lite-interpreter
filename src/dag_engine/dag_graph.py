@@ -1,4 +1,5 @@
 """DAG assembly for the hybrid static + dynamic orchestration path."""
+
 from __future__ import annotations
 
 import json
@@ -229,7 +230,9 @@ def execute_task_flow(
                     "terminal_status": "waiting_for_human",
                     "terminal_sub_status": "动态任务被治理策略阻断，等待人工介入",
                     "failure_type": "dynamic_governance",
-                    "error_message": str(dynamic_state.get("dynamic_summary") or "dynamic swarm denied by governance policy"),
+                    "error_message": str(
+                        dynamic_state.get("dynamic_summary") or "dynamic swarm denied by governance policy"
+                    ),
                 }
             summary_state = _run_checkpointed_node(
                 node_name="summarizer",
@@ -250,7 +253,9 @@ def execute_task_flow(
         for action in next_actions:
             if action == "data_inspector":
                 current_state.update(
-                    _run_checkpointed_node(node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state)
+                    _run_checkpointed_node(
+                        node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state
+                    )
                 )
                 if current_state.get("blocked"):
                     summary_state = _run_checkpointed_node(
@@ -268,7 +273,9 @@ def execute_task_flow(
                     }
             elif action == "kag_retriever":
                 current_state.update(
-                    _run_checkpointed_node(node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state)
+                    _run_checkpointed_node(
+                        node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state
+                    )
                 )
                 if current_state.get("blocked"):
                     summary_state = _run_checkpointed_node(
@@ -285,7 +292,9 @@ def execute_task_flow(
                         "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
                     }
                 current_state.update(
-                    _run_checkpointed_node(node_name="context_builder", node_fn=nodes["context_builder"], state=current_state)
+                    _run_checkpointed_node(
+                        node_name="context_builder", node_fn=nodes["context_builder"], state=current_state
+                    )
                 )
 
         current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
@@ -294,8 +303,12 @@ def execute_task_flow(
         audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
         current_state.update(audit_state)
         if audit_state.get("next_actions") == ["debugger"]:
-            current_state.update(_run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state))
-            current_state.update(_run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state))
+            current_state.update(
+                _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
+            )
+            current_state.update(
+                _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
+            )
         if current_state.get("next_actions") == ["skill_harvester"]:
             harvested_state = _run_checkpointed_node(
                 node_name="skill_harvester",

@@ -1,4 +1,5 @@
 """Prompt templates used by the data inspector."""
+
 from __future__ import annotations
 
 DATA_INSPECTOR_SYSTEM_PROMPT = (

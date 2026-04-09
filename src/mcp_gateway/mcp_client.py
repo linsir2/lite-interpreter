@@ -1,4 +1,5 @@
 """Thin client wrapper around the in-process MCP-style tool server."""
+
 from __future__ import annotations
 
 from typing import Any

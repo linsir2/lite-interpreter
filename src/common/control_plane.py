@@ -1,4 +1,5 @@
 """Canonical control-plane helpers for task and execution state."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -152,7 +153,9 @@ def execution_intent_reason(execution_intent: ExecutionIntent | Mapping[str, Any
     return ""
 
 
-def execution_intent_candidate_skills(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> list[dict[str, Any]]:
+def execution_intent_candidate_skills(
+    execution_intent: ExecutionIntent | Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
     if isinstance(execution_intent, ExecutionIntent):
         return _normalize_payload_list(execution_intent.candidate_skills)
     if isinstance(execution_intent, Mapping):
@@ -236,6 +239,7 @@ def parser_reports_from_documents(business_documents: Sequence[Any] | None) -> l
             }
         )
     return reports
+
 
 def ensure_execution_record(
     value: Any = None,

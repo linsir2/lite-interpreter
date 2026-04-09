@@ -1,4 +1,5 @@
 """In-process task lease loss tracking for scheduler workers."""
+
 from __future__ import annotations
 
 import threading
@@ -36,9 +37,5 @@ def ensure_task_lease_owned(task_id: str, lease_owner_id: str) -> None:
     status = StateRepo.task_lease_status(normalized_task_id, normalized_owner)
     if status.get("status") != "owned":
         raise TaskLeaseLostError(
-            str(
-                status.get("reason")
-                or status.get("error")
-                or f"task lease not owned for {normalized_task_id}"
-            )
+            str(status.get("reason") or status.get("error") or f"task lease not owned for {normalized_task_id}")
         )

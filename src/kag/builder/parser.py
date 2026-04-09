@@ -4,6 +4,7 @@ src/kag/builder/parser.py
 
 职责：集成 Docling，支持 PDF/Word/TXT/MD 等格式解析，输出统一的 ParsedDocument。
 """
+
 from __future__ import annotations
 
 import os
@@ -31,6 +32,9 @@ class PdfParseProfile:
 
 class DocumentParser:
     """文档解析器"""
+
+    DOC_TITLE_LEVEL = 0
+    DEFAULT_SECTION_LEVEL = 1
 
     @classmethod
     def parse(cls, file_path: str, tenant_id: str, upload_batch_id: str) -> ParsedDocument:
@@ -66,7 +70,7 @@ class DocumentParser:
     @classmethod
     def _pdf_policy(cls) -> dict[str, Any]:
         policy = load_harness_policy()
-        return (((policy.get("docling") or {}).get("pdf")) or {})
+        return ((policy.get("docling") or {}).get("pdf")) or {}
 
     @classmethod
     def infer_pdf_parse_profile(cls, file_path: str) -> PdfParseProfile:
@@ -76,7 +80,9 @@ class DocumentParser:
         threshold_images = int(policy.get("scanned_image_count_threshold", 1))
         enable_ocr = bool(policy.get("enable_ocr_for_scanned", True))
         enable_picture_description = bool(policy.get("enable_picture_description", False))
-        enable_picture_description_for_image_heavy = bool(policy.get("enable_picture_description_for_image_heavy", True))
+        enable_picture_description_for_image_heavy = bool(
+            policy.get("enable_picture_description_for_image_heavy", True)
+        )
         image_heavy_threshold = int(policy.get("image_heavy_count_threshold", 3))
         generate_picture_images = bool(policy.get("generate_picture_images", False))
 
@@ -109,9 +115,7 @@ class DocumentParser:
             diagnostics["image_count"] = images
             diagnostics["avg_chars_per_page"] = round(chars / sample_pages, 2) if sample_pages else 0.0
             scanned_like = (
-                sample_pages > 0
-                and diagnostics["avg_chars_per_page"] <= threshold_chars
-                and images >= threshold_images
+                sample_pages > 0 and diagnostics["avg_chars_per_page"] <= threshold_chars and images >= threshold_images
             )
             image_heavy = images >= image_heavy_threshold
         except Exception as exc:
@@ -119,9 +123,7 @@ class DocumentParser:
 
         use_ocr = scanned_like and enable_ocr
         use_picture_description = bool(
-            enable_picture_description and (
-                use_ocr or (enable_picture_description_for_image_heavy and image_heavy)
-            )
+            enable_picture_description and (use_ocr or (enable_picture_description_for_image_heavy and image_heavy))
         )
         if use_ocr and use_picture_description:
             mode = "ocr+vision"
@@ -182,8 +184,8 @@ class DocumentParser:
 
         content = getattr(document, "text", "") or cls._join_text_items(getattr(document, "texts", []))
         sections = cls._extract_sections(document)
-        tables = cls._extract_tables(getattr(document, "tables", []))
-        images = cls._extract_images(getattr(document, "pictures", []))
+        tables = cls._extract_tables(getattr(document, "tables", []), document=document)
+        images = cls._extract_images(getattr(document, "pictures", []), document=document)
         content = cls._augment_content_with_image_descriptions(content, images)
         metadata = cls._build_metadata(file_path, tenant_id, upload_batch_id, parser="docling")
         metadata.update(cls._extract_metadata(getattr(result, "metadata", None)))
@@ -296,7 +298,12 @@ class DocumentParser:
 
         sections: list[ParsedSection] = []
         current_title = "导入内容"
-        current_level = 1
+        current_level = cls.DEFAULT_SECTION_LEVEL
+        current_metadata = {
+            "section_kind": "synthetic_root",
+            "source_label": "",
+            "level_source": "parser_default",
+        }
         current_chunks: list[str] = []
         start_page: int | None = None
         end_page: int | None = None
@@ -317,6 +324,7 @@ class DocumentParser:
                     level=current_level,
                     start_page=start_page,
                     end_page=end_page,
+                    metadata=dict(current_metadata),
                 )
             )
             current_chunks = []
@@ -324,7 +332,7 @@ class DocumentParser:
             end_page = None
 
         for item in text_items:
-            label = str(getattr(getattr(item, "label", None), "value", getattr(item, "label", "")))
+            label = cls._item_label(item)
             text = str(getattr(item, "text", "")).strip()
             if not text:
                 continue
@@ -332,7 +340,7 @@ class DocumentParser:
             if label in {"title", "section_header"}:
                 flush_section()
                 current_title = text
-                current_level = int(getattr(item, "level", 1) or 1)
+                current_level, current_metadata = cls._resolve_section_header(item, label)
                 start_page = item_start
                 end_page = item_end
                 continue
@@ -354,23 +362,29 @@ class DocumentParser:
                 id=generate_uuid(),
                 title="全文",
                 content=fallback_content,
-                level=1,
+                level=cls.DEFAULT_SECTION_LEVEL,
+                metadata={
+                    "section_kind": "fallback_fulltext",
+                    "source_label": "",
+                    "level_source": "fallback_default",
+                },
             )
         ]
 
     @classmethod
-    def _extract_tables(cls, tables: Iterable[Any]) -> list[ParsedTable]:
+    def _extract_tables(cls, tables: Iterable[Any], document: Any | None = None) -> list[ParsedTable]:
         result: list[ParsedTable] = []
         for i, table in enumerate(tables):
             try:
                 page_start, _ = cls._page_range(table)
+                table_data = getattr(table, "data", None)
                 result.append(
                     ParsedTable(
                         id=generate_uuid(),
-                        title=str(getattr(table, "title", f"表格{i + 1}")),
+                        title=cls._extract_floating_title(table, document, f"表格{i + 1}"),
                         data=cls._table_to_dict(table),
-                        rows=int(getattr(table, "row_count", 0) or 0),
-                        columns=int(getattr(table, "column_count", 0) or 0),
+                        rows=int(getattr(table, "row_count", 0) or getattr(table_data, "num_rows", 0) or 0),
+                        columns=int(getattr(table, "column_count", 0) or getattr(table_data, "num_cols", 0) or 0),
                         page=page_start,
                     )
                 )
@@ -394,7 +408,7 @@ class DocumentParser:
         return []
 
     @classmethod
-    def _extract_images(cls, images: Iterable[Any]) -> list[ParsedImage]:
+    def _extract_images(cls, images: Iterable[Any], document: Any | None = None) -> list[ParsedImage]:
         result: list[ParsedImage] = []
         for i, image in enumerate(images):
             try:
@@ -403,13 +417,16 @@ class DocumentParser:
                 result.append(
                     ParsedImage(
                         id=generate_uuid(),
-                        caption=str(getattr(image, "caption", f"图片{i + 1}")),
+                        caption=cls._extract_floating_title(image, document, f"图片{i + 1}"),
                         description=description,
                         page=page_start,
-                        position=getattr(image, "position", {}) or {},
-                        size=getattr(image, "size", {}) or {},
+                        position=cls._extract_picture_position(image),
+                        size=cls._extract_picture_size(image),
                         metadata={
                             "has_description": bool(description),
+                            "caption_source": "docling_caption_refs"
+                            if document is not None
+                            else "direct_attr_fallback",
                             "annotation_count": len(getattr(image, "annotations", []) or []),
                         },
                     )
@@ -419,7 +436,58 @@ class DocumentParser:
         return result
 
     @classmethod
+    def _item_label(cls, item: Any) -> str:
+        return str(getattr(getattr(item, "label", None), "value", getattr(item, "label", ""))).strip().lower()
+
+    @classmethod
+    def _resolve_section_header(cls, item: Any, label: str) -> tuple[int, dict[str, Any]]:
+        if label == "title":
+            return cls.DOC_TITLE_LEVEL, {
+                "section_kind": "document_title",
+                "source_label": label,
+                "level_source": "docling_title",
+            }
+
+        raw_level = getattr(item, "level", cls.DEFAULT_SECTION_LEVEL)
+        try:
+            level = max(int(raw_level or cls.DEFAULT_SECTION_LEVEL), cls.DEFAULT_SECTION_LEVEL)
+        except (TypeError, ValueError):
+            level = cls.DEFAULT_SECTION_LEVEL
+        return level, {
+            "section_kind": "section_header",
+            "source_label": label,
+            "level_source": "docling_section_header",
+            "docling_level": raw_level,
+        }
+
+    @classmethod
+    def _extract_floating_title(cls, item: Any, document: Any | None, fallback: str) -> str:
+        caption_text = getattr(item, "caption_text", None)
+        if callable(caption_text) and document is not None:
+            try:
+                resolved = str(caption_text(document) or "").strip()
+            except Exception:
+                resolved = ""
+            if resolved:
+                return resolved
+
+        direct_title = str(getattr(item, "title", "") or "").strip()
+        if direct_title:
+            return direct_title
+
+        direct_caption = str(getattr(item, "caption", "") or "").strip()
+        if direct_caption:
+            return direct_caption
+
+        return fallback
+
+    @classmethod
     def _extract_picture_description(cls, image: Any) -> str:
+        meta_description = getattr(getattr(image, "meta", None), "description", None)
+        meta_text = str(getattr(meta_description, "text", "") or "").strip()
+        if meta_text:
+            return meta_text
+
         annotations = getattr(image, "annotations", []) or []
         for annotation in annotations:
             kind = str(getattr(annotation, "kind", ""))
@@ -430,12 +498,39 @@ class DocumentParser:
         return ""
 
     @classmethod
+    def _extract_picture_position(cls, image: Any) -> dict[str, Any]:
+        prov = getattr(image, "prov", None) or []
+        if prov:
+            bbox = getattr(prov[0], "bbox", None)
+            bbox_dump = cls._model_dump_dict(bbox)
+            if bbox_dump:
+                return bbox_dump
+        return cls._model_dump_dict(getattr(image, "position", None))
+
+    @classmethod
+    def _extract_picture_size(cls, image: Any) -> dict[str, Any]:
+        image_ref = getattr(image, "image", None)
+        image_size = cls._model_dump_dict(getattr(image_ref, "size", None))
+        if image_size:
+            return image_size
+        return cls._model_dump_dict(getattr(image, "size", None))
+
+    @classmethod
+    def _model_dump_dict(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        return {}
+
+    @classmethod
     def _augment_content_with_image_descriptions(cls, content: str, images: list[ParsedImage]) -> str:
-        descriptions = [
-            f"- {image.caption or '图片'}: {image.description}"
-            for image in images
-            if image.description
-        ]
+        descriptions = [f"- {image.caption or '图片'}: {image.description}" for image in images if image.description]
         if not descriptions:
             return content
         multimodal_block = "图片说明:\n" + "\n".join(descriptions)

@@ -1,4 +1,5 @@
 """LlamaIndex adapters used by the KAG module without changing its core design."""
+
 from __future__ import annotations
 
 try:
@@ -39,7 +40,7 @@ def split_text_with_llama_index(text: str, *, chunk_size: int = CHUNK_SIZE, over
         if not text.strip():
             return []
         stride = max(1, chunk_size - overlap)
-        return [text[index:index + chunk_size] for index in range(0, len(text), stride)]
+        return [text[index : index + chunk_size] for index in range(0, len(text), stride)]
     splitter = build_sentence_splitter(chunk_size=chunk_size, overlap=overlap)
     return splitter.split_text(text)
 

@@ -1,4 +1,5 @@
 """安全策略分层说明与代码级解释辅助。"""
+
 from __future__ import annotations
 
 from typing import Any

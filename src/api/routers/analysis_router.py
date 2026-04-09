@@ -1,4 +1,5 @@
 """Minimal task creation and execution routes for lite-interpreter demos."""
+
 from __future__ import annotations
 
 import asyncio
@@ -108,10 +109,7 @@ def _record_historical_skill_outcomes(
 ) -> None:
     if not memory_data:
         return
-    used_skills = [
-        match for match in (memory_data.historical_matches or [])
-        if bool(match.used_in_codegen)
-    ]
+    used_skills = [match for match in (memory_data.historical_matches or []) if bool(match.used_in_codegen)]
     for match in used_skills:
         skill_name = str(match.name or "").strip()
         if not skill_name:
@@ -217,10 +215,7 @@ async def _run_task_flow(
                 task_id=task_id,
                 memory_data=(
                     memory_blackboard.read(tenant_id, task_id)
-                    or (
-                        memory_blackboard.restore(tenant_id, task_id)
-                        and memory_blackboard.read(tenant_id, task_id)
-                    )
+                    or (memory_blackboard.restore(tenant_id, task_id) and memory_blackboard.read(tenant_id, task_id))
                 ),
                 success=True,
             )
@@ -245,10 +240,7 @@ async def _run_task_flow(
                 task_id=task_id,
                 memory_data=(
                     memory_blackboard.read(tenant_id, task_id)
-                    or (
-                        memory_blackboard.restore(tenant_id, task_id)
-                        and memory_blackboard.read(tenant_id, task_id)
-                    )
+                    or (memory_blackboard.restore(tenant_id, task_id) and memory_blackboard.read(tenant_id, task_id))
                 ),
                 success=False,
             )
@@ -277,12 +269,12 @@ def schedule_task_flow(
     query: str,
     allowed_tools: list[str] | None = None,
     governance_profile: str = "researcher",
- ) -> dict[str, Any]:
+) -> dict[str, Any]:
     """
     核心调度函数：为每个任务在单进程内调度一次任务流，实现分布式锁控制、并发安全、任务生命周期管理
-    
+
     【分布式调度核心逻辑】：基于租约（Lease）的抢占式调度，保证同一任务在分布式集群中只会被一个实例执行
-    
+
     params:
 
     - tenant_id：租户ID
@@ -313,7 +305,9 @@ def schedule_task_flow(
 
     with _active_task_flow_lock:
         if task_id in _active_task_flow_tasks:
-            _startup_recovery_state["duplicate_schedule_skips"] = int(_startup_recovery_state.get("duplicate_schedule_skips", 0) or 0) + 1
+            _startup_recovery_state["duplicate_schedule_skips"] = (
+                int(_startup_recovery_state.get("duplicate_schedule_skips", 0) or 0) + 1
+            )
             StateRepo.release_task_lease(task_id=task_id, owner_id=TASK_SCHEDULER_INSTANCE_ID)
             return {
                 "scheduled": False,
@@ -428,6 +422,7 @@ def get_startup_recovery_status() -> dict[str, Any]:
         "task_leases": task_leases,
         "task_lease_error": lease_error,
     }
+
 
 # 接收前端发来的 request，并写入execution_data -> execution_blackboard中，开始走流程
 async def create_task(request: Request) -> JSONResponse:
@@ -639,7 +634,9 @@ async def get_task_result(request: Request) -> JSONResponse:
                 "analysis_plan": execution_data.static.analysis_plan if execution_data else None,
                 "generated_code_present": bool(execution_data.static.generated_code) if execution_data else False,
                 "audit_result": execution_data.static.audit_result if execution_data else None,
-                "execution_record": serialize_execution_record(execution_data.static.execution_record) if execution_data else None,
+                "execution_record": serialize_execution_record(execution_data.static.execution_record)
+                if execution_data
+                else None,
             },
             "dynamic": {
                 "runtime_backend": execution_data.dynamic.runtime_backend if execution_data else None,
@@ -661,8 +658,12 @@ async def get_task_result(request: Request) -> JSONResponse:
                 "harvested_candidates": memory_data.harvested_candidates if memory_data else [],
             },
             "control": {
-                "task_envelope": execution_data.control.task_envelope.model_dump(mode="json") if execution_data and execution_data.control.task_envelope else None,
-                "execution_intent": execution_data.control.execution_intent.model_dump(mode="json") if execution_data and execution_data.control.execution_intent else None,
+                "task_envelope": execution_data.control.task_envelope.model_dump(mode="json")
+                if execution_data and execution_data.control.task_envelope
+                else None,
+                "execution_intent": execution_data.control.execution_intent.model_dump(mode="json")
+                if execution_data and execution_data.control.execution_intent
+                else None,
                 "decision_log": execution_data.control.decision_log if execution_data else [],
             },
             "executions": build_task_execution_summaries(execution_data),

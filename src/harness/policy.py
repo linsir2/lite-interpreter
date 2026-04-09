@@ -1,4 +1,5 @@
 """Policy loading helpers for the local harness governance layer."""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -77,9 +78,15 @@ def _normalize_policy(policy: dict[str, Any]) -> dict[str, Any]:
     normalized["dynamic"]["allow_unknown_tools"] = bool(normalized["dynamic"].get("allow_unknown_tools", False))
     normalized["sandbox"]["require_policy_check"] = bool(normalized["sandbox"].get("require_policy_check", True))
     normalized["sandbox"]["max_code_chars"] = int(normalized["sandbox"].get("max_code_chars", 153600) or 153600)
-    normalized["sandbox"]["deny_patterns"] = [str(item) for item in normalized["sandbox"].get("deny_patterns", []) or [] if str(item)]
-    normalized["sandbox"]["deny_modules"] = [str(item) for item in normalized["sandbox"].get("deny_modules", []) or [] if str(item)]
-    normalized["sandbox"]["deny_builtins"] = [str(item) for item in normalized["sandbox"].get("deny_builtins", []) or [] if str(item)]
+    normalized["sandbox"]["deny_patterns"] = [
+        str(item) for item in normalized["sandbox"].get("deny_patterns", []) or [] if str(item)
+    ]
+    normalized["sandbox"]["deny_modules"] = [
+        str(item) for item in normalized["sandbox"].get("deny_modules", []) or [] if str(item)
+    ]
+    normalized["sandbox"]["deny_builtins"] = [
+        str(item) for item in normalized["sandbox"].get("deny_builtins", []) or [] if str(item)
+    ]
     normalized["sandbox"]["deny_methods"] = [
         str(item) if not isinstance(item, (list, tuple)) else ".".join(str(part) for part in item[:2])
         for item in normalized["sandbox"].get("deny_methods", []) or []

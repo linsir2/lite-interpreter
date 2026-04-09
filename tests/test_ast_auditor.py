@@ -1,4 +1,5 @@
 """AST审计测试用例"""
+
 from unittest.mock import patch
 
 from src.sandbox.ast_auditor import audit_code
@@ -12,6 +13,7 @@ def test_audit_code_valid(valid_code, test_tenant_id):
     assert result["source_layer"] == "ast_auditor"
     assert result["source_config"] == "src.sandbox.security_policy"
 
+
 def test_audit_code_high_risk_module(high_risk_code, test_tenant_id):
     """测试导入高危模块审计失败"""
     result = audit_code(high_risk_code, test_tenant_id)
@@ -21,16 +23,18 @@ def test_audit_code_high_risk_module(high_risk_code, test_tenant_id):
     assert result["source_layer"] == "ast_auditor"
     assert result["source_config"] == "src.sandbox.security_policy"
 
+
 def test_audit_code_high_risk_alias(test_tenant_id):
     """测试高危模块别名导入和子模块调用拦截"""
     codes = [
         "import os as my_os\nmy_os.system('ls')",
         "from os import system\nsystem('ls')",
-        "import subprocess\nsubprocess.Popen(['ls'])"
+        "import subprocess\nsubprocess.Popen(['ls'])",
     ]
     for code in codes:
         result = audit_code(code, test_tenant_id)
         assert result["safe"] is False
+
 
 def test_audit_code_high_risk_builtin(test_tenant_id):
     """测试调用高危内置函数审计失败"""
@@ -40,6 +44,7 @@ def test_audit_code_high_risk_builtin(test_tenant_id):
     assert "禁止调用高危内置函数：eval" in result["reason"]
     assert result["risk_type"] == "call_high_risk_builtin"
 
+
 def test_audit_code_syntax_error(test_tenant_id):
     """测试语法错误代码审计失败"""
     code = "a = 1 + \nb = 2"
@@ -48,12 +53,14 @@ def test_audit_code_syntax_error(test_tenant_id):
     assert "代码语法错误" in result["reason"]
     assert result["risk_type"] == "syntax_error"
 
+
 def test_audit_code_empty_code(test_tenant_id):
     """测试空代码审计失败"""
     result = audit_code("", test_tenant_id)
     assert result["safe"] is False
     assert "待执行代码不能为空" in result["reason"]
     assert result["risk_type"] == "input_validation_error"
+
 
 def test_audit_code_tenant_id_invalid(test_tenant_id, valid_code):
     """测试非法租户ID审计失败"""

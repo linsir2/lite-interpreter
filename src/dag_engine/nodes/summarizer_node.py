@@ -1,4 +1,5 @@
 """Unified final-response node for static and dynamic execution paths."""
+
 from __future__ import annotations
 
 import json
@@ -49,11 +50,23 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     approved_skills_payload = [item.model_dump(mode="json") for item in memory_data.approved_skills]
     historical_matches_payload = [item.model_dump(mode="json") for item in memory_data.historical_matches]
     dataset_items = structured_output.get("datasets", []) if isinstance(structured_output.get("datasets"), list) else []
-    document_items = structured_output.get("documents", []) if isinstance(structured_output.get("documents"), list) else []
-    derived_findings = structured_output.get("derived_findings", []) if isinstance(structured_output.get("derived_findings"), list) else []
-    rule_checks = structured_output.get("rule_checks", []) if isinstance(structured_output.get("rule_checks"), list) else []
-    metric_checks = structured_output.get("metric_checks", []) if isinstance(structured_output.get("metric_checks"), list) else []
-    filter_checks = structured_output.get("filter_checks", []) if isinstance(structured_output.get("filter_checks"), list) else []
+    document_items = (
+        structured_output.get("documents", []) if isinstance(structured_output.get("documents"), list) else []
+    )
+    derived_findings = (
+        structured_output.get("derived_findings", [])
+        if isinstance(structured_output.get("derived_findings"), list)
+        else []
+    )
+    rule_checks = (
+        structured_output.get("rule_checks", []) if isinstance(structured_output.get("rule_checks"), list) else []
+    )
+    metric_checks = (
+        structured_output.get("metric_checks", []) if isinstance(structured_output.get("metric_checks"), list) else []
+    )
+    filter_checks = (
+        structured_output.get("filter_checks", []) if isinstance(structured_output.get("filter_checks"), list) else []
+    )
 
     findings = []
     if dataset_items:
@@ -78,14 +91,20 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     )
     findings.extend(
         [
-            _trim(f"指标《{check.get('metric', '')[:20]}》关联字段 {len(check.get('matched_columns', []) or [])} 个", limit=240)
+            _trim(
+                f"指标《{check.get('metric', '')[:20]}》关联字段 {len(check.get('matched_columns', []) or [])} 个",
+                limit=240,
+            )
             for check in metric_checks[:5]
             if check.get("matched_columns")
         ]
     )
     findings.extend(
         [
-            _trim(f"指标《{check.get('metric', '')[:20]}》可复用 {len(check.get('matched_groups', []) or [])} 个分组统计", limit=240)
+            _trim(
+                f"指标《{check.get('metric', '')[:20]}》可复用 {len(check.get('matched_groups', []) or [])} 个分组统计",
+                limit=240,
+            )
             for check in metric_checks[:5]
             if check.get("matched_groups")
         ]
@@ -107,7 +126,9 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     )
     evidence_refs = knowledge_evidence_refs(knowledge_snapshot_payload)
     if not evidence_refs:
-        evidence_refs = [str(item.get("path")) for item in static_artifacts(exec_data.static.execution_record) if item.get("path")]
+        evidence_refs = [
+            str(item.get("path")) for item in static_artifacts(exec_data.static.execution_record) if item.get("path")
+        ]
 
     outputs = []
     for item in dataset_items:
@@ -116,9 +137,7 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
                 "type": "dataset",
                 "name": item.get("file_name"),
                 "path": item.get("container_path") or item.get("file_name"),
-                "summary": _trim(
-                    f"rows={item.get('row_count', 0)}, columns={','.join(item.get('columns', [])[:6])}"
-                ),
+                "summary": _trim(f"rows={item.get('row_count', 0)}, columns={','.join(item.get('columns', [])[:6])}"),
                 "metrics": {
                     "row_count": item.get("row_count", 0),
                     "numeric_profiles": item.get("numeric_profiles", []),
@@ -190,15 +209,14 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
         "analysis_brief": analysis_brief_payload,
         "execution_success": execution_success(exec_data.static.execution_record),
         "artifacts": static_artifacts(exec_data.static.execution_record),
-        "execution_record": exec_data.static.execution_record.model_dump(mode="json") if exec_data.static.execution_record else None,
+        "execution_record": exec_data.static.execution_record.model_dump(mode="json")
+        if exec_data.static.execution_record
+        else None,
         "business_context": business_context_payload,
         "knowledge_snapshot": knowledge_snapshot_payload,
         "approved_skills": approved_skills_payload,
         "historical_skill_matches": historical_matches_payload,
-        "used_historical_skills": [
-            match for match in historical_matches_payload
-            if bool(match.get("used_in_codegen"))
-        ],
+        "used_historical_skills": [match for match in historical_matches_payload if bool(match.get("used_in_codegen"))],
         "skill_strategy_hints": (
             structured_output.get("skill_strategy_hints", [])
             if isinstance(structured_output.get("skill_strategy_hints"), list)
@@ -301,7 +319,11 @@ def summarizer_node(state: Mapping[str, Any]) -> dict[str, Any]:
         sub_status="正在组装最终回复",
     )
 
-    mode = "dynamic" if execution_intent_routing_mode(exec_data.control.execution_intent) == "dynamic" or exec_data.dynamic.summary else "static"
+    mode = (
+        "dynamic"
+        if execution_intent_routing_mode(exec_data.control.execution_intent) == "dynamic" or exec_data.dynamic.summary
+        else "static"
+    )
     final_response = (
         _build_dynamic_response(task_id, exec_data, memory_data)
         if mode == "dynamic"
@@ -311,7 +333,10 @@ def summarizer_node(state: Mapping[str, Any]) -> dict[str, Any]:
         "profile": task_governance_profile(exec_data.control.task_envelope),
         "decision_count": len(exec_data.control.decision_log),
     }
-    final_response, redaction_report = mask_payload(final_response, list(exec_data.control.task_envelope.redaction_rules or []) if exec_data.control.task_envelope else None)
+    final_response, redaction_report = mask_payload(
+        final_response,
+        list(exec_data.control.task_envelope.redaction_rules or []) if exec_data.control.task_envelope else None,
+    )
     if isinstance(final_response, dict) and redaction_report["match_count"]:
         final_response.setdefault("governance", {})
         final_response["governance"]["redaction_report"] = {

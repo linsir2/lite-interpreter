@@ -1,4 +1,5 @@
 """Helpers for deriving execution resources from persisted task state."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -39,10 +40,7 @@ def to_jsonable_payload(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return to_jsonable_payload(value.model_dump(mode="json", by_alias=True))
     if isinstance(value, Mapping):
-        return {
-            str(key): to_jsonable_payload(item)
-            for key, item in value.items()
-        }
+        return {str(key): to_jsonable_payload(item) for key, item in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [to_jsonable_payload(item) for item in value]
     return value
@@ -77,7 +75,11 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
     summaries: list[dict[str, Any]] = []
     execution_record = serialize_execution_record(execution_data.static.execution_record)
     sandbox_execution_id = f"sandbox:{execution_record['session_id']}" if execution_record else None
-    runtime_execution_id = f"runtime:{execution_data.task_id}" if execution_data.dynamic.runtime_backend and execution_data.dynamic.status else None
+    runtime_execution_id = (
+        f"runtime:{execution_data.task_id}"
+        if execution_data.dynamic.runtime_backend and execution_data.dynamic.status
+        else None
+    )
     if execution_record:
         summaries.append(
             {
@@ -180,7 +182,9 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
                     agent_name="static_chain",
                     step_name="kag_retriever",
                     arguments={
-                        "query": execution_data.control.task_envelope.input_query if execution_data.control.task_envelope else None,
+                        "query": execution_data.control.task_envelope.input_query
+                        if execution_data.control.task_envelope
+                        else None,
                     },
                     result={
                         "rewritten_query": knowledge_snapshot.get("rewritten_query"),

@@ -1,4 +1,5 @@
 """将压缩后的候选片段格式化为业务上下文。"""
+
 from __future__ import annotations
 
 

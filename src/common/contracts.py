@@ -3,6 +3,7 @@
 These contracts are intentionally lightweight so existing modules can adopt
 them incrementally without rewriting the whole runtime in one pass.
 """
+
 from __future__ import annotations
 
 from datetime import datetime

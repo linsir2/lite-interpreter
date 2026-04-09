@@ -1,4 +1,5 @@
 """Tests for the task SSE endpoint helpers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -418,8 +419,14 @@ def test_create_task_static_flow_can_use_executor_node(monkeypatch):
     )
 
     monkeypatch.setattr("src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["analyst"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.analyst_node", lambda state: {"analysis_plan": "plan", "next_actions": ["coder"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.coder_node", lambda state: {"generated_code": "print('ok')", "next_actions": ["auditor"]})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.analyst_node",
+        lambda state: {"analysis_plan": "plan", "next_actions": ["coder"]},
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.coder_node",
+        lambda state: {"generated_code": "print('ok')", "next_actions": ["auditor"]},
+    )
     monkeypatch.setattr(
         "src.api.routers.analysis_router.auditor_node",
         lambda state: {"audit_result": {"safe": True}, "next_actions": ["executor"]},
@@ -443,7 +450,9 @@ def test_create_task_static_flow_can_use_executor_node(monkeypatch):
 
     monkeypatch.setattr("src.api.routers.analysis_router.executor_node", fake_executor)
     monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", lambda state: {})
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}}
+    )
 
     _run_task_flow_inline(
         monkeypatch,
@@ -493,9 +502,14 @@ def test_create_task_static_flow_runs_minimal_chain(monkeypatch):
         },
     )
     harvested = {}
-    monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", lambda state: harvested.update(state) or {})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.skill_harvester_node", lambda state: harvested.update(state) or {}
+    )
     summarized = {}
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: summarized.update(state) or {"final_response": {"mode": "static"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node",
+        lambda state: summarized.update(state) or {"final_response": {"mode": "static"}},
+    )
 
     _run_task_flow_inline(
         monkeypatch,
@@ -527,7 +541,13 @@ def test_run_task_flow_records_historical_skill_outcome(monkeypatch):
     MemoryRepo.save_approved_skills(
         tenant_id,
         workspace_id,
-        [{"name": "historical_skill_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "historical_skill_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     task_id = global_blackboard.create_task(tenant_id, workspace_id, "please summarize")
     execution_blackboard.write(
@@ -553,7 +573,9 @@ def test_run_task_flow_records_historical_skill_outcome(monkeypatch):
         },
     )
     monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", lambda state: {})
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}}
+    )
 
     _run_task_flow_inline(
         monkeypatch,
@@ -583,9 +605,16 @@ def test_run_task_flow_dynamic_denied_does_not_mark_success(monkeypatch):
         ExecutionData(task_id=task_id, tenant_id=tenant_id, workspace_id="ws-1"),
     )
 
-    monkeypatch.setattr("src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["dynamic_swarm"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.dynamic_swarm_node", lambda state: {"dynamic_status": "denied", "dynamic_summary": "blocked"})
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "dynamic"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["dynamic_swarm"]}
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.dynamic_swarm_node",
+        lambda state: {"dynamic_status": "denied", "dynamic_summary": "blocked"},
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "dynamic"}}
+    )
 
     _run_task_flow_inline(
         monkeypatch,
@@ -617,8 +646,14 @@ def test_run_task_flow_static_success_emits_single_finish_event(monkeypatch):
     )
 
     monkeypatch.setattr("src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["analyst"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.analyst_node", lambda state: {"analysis_plan": "plan", "next_actions": ["coder"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.coder_node", lambda state: {"generated_code": "print('ok')", "next_actions": ["auditor"]})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.analyst_node",
+        lambda state: {"analysis_plan": "plan", "next_actions": ["coder"]},
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.coder_node",
+        lambda state: {"generated_code": "print('ok')", "next_actions": ["auditor"]},
+    )
     monkeypatch.setattr(
         "src.api.routers.analysis_router.auditor_node",
         lambda state: {"audit_result": {"safe": True}, "next_actions": ["executor"]},
@@ -640,7 +675,9 @@ def test_run_task_flow_static_success_emits_single_finish_event(monkeypatch):
 
     monkeypatch.setattr("src.api.routers.analysis_router.executor_node", fake_executor)
     monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", lambda state: {})
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}}
+    )
 
     published_topics = []
 
@@ -677,11 +714,20 @@ def test_run_task_flow_stops_when_data_inspector_blocks(monkeypatch):
         ExecutionData(task_id=task_id, tenant_id=tenant_id, workspace_id="ws-1"),
     )
 
-    monkeypatch.setattr("src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["data_inspector"]})
-    monkeypatch.setattr("src.api.routers.analysis_router.data_inspector_node", lambda state: {"blocked": True, "block_reason": "bad file"})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.router_node", lambda state: {"next_actions": ["data_inspector"]}
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.data_inspector_node",
+        lambda state: {"blocked": True, "block_reason": "bad file"},
+    )
     coder_called = {"value": False}
-    monkeypatch.setattr("src.api.routers.analysis_router.coder_node", lambda state: coder_called.update(value=True) or {})
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.coder_node", lambda state: coder_called.update(value=True) or {}
+    )
+    monkeypatch.setattr(
+        "src.api.routers.analysis_router.summarizer_node", lambda state: {"final_response": {"mode": "static"}}
+    )
 
     _run_task_flow_inline(
         monkeypatch,
@@ -711,8 +757,23 @@ def test_get_task_result_returns_final_response():
             tenant_id=tenant_id,
             workspace_id="ws-1",
             control={
-                "task_envelope": {"task_id": task_id, "tenant_id": tenant_id, "workspace_id": "ws-1", "input_query": "please summarize", "governance_profile": "researcher"},
-                "decision_log": [{"action": "sandbox_execute", "profile": "researcher", "mode": "standard", "allowed": True, "risk_level": "low", "risk_score": 0.1}],
+                "task_envelope": {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": "ws-1",
+                    "input_query": "please summarize",
+                    "governance_profile": "researcher",
+                },
+                "decision_log": [
+                    {
+                        "action": "sandbox_execute",
+                        "profile": "researcher",
+                        "mode": "standard",
+                        "allowed": True,
+                        "risk_level": "low",
+                        "risk_score": 0.1,
+                    }
+                ],
                 "final_response": {"mode": "static", "headline": "done", "answer": "done", "key_findings": []},
             },
             static={
@@ -769,7 +830,13 @@ def test_get_task_result_serializes_typed_blackboard_models():
             tenant_id=tenant_id,
             workspace_id="ws-typed",
             control={
-                "task_envelope": {"task_id": task_id, "tenant_id": tenant_id, "workspace_id": "ws-typed", "input_query": "please summarize", "governance_profile": "researcher"},
+                "task_envelope": {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": "ws-typed",
+                    "input_query": "please summarize",
+                    "governance_profile": "researcher",
+                },
                 "final_response": {"mode": "static", "headline": "done", "answer": "done", "key_findings": []},
             },
             knowledge={
@@ -834,7 +901,13 @@ def test_get_task_result_restores_execution_state_when_memory_is_cold():
             tenant_id=tenant_id,
             workspace_id="ws-restore",
             control={
-                "task_envelope": {"task_id": task_id, "tenant_id": tenant_id, "workspace_id": "ws-restore", "input_query": "please summarize", "governance_profile": "researcher"},
+                "task_envelope": {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": "ws-restore",
+                    "input_query": "please summarize",
+                    "governance_profile": "researcher",
+                },
                 "final_response": {"mode": "static", "headline": "restored", "answer": "restored", "key_findings": []},
             },
         ),

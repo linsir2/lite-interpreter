@@ -6,6 +6,7 @@
 
 统一收敛成运行时真正被 AST 审计和 diagnostics 消费的一份解析后策略面。
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -74,12 +75,9 @@ def load_sandbox_security_policy_surface() -> SandboxSecurityPolicySurface:
     yaml_modules = tuple(_normalize_string_list(sandbox_policy.get("deny_modules")))
     yaml_builtins = tuple(_normalize_string_list(sandbox_policy.get("deny_builtins")))
     yaml_method_tokens = tuple(
-        f"{module}.{method}"
-        for module, method in _normalize_method_tokens(sandbox_policy.get("deny_methods"))
+        f"{module}.{method}" for module, method in _normalize_method_tokens(sandbox_policy.get("deny_methods"))
     )
-    merged_methods = frozenset(HIGH_RISK_METHODS).union(
-        _normalize_method_tokens(sandbox_policy.get("deny_methods"))
-    )
+    merged_methods = frozenset(HIGH_RISK_METHODS).union(_normalize_method_tokens(sandbox_policy.get("deny_methods")))
     return SandboxSecurityPolicySurface(
         high_risk_modules=frozenset(HIGH_RISK_MODULES).union(yaml_modules),
         high_risk_builtins=frozenset(HIGH_RISK_BUILTINS).union(yaml_builtins),

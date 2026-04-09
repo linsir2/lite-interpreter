@@ -1,4 +1,5 @@
 """SPLADE 的规则化 MVP 实现：扩展关键词后再做稀疏召回。"""
+
 from __future__ import annotations
 
 from typing import Any

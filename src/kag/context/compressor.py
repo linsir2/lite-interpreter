@@ -1,4 +1,5 @@
 """Query-aware 上下文压缩器。"""
+
 from __future__ import annotations
 
 import re

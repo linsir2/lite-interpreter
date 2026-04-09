@@ -1,4 +1,5 @@
 """Repository for durable memory records reusable across tasks and sessions."""
+
 from __future__ import annotations
 
 import json
@@ -24,9 +25,7 @@ class MemoryRepo:
     @classmethod
     def status(cls) -> dict[str, Any]:
         memory_record_count = sum(
-            len(records)
-            for tenant_bucket in cls._memory_store.values()
-            for records in tenant_bucket.values()
+            len(records) for tenant_bucket in cls._memory_store.values() for records in tenant_bucket.values()
         )
         return {
             "backend": "postgres" if pg_client.engine else "memory_fallback",
@@ -105,11 +104,7 @@ class MemoryRepo:
     ) -> list[dict[str, Any]]:
         with cls._lock:
             workspace_bucket = cls._memory_store.get(tenant_id, {}).get(workspace_id, {})
-            items = [
-                dict(payload)
-                for (kind, _key), payload in workspace_bucket.items()
-                if kind == memory_kind
-            ]
+            items = [dict(payload) for (kind, _key), payload in workspace_bucket.items() if kind == memory_kind]
         return items[:limit]
 
     @classmethod
@@ -284,11 +279,7 @@ class MemoryRepo:
             }
             if items:
                 merged = list(items)
-                seen = {
-                    str(item.get("name", "")).strip()
-                    for item in items
-                    if str(item.get("name", "")).strip()
-                }
+                seen = {str(item.get("name", "")).strip() for item in items if str(item.get("name", "")).strip()}
                 for name, item in memory_by_name.items():
                     if name in seen:
                         merged = [
@@ -318,9 +309,7 @@ class MemoryRepo:
         required = {str(item).strip() for item in (required_capabilities or []) if str(item).strip()}
         for skill in skills:
             skill_required = {
-                str(item).strip()
-                for item in (skill.get("required_capabilities") or [])
-                if str(item).strip()
+                str(item).strip() for item in (skill.get("required_capabilities") or []) if str(item).strip()
             }
             recommended = (skill.get("metadata") or {}).get("recommended", {}) or {}
             skill_task_type = recommended.get("source_task_type")
@@ -484,10 +473,9 @@ class MemoryRepo:
             skill_name,
         )
         existing_usage = dict((existing_payload or {}).get("usage", {}) or {})
-        if (
-            str(existing_usage.get("last_task_id", "")) == str(task_id)
-            and str(existing_usage.get("last_stage", "")) == str(stage)
-        ):
+        if str(existing_usage.get("last_task_id", "")) == str(task_id) and str(
+            existing_usage.get("last_stage", "")
+        ) == str(stage):
             return existing_payload
 
         updated_skill = dict(existing_payload or {})
@@ -522,10 +510,9 @@ class MemoryRepo:
             None,
         )
         existing_usage = dict((existing_payload or {}).get("usage", {}) or {})
-        if (
-            str(existing_usage.get("last_outcome_task_id", "")) == str(task_id)
-            and bool(existing_usage.get("last_outcome_success")) == bool(success)
-        ):
+        if str(existing_usage.get("last_outcome_task_id", "")) == str(task_id) and bool(
+            existing_usage.get("last_outcome_success")
+        ) == bool(success):
             return existing_payload
 
         updated_skill = dict(existing_payload or {})

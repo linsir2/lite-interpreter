@@ -1,4 +1,5 @@
 """SkillNet capability-aware harvesting tests."""
+
 from __future__ import annotations
 
 import json
@@ -186,7 +187,13 @@ def test_memory_repo_records_usage_in_memory():
     MemoryRepo.save_approved_skills(
         "tenant_repo_usage",
         "ws_repo_usage",
-        [{"name": "skill_usage_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     MemoryRepo.record_skill_usage(
         "tenant_repo_usage",
@@ -205,7 +212,13 @@ def test_memory_repo_usage_is_idempotent_for_same_task_and_stage():
     MemoryRepo.save_approved_skills(
         "tenant_repo_usage_idem",
         "ws_repo_usage_idem",
-        [{"name": "skill_usage_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     MemoryRepo.record_skill_usage(
         "tenant_repo_usage_idem",
@@ -408,7 +421,13 @@ def test_memory_repo_records_outcome_in_memory():
     MemoryRepo.save_approved_skills(
         "tenant_repo_outcome",
         "ws_repo_outcome",
-        [{"name": "skill_outcome_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_outcome_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     MemoryRepo.record_skill_outcome(
         "tenant_repo_outcome",
@@ -428,7 +447,13 @@ def test_memory_repo_outcome_is_idempotent_for_same_task():
     MemoryRepo.save_approved_skills(
         "tenant_repo_outcome_idem",
         "ws_repo_outcome_idem",
-        [{"name": "skill_outcome_demo", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_outcome_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     MemoryRepo.record_skill_outcome(
         "tenant_repo_outcome_idem",
@@ -455,7 +480,13 @@ def test_memory_service_recall_skills_refreshes_task_memory_usage():
     MemoryRepo.save_approved_skills(
         "tenant_memory_usage_refresh",
         "ws_memory_usage_refresh",
-        [{"name": "skill_usage_refresh", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_usage_refresh",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
 
     result = MemoryService.recall_skills(
@@ -480,7 +511,13 @@ def test_memory_service_applies_outcome_updates_back_to_task_memory():
     MemoryRepo.save_approved_skills(
         "tenant_memory_outcome_refresh",
         "ws_memory_outcome_refresh",
-        [{"name": "skill_outcome_refresh", "required_capabilities": ["knowledge_query"], "promotion": {"status": "approved"}}],
+        [
+            {
+                "name": "skill_outcome_refresh",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
     )
     memory_blackboard.write(
         "tenant_memory_outcome_refresh",

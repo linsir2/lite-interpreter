@@ -31,8 +31,8 @@
 
 ### 2.2 当前验证状态
 
-- 在 `lite_interpreter` 环境中执行 `conda run -n lite_interpreter python -m pytest -q`
-- 结果：`130 passed, 3 skipped`
+- 最新验证命令与结果以 `docs/project_status.md` 为准。
+- 本文件只保留实现结论、问题分解与改造计划，不再复制测试基线数字。
 
 说明：
 

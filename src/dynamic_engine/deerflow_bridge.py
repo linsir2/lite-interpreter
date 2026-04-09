@@ -466,8 +466,7 @@ class DeerflowBridge:
             return DeerflowTaskResult(
                 status="unavailable",
                 summary=(
-                    f"Failed to use DeerFlow runtime in `{runtime_mode}` mode: {exc}. "
-                    f"{self._python_version_hint()}"
+                    f"Failed to use DeerFlow runtime in `{runtime_mode}` mode: {exc}. {self._python_version_hint()}"
                 ),
                 trace_refs=preview.trace_refs,
                 artifacts=preview.artifacts,

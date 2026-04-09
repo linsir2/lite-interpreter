@@ -1,4 +1,5 @@
 """Registry for pluggable dynamic runtime backends."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

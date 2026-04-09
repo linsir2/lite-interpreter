@@ -5,6 +5,7 @@ Neo4j 图数据库客户端
 职责：执行 Cypher 语句，将知识三元组转化为图谱中的节点和边，并在检索阶段
 提供面向租户/工作空间的事实查询能力。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -36,10 +37,7 @@ class GraphDBClient:
     def has_graph(self, tenant_id: str, workspace_id: str) -> bool:
         if not self.driver:
             return False
-        query = (
-            "MATCH (n {tenant_id: $tenant_id, workspace_id: $workspace_id}) "
-            "RETURN count(n) AS node_count LIMIT 1"
-        )
+        query = "MATCH (n {tenant_id: $tenant_id, workspace_id: $workspace_id}) RETURN count(n) AS node_count LIMIT 1"
         try:
             with self.driver.session() as session:
                 result = session.run(query, tenant_id=tenant_id, workspace_id=workspace_id).single()

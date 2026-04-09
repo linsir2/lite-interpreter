@@ -3,6 +3,7 @@
 
 修改点：抽离所有分散的常量/配置，避免重复定义，提升可维护性
 """
+
 import os
 from typing import Any, Final
 
@@ -29,6 +30,7 @@ def _env_str(name: str, default: str) -> str:
     raw = raw.strip()
     return raw if raw else default
 
+
 # -------------------------- 基础常量 --------------------------
 MAX_CODE_LENGTH: Final[int] = _env_int("MAX_CODE_LENGTH", 1024 * 150)  # 150KB
 MAX_TENANT_ID_LENGTH: Final[int] = 64
@@ -40,8 +42,7 @@ ZOMBIE_CONTAINER_TIMEOUT_FACTOR: Final[int] = 2  # 僵尸容器超时倍数
 # -------------------------- Docker配置 --------------------------
 DOCKER_CONFIG: Final[dict[str, Any]] = {
     "image": _env_str(
-        "SANDBOX_IMAGE",
-        "python:3.11-slim@sha256:6d98ca198cea726f2c86da2699594339a7b7ff08e49728797b4ed6e3b5c3b62a"
+        "SANDBOX_IMAGE", "python:3.11-slim@sha256:6d98ca198cea726f2c86da2699594339a7b7ff08e49728797b4ed6e3b5c3b62a"
     ),
     "mem_limit": _env_str("SANDBOX_MEM_LIMIT", "128m"),
     "memswap_limit": _env_str("SANDBOX_MEM_LIMIT", "128m"),  # 禁用swap
@@ -61,8 +62,8 @@ DOCKER_CONFIG: Final[dict[str, Any]] = {
     "tmpfs": {"/tmp": "size=64m,mode=1777,nosuid,nodev,noexec"},  # 增强tmpfs安全
     "log_config": LogConfig(
         type="json-file",
-        config={"max-size": "1m", "max-file": "1"}  # 单个容器最多写 1MB 日志，超过就覆盖
-    )
+        config={"max-size": "1m", "max-file": "1"},  # 单个容器最多写 1MB 日志，超过就覆盖
+    ),
 }
 
 # -------------------------- 服务配置 --------------------------

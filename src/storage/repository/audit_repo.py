@@ -1,4 +1,5 @@
 """Repository for durable API audit records."""
+
 from __future__ import annotations
 
 import json
@@ -8,7 +9,6 @@ from typing import Any
 
 from config.settings import STRICT_PERSISTENCE
 from sqlalchemy import text
-
 from src.common.contracts import AuditRecord
 from src.common.logger import get_logger
 from src.storage.postgres_client import pg_client
@@ -24,9 +24,7 @@ class AuditRepo:
     @classmethod
     def status(cls) -> dict[str, Any]:
         memory_record_count = sum(
-            len(records)
-            for tenant_bucket in cls._memory_store.values()
-            for records in tenant_bucket.values()
+            len(records) for tenant_bucket in cls._memory_store.values() for records in tenant_bucket.values()
         )
         return {
             "backend": "postgres" if pg_client.engine else "memory_fallback",

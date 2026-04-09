@@ -3,6 +3,7 @@
 
 其他模块只需从此处导入，无需关心内部文件结构
 """
+
 from .base_blackboard import BaseSubBlackboard
 from .exceptions import BlackboardException, StatusUpdateError, SubBoardNotRegisteredError, TaskNotExistError
 from .execution_blackboard import ExecutionBlackboard, execution_blackboard
@@ -77,17 +78,17 @@ __all__ = [
     "ExecutionData",
     "KnowledgeData",
     "MemoryData",
-    "execution_blackboard", 
+    "execution_blackboard",
     "ExecutionBlackboard",
     "knowledge_blackboard",
     "KnowledgeBlackboard",
     "memory_blackboard",
     "MemoryBlackboard",
     "build_strict_state_report",
-    "TaskNotExistError", 
-    "BlackboardException", 
-    "SubBoardNotRegisteredError", 
+    "TaskNotExistError",
+    "BlackboardException",
+    "SubBoardNotRegisteredError",
     "StatusUpdateError",
-    "global_blackboard", 
-    "GlobalBlackboard"
+    "global_blackboard",
+    "GlobalBlackboard",
 ]
