@@ -7,7 +7,7 @@ TASK_ID ?= demo-task-001
 HOTSPOT_LINT_PATHS ?= src/dag_engine/nodes/coder_node.py src/dag_engine/nodes/static_codegen.py src/sandbox/docker_executor.py tests/test_docs_consistency.py
 FULL_LINT_PATHS ?= src tests scripts config
 
-.PHONY: run-api run-sidecar run-frontend demo-trace create-task test test-docker test-stream lint fmt-check lint-all fmt-check-all smoke-models
+.PHONY: run-api run-sidecar run-frontend demo-trace create-task test test-docker test-integration test-stream lint fmt-check lint-all fmt-check-all smoke-models
 
 run-api:
 	conda run -n $(PYTHON_ENV) python -m uvicorn src.api.main:app --host $(API_HOST) --port $(API_PORT)
@@ -29,6 +29,9 @@ test:
 
 test-docker:
 	conda run -n $(PYTHON_ENV) python -m pytest -q tests/test_sandbox.py tests/test_e2e.py::test_static_task_flow_e2e_via_api_with_real_sandbox
+
+test-integration:
+	conda run -n $(PYTHON_ENV) python -m pytest -q tests/test_sandbox.py tests/test_e2e.py::test_static_task_flow_e2e_via_api_with_real_sandbox tests/test_deerflow_bridge.py::DeerflowBridgeTests::test_run_uses_sidecar_over_real_local_http_transport
 
 lint:
 	conda run -n $(PYTHON_ENV) python -m ruff check $(HOTSPOT_LINT_PATHS)

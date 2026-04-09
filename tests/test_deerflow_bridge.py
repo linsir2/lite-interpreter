@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import threading
 import types
 import unittest
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
@@ -56,6 +60,41 @@ class _FakeStreamResponse:
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+class _SidecarRequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):  # noqa: N802
+        content_length = int(self.headers.get("content-length", "0") or 0)
+        self.server.last_body = self.rfile.read(content_length).decode("utf-8")  # type: ignore[attr-defined]
+        if self.path != "/v1/stream":
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = ("\n".join(self.server.response_lines) + "\n").encode("utf-8")  # type: ignore[attr-defined]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
+    def log_message(self, format, *args):  # noqa: A003
+        return
+
+
+@contextmanager
+def _run_fake_sidecar(lines: list[str]):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _SidecarRequestHandler)
+    server.response_lines = lines  # type: ignore[attr-defined]
+    server.last_body = ""  # type: ignore[attr-defined]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", server
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 class DeerflowBridgeTests(unittest.TestCase):
@@ -140,6 +179,40 @@ class DeerflowBridgeTests(unittest.TestCase):
         self.assertIn("/tmp/sidecar.md", result.artifacts)
         self.assertEqual(result.trace_refs, ["deerflow-sidecar:task-3"])
         self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "sidecar")
+
+    def test_run_uses_sidecar_over_real_local_http_transport(self):
+        sidecar_lines = [
+            '{"type":"messages-tuple","data":{"type":"ai","content":"sidecar transport answer"}}',
+            '{"type":"values","data":{"artifacts":[{"path":"/tmp/transport.md"}]}}',
+        ]
+        try:
+            with _run_fake_sidecar(sidecar_lines) as (sidecar_url, server):
+                bridge = DeerflowBridge(
+                    runtime_config=DeerflowRuntimeConfig(
+                        runtime_mode="sidecar",
+                        sidecar_url=sidecar_url,
+                        config_path="",
+                        max_events=8,
+                    )
+                )
+                request = DeerflowTaskRequest(
+                    task_id="task-sidecar-transport",
+                    tenant_id="tenant-sidecar-transport",
+                    query="analyze something",
+                    system_context={"constraints": {}},
+                )
+                result = bridge.run(request)
+        except PermissionError:
+            self.skipTest("Local TCP bind unavailable in current environment")
+
+        self.assertEqual(result.status, "completed")
+        self.assertIn("sidecar transport answer", result.summary)
+        self.assertIn("/tmp/transport.md", result.artifacts)
+        self.assertEqual(result.trace_refs, ["deerflow-sidecar:task-sidecar-transport"])
+        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "sidecar")
+        payload = json.loads(server.last_body)  # type: ignore[attr-defined]
+        self.assertEqual(payload["thread_id"], "lite-interpreter-task-sidecar-transport")
+        self.assertIn("Task:", payload["message"])
 
     def test_run_records_auto_sidecar_fallback_reason_when_embedded_succeeds(self):
         bridge = DeerflowBridge(

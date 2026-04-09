@@ -422,6 +422,7 @@ make demo-trace
 make create-task
 make test
 make test-docker
+make test-integration
 make lint
 make fmt-check
 make lint-all
@@ -493,6 +494,7 @@ If you want to understand the project quickly:
 - dependency surface is broad because DeerFlow and KAG both bring heavy stacks
 - experimental surfaces remain intentionally de-emphasized relative to the runtime core
 - `make test-docker` is the quickest way to verify the real Docker-backed sandbox path when this session can reach the local Docker daemon
+- `make test-integration` verifies the strongest local integration slice: real Docker sandbox plus the DeerFlow sidecar transport bridge
 - `make lint` / `make fmt-check` currently enforce the touched hotspot files; use `make lint-all` / `make fmt-check-all` to inspect the broader repo-wide debt
 
 ## 12. Supporting docs
