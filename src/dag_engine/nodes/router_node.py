@@ -8,6 +8,7 @@ Router 意图路由节点
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
@@ -36,6 +37,16 @@ _DYNAMIC_PATTERNS = [
 ]
 _COORDINATION_HINTS = ["结合", "并", "同时", "然后", "再", "并且"]
 _BUSINESS_KEYWORDS = ["定义", "规则", "口径", "标准", "合规", "说明"]
+
+
+@dataclass(frozen=True)
+class PreparedRouting:
+    """Resolved routing branch plus the explanation to persist."""
+
+    routing_mode: str
+    destinations: list[str]
+    routing_reasons: list[str]
+    dynamic_reason: str | None = None
 
 
 def _has_business_context(exec_data: Any) -> bool:
@@ -78,6 +89,115 @@ def _score_dynamic_complexity(query: str, exec_data: Any) -> tuple[float, list[s
     return min(score, 1.0), reasons
 
 
+def _recall_router_candidate_skills(state: DagGraphState, exec_data: Any) -> list[dict[str, Any]]:
+    recall_result = MemoryService.recall_skills(
+        tenant_id=exec_data.tenant_id,
+        task_id=exec_data.task_id,
+        workspace_id=getattr(exec_data, "workspace_id", state.get("workspace_id", "default_ws")),
+        query=state["input_query"],
+        stage="router",
+        available_capabilities=list(state.get("allowed_tools") or []),
+        match_reason_detail="router ranked historical skills against the incoming query",
+    )
+    return [item.model_dump(mode="json") for item in recall_result.memory_data.approved_skills]
+
+
+def _resolve_static_destinations(query: str, exec_data: Any) -> tuple[list[str], list[str]]:
+    destinations: list[str] = []
+    routing_reasons: list[str] = []
+
+    if exec_data.inputs.structured_datasets:
+        has_uninspected_data = any(not ds.dataset_schema for ds in exec_data.inputs.structured_datasets)
+        if has_uninspected_data:
+            destinations.append("data_inspector")
+            routing_reasons.append("发现新增的或尚未探查的结构化文件")
+
+    if exec_data.inputs.business_documents:
+        has_unparsed_docs = any(doc.status != "parsed" for doc in exec_data.inputs.business_documents)
+        if has_unparsed_docs:
+            destinations.append("kag_retriever")
+            routing_reasons.append("发现新增的业务文档，需追加提取业务规则")
+
+    if not exec_data.inputs.business_documents:
+        needs_business_context = any(kw in query for kw in _BUSINESS_KEYWORDS)
+        if needs_business_context and not _has_business_context(exec_data):
+            destinations.append("kag_retriever")
+            routing_reasons.append("无新文档，但提问命中业务黑话，需全局检索企业规则库")
+
+    if not destinations:
+        destinations.append("analyst")
+        routing_reasons.append("信息已齐备或无需前置检索，直通 Analyst")
+
+    return destinations, routing_reasons
+
+
+def _prepare_routing(
+    *,
+    query: str,
+    exec_data: Any,
+    runtime_decision: Any,
+    complexity_score: float,
+    complexity_reasons: list[str],
+) -> PreparedRouting:
+    if runtime_decision.routing_mode == "dynamic":
+        dynamic_reason = (
+            " | ".join(complexity_reasons)
+            if complexity_reasons
+            else runtime_decision.decision_reason or "任务需要未知多步探索"
+        )
+        return PreparedRouting(
+            routing_mode="dynamic",
+            destinations=["dynamic_swarm"],
+            routing_reasons=[f"触发动态超级节点: {dynamic_reason}"],
+            dynamic_reason=dynamic_reason,
+        )
+
+    destinations, routing_reasons = _resolve_static_destinations(query, exec_data)
+    if complexity_score >= 0.7:
+        routing_reasons.insert(0, "任务复杂度较高，但未命中外部研究型动态分析条件，保持静态/混合分析链")
+    return PreparedRouting(
+        routing_mode="static",
+        destinations=destinations,
+        routing_reasons=routing_reasons,
+    )
+
+
+def _build_execution_intent(
+    *,
+    runtime_decision: Any,
+    prepared: PreparedRouting,
+    complexity_score: float,
+    candidate_skills: list[dict[str, Any]],
+) -> ExecutionIntent:
+    return ExecutionIntent(
+        intent=(
+            "dynamic_flow"
+            if prepared.routing_mode == "dynamic"
+            else "hybrid_flow"
+            if len(prepared.destinations) > 1
+            else "static_flow"
+        ),
+        destinations=prepared.destinations,
+        reason=" | ".join(
+            [runtime_decision.decision_reason, *prepared.routing_reasons]
+            if runtime_decision.decision_reason
+            else prepared.routing_reasons
+        ),
+        complexity_score=complexity_score,
+        candidate_skills=candidate_skills,
+        metadata={
+            **({"dynamic_reason": prepared.dynamic_reason} if prepared.dynamic_reason else {}),
+            "runtime_profile": runtime_decision.call_purpose,
+            "analysis_mode": runtime_decision.analysis_mode,
+            "evidence_strategy": runtime_decision.evidence_strategy,
+            "effective_model_alias": runtime_decision.model_alias,
+            "effective_tools": list(runtime_decision.effective_tools),
+            "known_gaps": list(runtime_decision.known_gaps),
+            "decision_reason": runtime_decision.decision_reason,
+        },
+    )
+
+
 def router_node(state: DagGraphState) -> dict[str, Any]:
     """
     根据 blackboard 决定：
@@ -101,15 +221,7 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
     exec_data = execution_blackboard.read(tenant_id, task_id)
     if not exec_data:
         raise ValueError(f"严重错误：找不到任务 {task_id} 的 ExecutionData")
-    recall_result = MemoryService.recall_skills(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=getattr(exec_data, "workspace_id", state.get("workspace_id", "default_ws")),
-        query=query,
-        stage="router",
-        available_capabilities=list(state.get("allowed_tools") or []),
-        match_reason_detail="router ranked historical skills against the incoming query",
-    )
+    candidate_skills = _recall_router_candidate_skills(state, exec_data)
     runtime_decision = resolve_runtime_decision(
         call_purpose="routing_assess",
         query=query,
@@ -119,71 +231,18 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
     )
 
     complexity_score, complexity_reasons = _score_dynamic_complexity(query, exec_data)
-    candidate_skills = [item.model_dump(mode="json") for item in recall_result.memory_data.approved_skills]
-
-    destinations: list[str] = []
-    routing_mode = "static"
-    routing_reasons: list[str] = []
-    dynamic_reason = None
-
-    if runtime_decision.routing_mode == "dynamic":
-        routing_mode = "dynamic"
-        dynamic_reason = (
-            " | ".join(complexity_reasons)
-            if complexity_reasons
-            else runtime_decision.decision_reason or "任务需要未知多步探索"
-        )
-        destinations = ["dynamic_swarm"]
-        routing_reasons.append(f"触发动态超级节点: {dynamic_reason}")
-    else:
-        if complexity_score >= 0.7:
-            routing_reasons.append("任务复杂度较高，但未命中外部研究型动态分析条件，保持静态/混合分析链")
-        if exec_data.inputs.structured_datasets:
-            has_uninspected_data = any(not ds.dataset_schema for ds in exec_data.inputs.structured_datasets)
-            if has_uninspected_data:
-                destinations.append("data_inspector")
-                routing_reasons.append("发现新增的或尚未探查的结构化文件")
-
-        if exec_data.inputs.business_documents:
-            has_unparsed_docs = any(doc.status != "parsed" for doc in exec_data.inputs.business_documents)
-            if has_unparsed_docs:
-                destinations.append("kag_retriever")
-                routing_reasons.append("发现新增的业务文档，需追加提取业务规则")
-
-        if not exec_data.inputs.business_documents:
-            needs_business_context = any(kw in query for kw in _BUSINESS_KEYWORDS)
-            if needs_business_context and not _has_business_context(exec_data):
-                destinations.append("kag_retriever")
-                routing_reasons.append("无新文档，但提问命中业务黑话，需全局检索企业规则库")
-
-        if not destinations:
-            destinations.append("analyst")
-            routing_reasons.append("信息已齐备或无需前置检索，直通 Analyst")
-
-    execution_intent = ExecutionIntent(
-        intent="dynamic_flow"
-        if routing_mode == "dynamic"
-        else "hybrid_flow"
-        if len(destinations) > 1
-        else "static_flow",
-        destinations=destinations,
-        reason=" | ".join(
-            [runtime_decision.decision_reason, *routing_reasons]
-            if runtime_decision.decision_reason
-            else routing_reasons
-        ),
+    prepared = _prepare_routing(
+        query=query,
+        exec_data=exec_data,
+        runtime_decision=runtime_decision,
+        complexity_score=complexity_score,
+        complexity_reasons=complexity_reasons,
+    )
+    execution_intent = _build_execution_intent(
+        runtime_decision=runtime_decision,
+        prepared=prepared,
         complexity_score=complexity_score,
         candidate_skills=candidate_skills,
-        metadata={
-            **({"dynamic_reason": dynamic_reason} if dynamic_reason else {}),
-            "runtime_profile": runtime_decision.call_purpose,
-            "analysis_mode": runtime_decision.analysis_mode,
-            "evidence_strategy": runtime_decision.evidence_strategy,
-            "effective_model_alias": runtime_decision.model_alias,
-            "effective_tools": list(runtime_decision.effective_tools),
-            "known_gaps": list(runtime_decision.known_gaps),
-            "decision_reason": runtime_decision.decision_reason,
-        },
     )
     exec_data.control.execution_intent = execution_intent
 
@@ -191,7 +250,7 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
     execution_blackboard.persist(tenant_id, task_id)
 
     return {
-        "next_actions": destinations,
+        "next_actions": prepared.destinations,
         "execution_intent": execution_intent.model_dump(mode="json"),
     }
 

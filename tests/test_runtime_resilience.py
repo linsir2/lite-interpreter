@@ -167,6 +167,92 @@ def test_recover_unfinished_tasks_schedules_task_runs(monkeypatch):
     assert status["scheduled_task_ids"] == [task_id]
 
 
+def test_recover_unfinished_tasks_skips_waiting_and_terminal_states(monkeypatch):
+    global_blackboard._task_states.clear()
+    execution_blackboard._storage.clear()
+    analysis_router._active_task_flow_tasks.clear()
+    analysis_router._startup_recovery_state["scheduled_task_ids"] = []
+
+    tenant_id = "tenant-recover-filter"
+    pending_task = global_blackboard.create_task(tenant_id, "ws-recover-filter", "pending query")
+    coding_task = global_blackboard.create_task(tenant_id, "ws-recover-filter", "coding query")
+    waiting_task = global_blackboard.create_task(tenant_id, "ws-recover-filter", "waiting query")
+    success_task = global_blackboard.create_task(tenant_id, "ws-recover-filter", "success query")
+    failed_task = global_blackboard.create_task(tenant_id, "ws-recover-filter", "failed query")
+
+    global_blackboard.update_global_status(coding_task, GlobalStatus.CODING)
+    global_blackboard.update_global_status(waiting_task, GlobalStatus.WAITING_FOR_HUMAN)
+    global_blackboard.update_global_status(success_task, GlobalStatus.SUCCESS)
+    global_blackboard.update_global_status(failed_task, GlobalStatus.FAILED)
+
+    scheduled: list[str] = []
+
+    async def fake_run_task_flow(**kwargs):
+        scheduled.append(str(kwargs["task_id"]))
+
+    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+
+    async def scenario():
+        recovered = await analysis_router.recover_unfinished_tasks()
+        await asyncio.sleep(0)
+        return recovered
+
+    recovered = asyncio.run(scenario())
+
+    assert set(recovered) == {pending_task, coding_task}
+    assert set(scheduled) == {pending_task, coding_task}
+    assert waiting_task not in recovered
+    assert success_task not in recovered
+    assert failed_task not in recovered
+
+
+def test_recover_unfinished_tasks_reuses_task_envelope_settings(monkeypatch):
+    global_blackboard._task_states.clear()
+    execution_blackboard._storage.clear()
+    analysis_router._active_task_flow_tasks.clear()
+
+    tenant_id = "tenant-recover-envelope"
+    task_id = global_blackboard.create_task(tenant_id, "ws-recover-envelope", "继续执行")
+    global_blackboard.update_global_status(task_id, GlobalStatus.CODING)
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws-recover-envelope",
+            control={
+                "task_envelope": {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": "ws-recover-envelope",
+                    "input_query": "继续执行",
+                    "governance_profile": "reviewer",
+                    "allowed_tools": ["knowledge_query", "sandbox_exec"],
+                    "redaction_rules": [],
+                    "max_dynamic_steps": 6,
+                    "metadata": {},
+                }
+            },
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_schedule_task_flow(**kwargs):
+        captured.update(kwargs)
+        return {"scheduled": True, "reason": "scheduled"}
+
+    monkeypatch.setattr("src.api.routers.analysis_router.schedule_task_flow", fake_schedule_task_flow)
+
+    recovered = asyncio.run(analysis_router.recover_unfinished_tasks())
+
+    assert recovered == [task_id]
+    assert captured["task_id"] == task_id
+    assert captured["governance_profile"] == "reviewer"
+    assert captured["allowed_tools"] == ["knowledge_query", "sandbox_exec"]
+
+
 def test_schedule_task_flow_skips_duplicate_task_ids(monkeypatch):
     analysis_router._startup_recovery_state["duplicate_schedule_skips"] = 0
     analysis_router._active_task_flow_tasks.clear()
@@ -202,6 +288,74 @@ def test_schedule_task_flow_skips_duplicate_task_ids(monkeypatch):
     assert second["scheduled"] is False
     assert second["reason"] == "duplicate_local_task"
     assert status["duplicate_schedule_skips"] >= 1
+
+
+def test_schedule_task_flow_releases_active_marker_and_lease_after_completion(monkeypatch):
+    analysis_router._active_task_flow_tasks.clear()
+
+    async def fake_run_task_flow(**kwargs):  # noqa: ARG001
+        return None
+
+    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+
+    async def scenario():
+        scheduled = analysis_router.schedule_task_flow(
+            tenant_id="tenant-cleanup",
+            task_id="task-cleanup",
+            workspace_id="ws-cleanup",
+            query="run once",
+        )
+        assert "task-cleanup" in analysis_router._active_task_flow_tasks
+        assert StateRepo.get_task_lease("task-cleanup") is not None
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return scheduled
+
+    scheduled = asyncio.run(scenario())
+
+    assert scheduled["scheduled"] is True
+    assert "task-cleanup" not in analysis_router._active_task_flow_tasks
+    assert StateRepo.get_task_lease("task-cleanup") is None
+
+
+def test_schedule_task_flow_allows_distinct_tasks_to_run_concurrently(monkeypatch):
+    analysis_router._active_task_flow_tasks.clear()
+    blocker = asyncio.Event()
+    started: list[str] = []
+
+    async def fake_run_task_flow(**kwargs):
+        started.append(str(kwargs["task_id"]))
+        await blocker.wait()
+
+    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+
+    async def scenario():
+        first = analysis_router.schedule_task_flow(
+            tenant_id="tenant-parallel",
+            task_id="task-parallel-a",
+            workspace_id="ws-parallel",
+            query="run a",
+        )
+        second = analysis_router.schedule_task_flow(
+            tenant_id="tenant-parallel",
+            task_id="task-parallel-b",
+            workspace_id="ws-parallel",
+            query="run b",
+        )
+        assert analysis_router._active_task_flow_tasks == {"task-parallel-a", "task-parallel-b"}
+        blocker.set()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+
+    assert first["scheduled"] is True
+    assert second["scheduled"] is True
+    assert set(started) == {"task-parallel-a", "task-parallel-b"}
+    assert analysis_router._active_task_flow_tasks == set()
+    assert StateRepo.get_task_lease("task-parallel-a") is None
+    assert StateRepo.get_task_lease("task-parallel-b") is None
 
 
 def test_schedule_task_flow_skips_when_lease_not_acquired(monkeypatch):

@@ -13,7 +13,7 @@ def _read(relative_path: str) -> str:
 
 
 def test_project_status_is_the_only_hardcoded_test_baseline_source():
-    baseline_pattern = re.compile(r"\b\d+\s+passed,\s+\d+\s+skipped\b")
+    baseline_pattern = re.compile(r"\b\d+\s+passed(?:,\s+\d+\s+skipped)?\b")
     allowed_paths = {"docs/project_status.md"}
     checked_paths = [
         "README.md",
