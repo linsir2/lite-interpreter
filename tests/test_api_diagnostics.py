@@ -59,6 +59,10 @@ def test_get_diagnostics_returns_environment_and_dependency_summary():
     )
     assert "startup_recovery" in body
     assert "task_leases" in body["startup_recovery"]
+    assert "llm_health" in body
+    assert "fast_model" in body["llm_health"]
+    assert "guidance_health" in body
+    assert "compiler_health" in body
 
 
 def test_get_conformance_returns_runtime_summary():

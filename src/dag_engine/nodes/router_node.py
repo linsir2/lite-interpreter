@@ -22,22 +22,6 @@ from src.runtime import resolve_runtime_decision
 
 logger = get_logger(__name__)
 
-_DYNAMIC_PATTERNS = [
-    "自己找数据",
-    "自己收集",
-    "自己验证",
-    "多步",
-    "探索",
-    "对比方案",
-    "联网",
-    "外部资料",
-    "财报",
-    "research",
-    "benchmark",
-]
-_COORDINATION_HINTS = ["结合", "并", "同时", "然后", "再", "并且"]
-_BUSINESS_KEYWORDS = ["定义", "规则", "口径", "标准", "合规", "说明"]
-
 
 @dataclass(frozen=True)
 class PreparedRouting:
@@ -56,39 +40,6 @@ def _has_business_context(exec_data: Any) -> bool:
     return any(bool(getattr(context, key, [])) for key in ("rules", "metrics", "filters", "sources"))
 
 
-def _score_dynamic_complexity(query: str, exec_data: Any) -> tuple[float, list[str]]:
-    score = 0.0
-    reasons: list[str] = []
-
-    if len(query) >= 40:
-        score += 0.15
-        reasons.append("用户目标描述较长，疑似包含多阶段目标")
-
-    matched_patterns = [pattern for pattern in _DYNAMIC_PATTERNS if pattern in query]
-    if matched_patterns:
-        score += min(0.5, 0.18 * len(matched_patterns))
-        reasons.append(f"命中复杂探索关键词: {', '.join(matched_patterns[:3])}")
-
-    matched_coordination_hints = [hint for hint in _COORDINATION_HINTS if hint in query]
-    if len(matched_coordination_hints) >= 2:
-        score += 0.2
-        reasons.append("用户请求同时包含多个协作/串联动作")
-
-    if exec_data.inputs.structured_datasets and exec_data.inputs.business_documents:
-        score += 0.15
-        reasons.append("同一任务同时涉及结构化与非结构化上下文")
-
-    if "写代码" in query and ("找数据" in query or "验证" in query):
-        score += 0.2
-        reasons.append("需要外部信息收集与代码验证闭环")
-
-    if ("预测" in query or "走势" in query or "宏观" in query) and ("财报" in query or "数据" in query):
-        score += 0.15
-        reasons.append("包含趋势/预测任务，且依赖外部事实支撑")
-
-    return min(score, 1.0), reasons
-
-
 def _recall_router_candidate_skills(state: DagGraphState, exec_data: Any) -> list[dict[str, Any]]:
     recall_result = MemoryService.recall_skills(
         tenant_id=exec_data.tenant_id,
@@ -102,63 +53,24 @@ def _recall_router_candidate_skills(state: DagGraphState, exec_data: Any) -> lis
     return [item.model_dump(mode="json") for item in recall_result.memory_data.approved_skills]
 
 
-def _resolve_static_destinations(query: str, exec_data: Any) -> tuple[list[str], list[str]]:
-    destinations: list[str] = []
-    routing_reasons: list[str] = []
-
-    if exec_data.inputs.structured_datasets:
-        has_uninspected_data = any(not ds.dataset_schema for ds in exec_data.inputs.structured_datasets)
-        if has_uninspected_data:
-            destinations.append("data_inspector")
-            routing_reasons.append("发现新增的或尚未探查的结构化文件")
-
-    if exec_data.inputs.business_documents:
-        has_unparsed_docs = any(doc.status != "parsed" for doc in exec_data.inputs.business_documents)
-        if has_unparsed_docs:
-            destinations.append("kag_retriever")
-            routing_reasons.append("发现新增的业务文档，需追加提取业务规则")
-
-    if not exec_data.inputs.business_documents:
-        needs_business_context = any(kw in query for kw in _BUSINESS_KEYWORDS)
-        if needs_business_context and not _has_business_context(exec_data):
-            destinations.append("kag_retriever")
-            routing_reasons.append("无新文档，但提问命中业务黑话，需全局检索企业规则库")
-
-    if not destinations:
-        destinations.append("analyst")
-        routing_reasons.append("信息已齐备或无需前置检索，直通 Analyst")
-
-    return destinations, routing_reasons
-
-
 def _prepare_routing(
     *,
-    query: str,
-    exec_data: Any,
     runtime_decision: Any,
-    complexity_score: float,
-    complexity_reasons: list[str],
 ) -> PreparedRouting:
-    if runtime_decision.routing_mode == "dynamic":
-        dynamic_reason = (
-            " | ".join(complexity_reasons)
-            if complexity_reasons
-            else runtime_decision.decision_reason or "任务需要未知多步探索"
-        )
+    destinations = list(runtime_decision.destinations or [])
+    routing_reasons = list(runtime_decision.routing_reasons or [])
+    if runtime_decision.final_mode == "dynamic":
+        dynamic_reason = runtime_decision.decision_reason or "任务需要外部研究能力"
         return PreparedRouting(
             routing_mode="dynamic",
-            destinations=["dynamic_swarm"],
-            routing_reasons=[f"触发动态超级节点: {dynamic_reason}"],
+            destinations=destinations or ["dynamic_swarm"],
+            routing_reasons=routing_reasons or [f"触发动态超级节点: {dynamic_reason}"],
             dynamic_reason=dynamic_reason,
         )
-
-    destinations, routing_reasons = _resolve_static_destinations(query, exec_data)
-    if complexity_score >= 0.7:
-        routing_reasons.insert(0, "任务复杂度较高，但未命中外部研究型动态分析条件，保持静态/混合分析链")
     return PreparedRouting(
         routing_mode="static",
-        destinations=destinations,
-        routing_reasons=routing_reasons,
+        destinations=destinations or ["analyst"],
+        routing_reasons=routing_reasons or [runtime_decision.decision_reason],
     )
 
 
@@ -166,15 +78,12 @@ def _build_execution_intent(
     *,
     runtime_decision: Any,
     prepared: PreparedRouting,
-    complexity_score: float,
     candidate_skills: list[dict[str, Any]],
 ) -> ExecutionIntent:
     return ExecutionIntent(
         intent=(
-            "dynamic_flow"
-            if prepared.routing_mode == "dynamic"
-            else "hybrid_flow"
-            if len(prepared.destinations) > 1
+            "dynamic_flow" if runtime_decision.final_mode == "dynamic"
+            else "hybrid_flow" if runtime_decision.final_mode == "hybrid" or len(prepared.destinations) > 1
             else "static_flow"
         ),
         destinations=prepared.destinations,
@@ -183,17 +92,11 @@ def _build_execution_intent(
             if runtime_decision.decision_reason
             else prepared.routing_reasons
         ),
-        complexity_score=complexity_score,
+        complexity_score=runtime_decision.complexity_score,
         candidate_skills=candidate_skills,
         metadata={
             **({"dynamic_reason": prepared.dynamic_reason} if prepared.dynamic_reason else {}),
-            "runtime_profile": runtime_decision.call_purpose,
-            "analysis_mode": runtime_decision.analysis_mode,
-            "evidence_strategy": runtime_decision.evidence_strategy,
-            "effective_model_alias": runtime_decision.model_alias,
-            "effective_tools": list(runtime_decision.effective_tools),
-            "known_gaps": list(runtime_decision.known_gaps),
-            "decision_reason": runtime_decision.decision_reason,
+            **runtime_decision.to_metadata(),
         },
     )
 
@@ -230,18 +133,12 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
         allowed_tools=list(state.get("allowed_tools") or []),
     )
 
-    complexity_score, complexity_reasons = _score_dynamic_complexity(query, exec_data)
     prepared = _prepare_routing(
-        query=query,
-        exec_data=exec_data,
         runtime_decision=runtime_decision,
-        complexity_score=complexity_score,
-        complexity_reasons=complexity_reasons,
     )
     execution_intent = _build_execution_intent(
         runtime_decision=runtime_decision,
         prepared=prepared,
-        complexity_score=complexity_score,
         candidate_skills=candidate_skills,
     )
     exec_data.control.execution_intent = execution_intent

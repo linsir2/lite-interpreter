@@ -1,6 +1,8 @@
 call_purposes:
   routing_assess:
     model_alias: fast_model
+  routing_refine:
+    model_alias: reasoning_model
   query_rewrite:
     model_alias: fast_model
   context_compress:
@@ -26,6 +28,12 @@ profiles:
   need_more_inputs:
     evidence_strategy: input_gap
     routing_mode: static
+
+fine_routing:
+  enabled: true
+  ambiguity_threshold: 0.45
+  min_candidate_count: 2
+  model_alias: reasoning_model
 
 dynamic_patterns:
   - 自己找数据

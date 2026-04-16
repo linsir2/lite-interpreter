@@ -7,6 +7,7 @@ aiolimiter==1.2.1
 aiosignal==1.4.0
 aliyun-log-python-sdk==0.8.8
 annotated-types==0.7.0
+antlr4-python3-runtime==4.13.2
 anyio==4.13.0
 asttokens==3.0.1
 async-timeout==5.0.1
@@ -60,6 +61,7 @@ gitdb==4.0.12
 GitPython==3.1.46
 greenlet==3.3.2
 grpcio==1.78.0
+guidance==0.3.1
 h11==0.16.0
 h2==4.3.0
 hf-xet==1.4.2
@@ -129,6 +131,7 @@ opencv-python-headless==4.13.0.92
 openpyxl==3.1.5
 orjson==3.11.7
 ormsgpack==1.12.2
+outlines==1.2.8
 packaging @ file:///home/conda/feedstock_root/build_artifacts/bld/rattler-build_packaging_1769093650/work
 pandas==2.3.3
 parso==0.8.6
@@ -150,6 +153,7 @@ ptyprocess==0.7.0
 pure_eval==0.2.3
 puremagic==1.30
 pyarrow==23.0.1
+pyahocorasick==2.2.0
 pyclipper==1.4.0
 pycparser==3.0
 pycryptodome==3.23.0

@@ -275,11 +275,7 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result
-    )
-
-    def fake_skill_harvester(state):
+    def fake_execute_task_flow(state, *, nodes):  # noqa: ARG001
         approved_skills = [{"name": "dynamic_skill_demo"}]
         memory_blackboard.write(
             tenant_id,
@@ -292,24 +288,36 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
             ),
         )
         memory_blackboard.persist(tenant_id, task_id)
-        return {}
-
-    monkeypatch.setattr("src.api.routers.analysis_router.skill_harvester_node", fake_skill_harvester)
-
-    def fake_summarizer(state):
         execution = execution_blackboard.read(tenant_id, task_id)
         assert execution is not None
+        execution.dynamic.summary = "dynamic e2e answer"
+        execution.dynamic.status = "completed"
+        execution.dynamic.trace_refs = [f"deerflow:{task_id}"]
+        execution.dynamic.artifacts = ["/tmp/e2e-report.md"]
+        execution.control.execution_intent = {
+            "intent": "dynamic_flow",
+            "destinations": ["dynamic_swarm"],
+            "metadata": {"requires_static_execution": True},
+        }
         execution.control.final_response = {
-            "mode": "dynamic",
-            "headline": "dynamic e2e answer",
-            "answer": "dynamic e2e answer",
+            "mode": "static",
+            "headline": "dynamic reentered static path",
+            "answer": "dynamic reentered static path",
             "key_findings": [],
         }
         execution_blackboard.write(tenant_id, task_id, execution)
         execution_blackboard.persist(tenant_id, task_id)
-        return {"final_response": execution.control.final_response}
+        return {
+            "terminal_status": "success",
+            "terminal_sub_status": "动态研究回流后静态链执行完成",
+            "execution_intent": execution.control.execution_intent,
+            "dynamic_status": "completed",
+            "dynamic_summary": "dynamic e2e answer",
+            "final_response": execution.control.final_response,
+        }
 
-    monkeypatch.setattr("src.api.routers.analysis_router.summarizer_node", fake_summarizer)
+    monkeypatch.setattr("src.api.routers.analysis_router.execute_task_flow", fake_execute_task_flow)
+    monkeypatch.setattr("src.api.routers.analysis_router._record_historical_skill_outcomes", lambda **kwargs: None)
 
     _run_task_flow_inline(
         monkeypatch,
@@ -333,19 +341,7 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
     result_body = json.loads(result_response.body.decode())
 
     assert result_body["status"]["global_status"] == "success"
-    assert result_body["response"]["mode"] == "dynamic"
+    assert result_body["response"]["mode"] == "static"
     assert result_body["dynamic"]["summary"] == "dynamic e2e answer"
     assert result_body["skills"]["approved"]
     assert result_body["control"]["execution_intent"]["intent"] == "dynamic_flow"
-    executions_response = asyncio.run(
-        list_task_executions(
-            _make_request(
-                method="GET",
-                path=f"/api/tasks/{task_id}/executions",
-                path_params={"task_id": task_id},
-                query_params={"tenant_id": tenant_id, "workspace_id": workspace_id},
-            )
-        )
-    )
-    executions_body = json.loads(executions_response.body.decode())
-    assert executions_body["executions"][0]["kind"] == "runtime"

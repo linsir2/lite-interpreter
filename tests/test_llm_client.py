@@ -6,7 +6,7 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from src.common.llm_client import LiteLLMClient
+from src.common.llm_client import LiteLLMClient, LiteLLMModelConfig
 
 
 def test_litellm_client_loads_dashscope_aliases():
@@ -44,3 +44,19 @@ def test_litellm_client_aembedding_falls_back_to_thread():
             result = asyncio.run(LiteLLMClient.aembedding("embedding_model", ["hello"]))
     assert result == [[0.1, 0.2]]
     assert mocked.called
+
+
+def test_litellm_probe_alias_reports_config_without_live_call():
+    status = LiteLLMClient.probe_alias("fast_model", live=False)
+    assert status.alias == "fast_model"
+    assert status.provider == "openai"
+    assert status.configured is False or status.api_key_present is True
+
+
+def test_litellm_probe_alias_reports_live_success():
+    fake_config = LiteLLMModelConfig(alias="fast_model", params={"model": "openai/qwen-turbo", "api_key": "demo"})
+    with patch.object(LiteLLMClient, "get_model_config", return_value=fake_config):
+        with patch.object(LiteLLMClient, "chat", return_value="ok"):
+            status = LiteLLMClient.probe_alias("fast_model", live=True)
+    assert status.reachable is True
+    assert status.smoke_ok is True

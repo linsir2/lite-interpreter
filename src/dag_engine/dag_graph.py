@@ -31,7 +31,29 @@ def get_route_map() -> dict[str, str]:
 
 
 def _next_actions(state: dict[str, object]) -> list[str]:
-    return list(state.get("next_actions", []) or [])
+    actions = [str(item) for item in (state.get("next_actions", []) or []) if str(item)]
+    filtered = [item for item in actions if item in {"executor", "debugger", "skill_harvester"}]
+    return filtered or []
+
+
+def _research_merge_next_actions(state: dict[str, object]) -> list[str]:
+    actions = [str(item) for item in (state.get("next_actions", []) or []) if str(item)]
+    filtered = [item for item in actions if item in {"data_inspector", "kag_retriever", "analyst", "skill_harvester"}]
+    return filtered or ["skill_harvester"]
+
+
+def _execution_intent_metadata(state: Mapping[str, Any]) -> dict[str, Any]:
+    execution_intent = state.get("execution_intent")
+    if isinstance(execution_intent, Mapping):
+        metadata = execution_intent.get("metadata")
+        if isinstance(metadata, Mapping):
+            return dict(metadata)
+    return {}
+
+
+def _fallback_actions(state: Mapping[str, Any]) -> list[str]:
+    metadata = _execution_intent_metadata(state)
+    return list(metadata.get("fallback_destinations") or [])
 
 
 def _normalize_output_patch(value: Any) -> dict[str, Any]:
@@ -125,6 +147,122 @@ def _run_checkpointed_node(
     return output_patch
 
 
+def _execute_static_flow(
+    *,
+    state: dict[str, Any],
+    next_actions: list[str],
+    nodes: NodeMap,
+    success_sub_status: str,
+) -> dict[str, Any]:
+    current_state: dict[str, Any] = {**state, "next_actions": next_actions}
+    for action in next_actions:
+        if action == "data_inspector":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state
+                )
+            )
+            if current_state.get("blocked"):
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer",
+                    node_fn=nodes["summarizer"],
+                    state=current_state,
+                )
+                return {
+                    **current_state,
+                    **summary_state,
+                    "terminal_status": "waiting_for_human",
+                    "terminal_sub_status": "结构化数据探查失败，等待人工介入",
+                    "failure_type": "data_inspection",
+                    "error_message": str(current_state.get("block_reason") or "data inspection blocked"),
+                }
+        elif action == "kag_retriever":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state
+                )
+            )
+            if current_state.get("blocked"):
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer",
+                    node_fn=nodes["summarizer"],
+                    state=current_state,
+                )
+                return {
+                    **current_state,
+                    **summary_state,
+                    "terminal_status": "waiting_for_human",
+                    "terminal_sub_status": "知识构建失败，等待人工介入",
+                    "failure_type": "knowledge_ingestion",
+                    "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                }
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="context_builder", node_fn=nodes["context_builder"], state=current_state
+                )
+            )
+
+    current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
+    current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
+
+    audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
+    current_state.update(audit_state)
+    if audit_state.get("next_actions") == ["debugger"]:
+        current_state.update(
+            _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
+        )
+        current_state.update(
+            _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
+        )
+    if current_state.get("next_actions") == ["skill_harvester"]:
+        harvested_state = _run_checkpointed_node(
+            node_name="skill_harvester",
+            node_fn=nodes["skill_harvester"],
+            state=current_state,
+        )
+        summary_state = _run_checkpointed_node(
+            node_name="summarizer",
+            node_fn=nodes["summarizer"],
+            state={**current_state, **harvested_state},
+        )
+        return {
+            **current_state,
+            **harvested_state,
+            **summary_state,
+            "terminal_status": "success",
+            "terminal_sub_status": "静态链路完成，跳过沙箱执行",
+        }
+
+    executor_state = _run_checkpointed_node(node_name="executor", node_fn=nodes["executor"], state=current_state)
+    current_state.update(executor_state)
+    harvested_state = _run_checkpointed_node(
+        node_name="skill_harvester",
+        node_fn=nodes["skill_harvester"],
+        state=current_state,
+    )
+    current_state.update(harvested_state)
+    summary_state = _run_checkpointed_node(node_name="summarizer", node_fn=nodes["summarizer"], state=current_state)
+    current_state.update(summary_state)
+    execution_record = executor_state.get("execution_record")
+    if execution_record and execution_record.get("success"):
+        return {
+            **current_state,
+            "terminal_status": "success",
+            "terminal_sub_status": success_sub_status,
+        }
+    return {
+        **current_state,
+        "terminal_status": "failed",
+        "terminal_sub_status": "静态链路执行失败",
+        "failure_type": "executing",
+        "error_message": str(
+            execution_record.get("error", "sandbox execution failed")
+            if execution_record
+            else "sandbox execution result missing"
+        ),
+    }
+
+
 def build_dag_graph():
     """Build the static+dynamic graph when LangGraph is available."""
     if StateGraph is None:
@@ -139,6 +277,7 @@ def build_dag_graph():
     from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
     from src.dag_engine.nodes.executor_node import executor_node
     from src.dag_engine.nodes.kag_retriever import kag_retriever_node
+    from src.dag_engine.nodes.research_merge_node import research_merge_node
     from src.dag_engine.nodes.router_node import route_condition, router_node
     from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
     from src.dag_engine.nodes.summarizer_node import summarizer_node
@@ -154,6 +293,7 @@ def build_dag_graph():
     graph.add_node("debugger", debugger_node)
     graph.add_node("executor", executor_node)
     graph.add_node("dynamic_swarm", dynamic_swarm_node)
+    graph.add_node("research_merge", research_merge_node)
     graph.add_node("skill_harvester", skill_harvester_node)
     graph.add_node("summarizer", summarizer_node)
 
@@ -175,7 +315,17 @@ def build_dag_graph():
     )
     graph.add_edge("debugger", "auditor")
     graph.add_edge("executor", "skill_harvester")
-    graph.add_edge("dynamic_swarm", "skill_harvester")
+    graph.add_edge("dynamic_swarm", "research_merge")
+    graph.add_conditional_edges(
+        "research_merge",
+        _research_merge_next_actions,
+        {
+            "data_inspector": "data_inspector",
+            "kag_retriever": "kag_retriever",
+            "analyst": "analyst",
+            "skill_harvester": "skill_harvester",
+        },
+    )
     graph.add_edge("skill_harvester", "summarizer")
     graph.add_edge("summarizer", END)
     return graph.compile()
@@ -203,24 +353,60 @@ def execute_task_flow(
             )
             dynamic_status = str(dynamic_state.get("dynamic_status") or "")
             if dynamic_status == "completed":
-                harvested_state = _run_checkpointed_node(
-                    node_name="skill_harvester",
-                    node_fn=nodes["skill_harvester"],
-                    state={**dynamic_state, **state},
+                merged_state = _run_checkpointed_node(
+                    node_name="research_merge",
+                    node_fn=nodes["research_merge"],
+                    state={**state, **route_result, **dynamic_state},
                 )
-                summary_state = _run_checkpointed_node(
-                    node_name="summarizer",
-                    node_fn=nodes["summarizer"],
-                    state={**dynamic_state, **harvested_state, **state},
+                merge_actions = list(merged_state.get("next_actions") or [])
+                if merge_actions == ["skill_harvester"]:
+                    harvested_state = _run_checkpointed_node(
+                        node_name="skill_harvester",
+                        node_fn=nodes["skill_harvester"],
+                        state={**dynamic_state, **merged_state, **state},
+                    )
+                    summary_state = _run_checkpointed_node(
+                        node_name="summarizer",
+                        node_fn=nodes["summarizer"],
+                        state={**dynamic_state, **merged_state, **harvested_state, **state},
+                    )
+                    return {
+                        **route_result,
+                        **dynamic_state,
+                        **merged_state,
+                        **harvested_state,
+                        **summary_state,
+                        "terminal_status": "success",
+                        "terminal_sub_status": "动态任务链路执行完成",
+                    }
+                static_result = _execute_static_flow(
+                    state={**state, **route_result, **dynamic_state, **merged_state},
+                    next_actions=merge_actions,
+                    nodes=nodes,
+                    success_sub_status="动态研究回流后静态链执行完成",
                 )
-                return {
+                if static_result.get("terminal_status") == "success":
+                    static_result["dynamic_status"] = dynamic_status
+                    static_result["dynamic_summary"] = dynamic_state.get("dynamic_summary")
+                return static_result
+            fallback_actions = _fallback_actions(route_result)
+            if fallback_actions:
+                degraded_state = {
+                    **state,
                     **route_result,
                     **dynamic_state,
-                    **harvested_state,
-                    **summary_state,
-                    "terminal_status": "success",
-                    "terminal_sub_status": "动态任务链路执行完成",
+                    "next_actions": fallback_actions,
+                    "routing_degraded": True,
+                    "degrade_reason": _execution_intent_metadata(route_result).get("fallback_reason")
+                    or dynamic_state.get("dynamic_summary")
+                    or "dynamic route degraded to static path",
                 }
+                return _execute_static_flow(
+                    state=degraded_state,
+                    next_actions=fallback_actions,
+                    nodes=nodes,
+                    success_sub_status="动态任务降级后静态链执行完成",
+                )
             if dynamic_status == "denied":
                 summary_state = nodes["summarizer"]({**dynamic_state, **state})
                 return {
@@ -248,114 +434,12 @@ def execute_task_flow(
                 "failure_type": "dynamic_runtime",
                 "error_message": str(dynamic_state.get("dynamic_summary") or "dynamic swarm unavailable"),
             }
-
-        current_state: dict[str, Any] = {**state, **route_result, "next_actions": next_actions}
-        for action in next_actions:
-            if action == "data_inspector":
-                current_state.update(
-                    _run_checkpointed_node(
-                        node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state
-                    )
-                )
-                if current_state.get("blocked"):
-                    summary_state = _run_checkpointed_node(
-                        node_name="summarizer",
-                        node_fn=nodes["summarizer"],
-                        state=current_state,
-                    )
-                    return {
-                        **current_state,
-                        **summary_state,
-                        "terminal_status": "waiting_for_human",
-                        "terminal_sub_status": "结构化数据探查失败，等待人工介入",
-                        "failure_type": "data_inspection",
-                        "error_message": str(current_state.get("block_reason") or "data inspection blocked"),
-                    }
-            elif action == "kag_retriever":
-                current_state.update(
-                    _run_checkpointed_node(
-                        node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state
-                    )
-                )
-                if current_state.get("blocked"):
-                    summary_state = _run_checkpointed_node(
-                        node_name="summarizer",
-                        node_fn=nodes["summarizer"],
-                        state=current_state,
-                    )
-                    return {
-                        **current_state,
-                        **summary_state,
-                        "terminal_status": "waiting_for_human",
-                        "terminal_sub_status": "知识构建失败，等待人工介入",
-                        "failure_type": "knowledge_ingestion",
-                        "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
-                    }
-                current_state.update(
-                    _run_checkpointed_node(
-                        node_name="context_builder", node_fn=nodes["context_builder"], state=current_state
-                    )
-                )
-
-        current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
-        current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
-
-        audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
-        current_state.update(audit_state)
-        if audit_state.get("next_actions") == ["debugger"]:
-            current_state.update(
-                _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
-            )
-            current_state.update(
-                _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
-            )
-        if current_state.get("next_actions") == ["skill_harvester"]:
-            harvested_state = _run_checkpointed_node(
-                node_name="skill_harvester",
-                node_fn=nodes["skill_harvester"],
-                state=current_state,
-            )
-            summary_state = _run_checkpointed_node(
-                node_name="summarizer",
-                node_fn=nodes["summarizer"],
-                state={**current_state, **harvested_state},
-            )
-            return {
-                **current_state,
-                **harvested_state,
-                **summary_state,
-                "terminal_status": "success",
-                "terminal_sub_status": "静态链路完成，跳过沙箱执行",
-            }
-
-        executor_state = _run_checkpointed_node(node_name="executor", node_fn=nodes["executor"], state=current_state)
-        current_state.update(executor_state)
-        harvested_state = _run_checkpointed_node(
-            node_name="skill_harvester",
-            node_fn=nodes["skill_harvester"],
-            state=current_state,
+        return _execute_static_flow(
+            state={**state, **route_result},
+            next_actions=next_actions,
+            nodes=nodes,
+            success_sub_status="静态链路执行完成",
         )
-        current_state.update(harvested_state)
-        summary_state = _run_checkpointed_node(node_name="summarizer", node_fn=nodes["summarizer"], state=current_state)
-        current_state.update(summary_state)
-        execution_record = executor_state.get("execution_record")
-        if execution_record and execution_record.get("success"):
-            return {
-                **current_state,
-                "terminal_status": "success",
-                "terminal_sub_status": "静态链路执行完成",
-            }
-        return {
-            **current_state,
-            "terminal_status": "failed",
-            "terminal_sub_status": "静态链路执行失败",
-            "failure_type": "executing",
-            "error_message": str(
-                execution_record.get("error", "sandbox execution failed")
-                if execution_record
-                else "sandbox execution result missing"
-            ),
-        }
     except TaskLeaseLostError as exc:
         return {
             **state,

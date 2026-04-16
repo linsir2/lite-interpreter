@@ -16,7 +16,7 @@ run-sidecar:
 	conda run -n $(PYTHON_ENV) python scripts/run_deerflow_sidecar.py --host $(SIDECAR_HOST) --port $(SIDECAR_PORT)
 
 run-frontend:
-	conda run -n $(PYTHON_ENV) streamlit run src/frontend/app.py
+	PYTHONPATH=$(CURDIR) conda run -n $(PYTHON_ENV) streamlit run src/frontend/app.py --browser.gatherUsageStats false
 
 demo-trace:
 	conda run -n $(PYTHON_ENV) python scripts/demo_task_trace.py --api-base-url http://$(API_HOST):$(API_PORT) --task-id $(TASK_ID)

@@ -28,6 +28,7 @@ from src.common.logger import get_logger
 from src.dag_engine.graphstate import DagGraphState
 from src.kag.builder.classifier import DocProcessClass, DocumentClassifier
 from src.kag.builder.orchestrator import KagBuilderOrchestrator
+from src.kag.compiler import LexiconMatcher
 from src.kag.retriever.query_engine import QueryEngine
 from src.storage.repository.knowledge_repo import KnowledgeRepo
 
@@ -164,14 +165,17 @@ def kag_retriever_node(state: DagGraphState) -> dict[str, Any]:
     knowledge_blackboard.write(tenant_id, task_id, knowledge_data)
     knowledge_blackboard.persist(tenant_id, task_id)
 
-    query_keywords = set(jieba.lcut(query)) - {"的", "是", "了", "怎么", "如何", "帮我"}
+    matcher = LexiconMatcher()
+    query_lexical = {match.canonical for match in matcher.match_text(query) if match.category in {"entity", "document", "dataset"}}
+    query_keywords = query_lexical or (set(jieba.lcut(query)) - {"的", "是", "了", "怎么", "如何", "帮我"})
     for doc in exec_data.inputs.business_documents:
         if doc.is_newly_uploaded and DocumentClassifier.classify(doc.path) == DocProcessClass.SMALL:
             with open(doc.path) as f:
                 raw_text = f.read()
 
             # 🛡️ 极其关键的轻量拦截：如果原文里连用户的核心词都没命中任何一个，拒绝强插！
-            text_keywords = set(jieba.lcut(raw_text))
+            text_lexical = {match.canonical for match in matcher.match_text(raw_text) if match.category in {"entity", "document", "dataset"}}
+            text_keywords = text_lexical or set(jieba.lcut(raw_text))
             overlap = query_keywords.intersection(text_keywords)
 
             if not overlap and len(query_keywords) > 0:

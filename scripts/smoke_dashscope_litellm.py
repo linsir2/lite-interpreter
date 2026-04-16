@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.common.llm_client import LiteLLMClient
+from src.runtime.guidance_runner import probe_guidance_runtime
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +33,10 @@ def main() -> int:
 
     chat_cfg = LiteLLMClient.get_model_config(args.chat_alias)
     emb_cfg = LiteLLMClient.get_model_config(args.embedding_alias)
+    probes = {
+        alias: status.model_dump(mode="json")
+        for alias, status in LiteLLMClient.probe_required_aliases(live=False).items()
+    }
     print(
         json.dumps(
             {
@@ -41,6 +46,8 @@ def main() -> int:
                 "embedding_model": emb_cfg.params.get("model"),
                 "api_base": chat_cfg.params.get("api_base"),
                 "has_dashscope_key": bool(os.getenv("DASHSCOPE_API_KEY")),
+                "probes": probes,
+                "guidance": probe_guidance_runtime(args.chat_alias),
             },
             ensure_ascii=False,
             indent=2,

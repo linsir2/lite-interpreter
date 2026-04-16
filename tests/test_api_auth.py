@@ -100,6 +100,20 @@ def test_login_session_returns_bearer_token_for_configured_user(monkeypatch):
     assert body["access_token"].startswith("lis.")
 
 
+def test_login_session_returns_503_when_session_auth_is_not_configured(monkeypatch):
+    monkeypatch.setattr("src.api.auth.API_AUTH_USERS", {})
+    request = _make_request(
+        method="POST",
+        path="/api/session/login",
+        body={"username": "alice", "password": "secret"},
+        headers=[(b"content-type", b"application/json")],
+    )
+    response = asyncio.run(login_session(request))
+    body = json.loads(response.body.decode())
+    assert response.status_code == 503
+    assert body["error"] == "session login not configured"
+
+
 def test_session_me_returns_authenticated_identity():
     request = _make_request(
         method="GET",

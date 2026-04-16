@@ -7,6 +7,23 @@ from typing import Any
 import httpx
 
 
+def _raise_api_error(response: httpx.Response) -> None:
+    if not response.is_error:
+        return
+    try:
+        payload = response.json()
+    except Exception:
+        response.raise_for_status()
+        return
+    if isinstance(payload, dict):
+        error = str(payload.get("error") or "").strip()
+        hint = str(payload.get("hint") or "").strip()
+        if error:
+            message = error if not hint else f"{error}; {hint}"
+            raise RuntimeError(message)
+    response.raise_for_status()
+
+
 def api_auth_headers(api_token: str) -> dict[str, str] | None:
     normalized = str(api_token or "").strip()
     if not normalized:
@@ -20,7 +37,7 @@ def login_via_api(*, api_base_url: str, username: str, password: str) -> dict[st
         json={"username": username, "password": password},
         timeout=20.0,
     )
-    response.raise_for_status()
+    _raise_api_error(response)
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
 
@@ -31,7 +48,7 @@ def fetch_session_me(*, api_base_url: str, api_token: str) -> dict[str, Any]:
         headers=api_auth_headers(api_token),
         timeout=20.0,
     )
-    response.raise_for_status()
+    _raise_api_error(response)
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
 
@@ -48,6 +65,7 @@ def render_auth_panel(*, api_base_url: str, state_prefix: str = "auth") -> tuple
     session_info = st.session_state.get(session_key)
 
     with st.expander("Session Login", expanded=False):
+        st.caption("Optional. Only use this when the API server is configured with session users.")
         username = st.text_input("Username", key=f"{state_prefix}-username")
         password = st.text_input("Password", type="password", key=f"{state_prefix}-password")
         col1, col2 = st.columns(2)

@@ -70,6 +70,10 @@ class DagGraphState(TypedDict, total=False):
     dynamic_trace: list[dict[str, Any]]
     dynamic_trace_refs: list[str]
     dynamic_artifacts: list[str]
+    dynamic_research_findings: list[str]
+    dynamic_evidence_refs: list[str]
+    dynamic_open_questions: list[str]
+    dynamic_suggested_static_actions: list[str]
     recommended_static_skill: dict[str, Any]
 
     # --------------------------

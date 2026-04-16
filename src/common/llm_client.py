@@ -12,6 +12,7 @@ import yaml
 from config.settings import LITELLM_CONFIG_PATH
 
 from src.common.logger import get_logger
+from src.kag.compiler.types import LLMHealthStatus
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,13 @@ class LiteLLMClient:
     @classmethod
     def resolve_model_name(cls, alias: str) -> str:
         return str(cls.get_model_config(alias).params.get("model") or alias)
+
+    @classmethod
+    def _provider_for_alias(cls, alias: str) -> str:
+        model_name = cls.resolve_model_name(alias)
+        if "/" in model_name:
+            return model_name.split("/", 1)[0]
+        return "unknown"
 
     @classmethod
     def completion(
@@ -133,6 +141,55 @@ class LiteLLMClient:
         logger.info(f"[LiteLLM] embedding alias={alias} model={params.get('model')} count={len(inputs)}")
         response = embedding(input=inputs, **params)
         return [item["embedding"] for item in response["data"]]
+
+    @classmethod
+    def probe_alias(cls, alias: str, *, live: bool = False) -> LLMHealthStatus:
+        try:
+            config = cls.get_model_config(alias)
+        except Exception as exc:
+            return LLMHealthStatus(
+                alias=alias,
+                model=alias,
+                provider="unknown",
+                api_key_present=False,
+                configured=False,
+                reachable=False,
+                smoke_ok=False,
+                error=str(exc),
+            )
+        model_name = str(config.params.get("model") or alias)
+        provider = cls._provider_for_alias(alias)
+        api_key_present = bool(str(config.params.get("api_key") or "").strip())
+        is_embedding = "embedding" in alias or "embedding" in model_name
+        status = LLMHealthStatus(
+            alias=alias,
+            model=model_name,
+            provider=provider,
+            api_key_present=api_key_present,
+            configured=bool(model_name) and api_key_present,
+            reachable=False,
+            smoke_ok=False,
+            is_embedding=is_embedding,
+        )
+        if not live:
+            return status.model_copy(update={"reachable": api_key_present, "smoke_ok": api_key_present})
+        if not api_key_present:
+            return status.model_copy(update={"error": "missing_api_key"})
+        try:
+            if is_embedding:
+                vectors = cls.embedding(alias, ["lite-interpreter health probe"])
+                ok = bool(vectors and isinstance(vectors[0], list))
+            else:
+                content = cls.chat(alias, [{"role": "user", "content": "reply with ok"}], max_tokens=8)
+                ok = bool(str(content).strip())
+            return status.model_copy(update={"reachable": ok, "smoke_ok": ok})
+        except Exception as exc:
+            return status.model_copy(update={"reachable": False, "smoke_ok": False, "error": str(exc)})
+
+    @classmethod
+    def probe_required_aliases(cls, *, live: bool = False) -> dict[str, LLMHealthStatus]:
+        aliases = ("fast_model", "reasoning_model", "embedding_model")
+        return {alias: cls.probe_alias(alias, live=live) for alias in aliases}
 
     @classmethod
     async def aembedding(

@@ -24,6 +24,33 @@ logger = get_logger(__name__)
 
 
 class GraphDBClient:
+    @staticmethod
+    def _fact_score(
+        row: dict[str, Any],
+        *,
+        query_terms: list[str],
+        temporal_terms: list[str],
+        prefer_temporal: bool,
+    ) -> float:
+        provenance = dict(row.get("provenance") or {})
+        template_id = str(provenance.get("template_id") or "").lower()
+        haystacks = [
+            str(row.get("head") or "").lower(),
+            str(row.get("tail") or "").lower(),
+            str(row.get("relation") or "").lower(),
+            str(row.get("graph_type") or "").lower(),
+            template_id,
+        ]
+        score = sum(1.0 for term in query_terms if any(term in haystack for haystack in haystacks))
+        temporal_match_count = sum(1.0 for term in temporal_terms if any(term in haystack for haystack in haystacks))
+        if temporal_match_count:
+            score += temporal_match_count * 2.0
+        if prefer_temporal and str(row.get("graph_type") or "").lower() == "temporal":
+            score += 1.5
+        if prefer_temporal and ".temporal." in template_id:
+            score += 0.5
+        return score
+
     def __init__(self) -> None:
         try:
             if GraphDatabase is None:
@@ -98,10 +125,13 @@ class GraphDBClient:
         tenant_id: str,
         workspace_id: str,
         query_terms: list[str],
+        temporal_terms: list[str] | None = None,
+        prefer_temporal: bool = False,
         top_k: int = 10,
     ) -> list[dict[str, Any]]:
         if not self.driver or not query_terms:
             return []
+        temporal_terms = [str(term).lower() for term in list(temporal_terms or []) if str(term).strip()]
 
         cypher = """
         MATCH (h:Entity {tenant_id: $tenant_id, workspace_id: $workspace_id})-[r]->(t:Entity {tenant_id: $tenant_id, workspace_id: $workspace_id})
@@ -112,7 +142,8 @@ class GraphDBClient:
                t.id AS tail,
                t.label AS tail_label,
                r.graph_type AS graph_type,
-               r.supported_by_chunk AS source_chunk_id
+               r.supported_by_chunk AS source_chunk_id,
+               r.provenance AS provenance
         LIMIT $top_k
         """
 
@@ -125,13 +156,30 @@ class GraphDBClient:
                     query_terms=[term.lower() for term in query_terms],
                     top_k=top_k,
                 )
+                materialized_rows = [dict(row) for row in rows]
+                ranked_rows = sorted(
+                    materialized_rows,
+                    key=lambda row: self._fact_score(
+                        row,
+                        query_terms=[term.lower() for term in query_terms],
+                        temporal_terms=temporal_terms,
+                        prefer_temporal=prefer_temporal,
+                    ),
+                    reverse=True,
+                )
                 results = []
-                for row in rows:
+                for row in ranked_rows[:top_k]:
                     text = f"{row['head']} -[{row['relation']}]-> {row['tail']}"
                     results.append(
                         {
+                            "chunk_id": row.get("source_chunk_id") or "",
                             "text": text,
-                            "score": 1.0,
+                            "score": self._fact_score(
+                                row,
+                                query_terms=[term.lower() for term in query_terms],
+                                temporal_terms=temporal_terms,
+                                prefer_temporal=prefer_temporal,
+                            ),
                             "source": row.get("source_chunk_id") or "neo4j",
                             "graph_type": row.get("graph_type") or "entity",
                             "metadata": dict(row),

@@ -13,8 +13,11 @@ from config.settings import DEERFLOW_RUNTIME_MODE, DEERFLOW_SIDECAR_URL, PROJECT
 from src.api.auth import auth_enabled
 from src.api.routers.analysis_router import get_startup_recovery_status
 from src.blackboard import build_strict_state_report
+from src.common.llm_client import LiteLLMClient
 from src.dynamic_engine.runtime_registry import runtime_registry
+from src.kag.compiler.lexicon import LexiconCompiler
 from src.mcp_gateway import default_mcp_server
+from src.runtime.guidance_runner import probe_guidance_runtime
 from src.sandbox.security_explainer import build_security_policy_summary
 from src.skillnet.preset_skills import load_preset_skills
 from src.storage.graph_client import neo4j_client
@@ -67,6 +70,18 @@ def build_diagnostics_report() -> dict[str, Any]:
     startup_recovery = get_startup_recovery_status()
     security_policy = build_security_policy_summary()
     strict_state = build_strict_state_report()
+    llm_health = {alias: status.model_dump(mode="json") for alias, status in LiteLLMClient.probe_required_aliases().items()}
+    try:
+        compiled = LexiconCompiler.compile()
+        compiler_health = {
+            "lexicon_compiled": True,
+            "lexicon_surface_count": len(compiled.entries_by_surface),
+        }
+    except Exception as exc:
+        compiler_health = {
+            "lexicon_compiled": False,
+            "error": str(exc),
+        }
 
     return {
         "service": "lite-interpreter-api",
@@ -100,6 +115,9 @@ def build_diagnostics_report() -> dict[str, Any]:
         "runtime": {
             "sidecar_health": sidecar_health,
         },
+        "llm_health": llm_health,
+        "guidance_health": probe_guidance_runtime(),
+        "compiler_health": compiler_health,
         "security_policy": security_policy,
         "strict_state": strict_state,
         "startup_recovery": startup_recovery,

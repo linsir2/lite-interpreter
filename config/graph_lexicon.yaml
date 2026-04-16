@@ -1,0 +1,55 @@
+version: "1.0"
+
+aliases:
+  报销规则:
+    aliases: ["费用报销规则", "报销制度", "报销规范"]
+    node_type: concept
+  审批流程:
+    aliases: ["审批链路", "审批路径"]
+    node_type: concept
+  指标口径:
+    aliases: ["统计口径", "指标定义"]
+    node_type: concept
+  预算调整:
+    aliases: ["预算收紧", "预算变更"]
+    node_type: event
+  采购延期:
+    aliases: ["采购延迟", "采购推迟"]
+    node_type: event
+
+domain_terms:
+  - value: "规则"
+    canonical_name: "规则"
+    node_type: concept
+  - value: "制度"
+    canonical_name: "制度"
+    node_type: concept
+  - value: "流程"
+    canonical_name: "流程"
+    node_type: concept
+  - value: "口径"
+    canonical_name: "口径"
+    node_type: concept
+  - value: "指标"
+    canonical_name: "指标"
+    node_type: concept
+  - value: "合同"
+    canonical_name: "合同"
+    node_type: named
+
+causal_markers:
+  - "因为"
+  - "由于"
+  - "导致"
+  - "因此"
+  - "所以"
+  - "造成"
+  - "影响"
+  - "依赖"
+
+temporal_markers:
+  - "年度"
+  - "季度"
+  - "月份"
+  - "期间"
+  - "截至"

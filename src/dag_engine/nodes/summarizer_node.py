@@ -41,12 +41,36 @@ def _as_json(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _preferred_temporal_summary(compiled_knowledge_payload: dict[str, Any]) -> list[str]:
+    metric_specs = list(compiled_knowledge_payload.get("metric_specs") or [])
+    filter_specs = list(compiled_knowledge_payload.get("filter_specs") or [])
+    summaries: list[str] = []
+    metric_date_terms = [
+        str(term).strip()
+        for spec in metric_specs
+        for term in list(spec.get("preferred_date_terms") or [])
+        if str(term).strip()
+    ]
+    if metric_date_terms:
+        summaries.append(f"编译态优先日期列: {', '.join(dict.fromkeys(metric_date_terms))}")
+    temporal_constraints = [
+        str(constraint.get("value") or "").strip()
+        for spec in metric_specs + filter_specs
+        for constraint in list(spec.get("temporal_constraints") or [])
+        if str(constraint.get("value") or "").strip()
+    ]
+    if temporal_constraints:
+        summaries.append(f"编译态时间约束: {', '.join(dict.fromkeys(temporal_constraints))}")
+    return summaries
+
+
 def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, Any]:
     output = execution_output(exec_data.static.execution_record)
     structured_output = _as_json(output)
     analysis_brief_payload = exec_data.knowledge.analysis_brief.model_dump(mode="json")
     business_context_payload = exec_data.knowledge.business_context.model_dump(mode="json")
     knowledge_snapshot_payload = exec_data.knowledge.knowledge_snapshot.model_dump(mode="json")
+    compiled_knowledge_payload = exec_data.knowledge.compiled.model_dump(mode="json")
     approved_skills_payload = [item.model_dump(mode="json") for item in memory_data.approved_skills]
     historical_matches_payload = [item.model_dump(mode="json") for item in memory_data.historical_matches]
     dataset_items = structured_output.get("datasets", []) if isinstance(structured_output.get("datasets"), list) else []
@@ -78,6 +102,30 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     if knowledge_snapshot_payload.get("recall_strategies"):
         findings.append(
             f"知识检索通道: {', '.join(str(item) for item in knowledge_snapshot_payload.get('recall_strategies', [])[:4])}"
+        )
+    snapshot_metadata = dict(knowledge_snapshot_payload.get("metadata") or {})
+    if snapshot_metadata.get("preferred_date_terms"):
+        findings.append(
+            "检索偏好日期列: " + ", ".join(str(item) for item in snapshot_metadata.get("preferred_date_terms", [])[:4])
+        )
+    if snapshot_metadata.get("temporal_constraints"):
+        findings.append(
+            "检索时间约束: " + ", ".join(str(item) for item in snapshot_metadata.get("temporal_constraints", [])[:4])
+        )
+    if compiled_knowledge_payload.get("rule_specs"):
+        findings.append(f"编译态规则规格: {len(compiled_knowledge_payload.get('rule_specs', []))} 条")
+    if compiled_knowledge_payload.get("metric_specs"):
+        findings.append(f"编译态指标规格: {len(compiled_knowledge_payload.get('metric_specs', []))} 条")
+    if compiled_knowledge_payload.get("filter_specs"):
+        findings.append(f"编译态过滤规格: {len(compiled_knowledge_payload.get('filter_specs', []))} 条")
+    findings.extend(_preferred_temporal_summary(compiled_knowledge_payload))
+    graph_summary = dict(compiled_knowledge_payload.get("graph_compilation_summary") or {})
+    if graph_summary:
+        findings.append(
+            "图谱编译候选/接受/拒绝: "
+            f"{graph_summary.get('candidate_count', 0)}/"
+            f"{graph_summary.get('accepted_count', 0)}/"
+            f"{graph_summary.get('rejected_count', 0)}"
         )
     if knowledge_snapshot_payload.get("cache_hit") is True:
         findings.append("知识检索命中缓存")
@@ -199,6 +247,15 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     for check in filter_checks[:5]:
         for matched_range in (check.get("matched_date_ranges", []) or [])[:2]:
             caveats.append(_trim(f"过滤条件命中日期范围: {matched_range}", limit=240))
+    for item in _preferred_temporal_summary(compiled_knowledge_payload)[:2]:
+        caveats.append(_trim(item, limit=240))
+    if snapshot_metadata.get("temporal_constraints"):
+        caveats.append(
+            _trim(
+                "检索时间约束: " + ", ".join(str(item) for item in snapshot_metadata.get("temporal_constraints", [])[:4]),
+                limit=240,
+            )
+        )
     if not dataset_items and exec_data.inputs.structured_datasets:
         caveats.append("结构化数据已挂载，但当前最小代码仅输出概览，不做深度统计。")
     if not document_items and exec_data.inputs.business_documents:
@@ -214,6 +271,7 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
         else None,
         "business_context": business_context_payload,
         "knowledge_snapshot": knowledge_snapshot_payload,
+        "compiled_knowledge": compiled_knowledge_payload,
         "approved_skills": approved_skills_payload,
         "historical_skill_matches": historical_matches_payload,
         "used_historical_skills": [match for match in historical_matches_payload if bool(match.get("used_in_codegen"))],
@@ -276,6 +334,7 @@ def _build_dynamic_response(task_id: str, exec_data, memory_data) -> dict[str, A
     details = {
         "dynamic_status": exec_data.dynamic.status,
         "analysis_brief": exec_data.knowledge.analysis_brief.model_dump(mode="json"),
+        "compiled_knowledge": exec_data.knowledge.compiled.model_dump(mode="json"),
         "runtime_metadata": exec_data.dynamic.runtime_metadata,
         "trace_refs": exec_data.dynamic.trace_refs,
         "artifacts": exec_data.dynamic.artifacts,

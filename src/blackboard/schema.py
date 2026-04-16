@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from src.common.contracts import ExecutionIntent, ExecutionRecord, TaskEnvelope
 from src.common.control_plane import parser_reports_from_documents
 from src.common.utils import get_utc_now
+from src.kag.compiler.types import CompiledKnowledgeState
 from src.skillnet.skill_schema import SkillReplayCase
 
 
@@ -135,6 +136,9 @@ class KnowledgeSnapshotMetadataState(StrictStateModel):
     dropped_candidate_count: int = 0
     analysis_mode: str = ""
     evidence_strategy: str = ""
+    preferred_date_terms: list[str] = Field(default_factory=list)
+    temporal_constraints: list[str] = Field(default_factory=list)
+    dynamic_research: dict[str, Any] = Field(default_factory=dict)
 
 
 class DynamicTraceEventState(StrictStateModel):
@@ -411,6 +415,7 @@ class NodeOutputPatchState(StrictStateModel):
     refined_context: str = ""
     raw_retrieved_candidates: list[dict[str, Any]] = Field(default_factory=list)
     knowledge_snapshot: KnowledgeSnapshotState | None = None
+    analysis_brief: AnalysisBriefState | None = None
     analysis_plan: str = ""
     generated_code: str = ""
     input_mounts: list[InputMountState] = Field(default_factory=list)
@@ -427,6 +432,10 @@ class NodeOutputPatchState(StrictStateModel):
     dynamic_trace: list[DynamicTraceEventState] = Field(default_factory=list)
     dynamic_trace_refs: list[str] = Field(default_factory=list)
     dynamic_artifacts: list[str] = Field(default_factory=list)
+    dynamic_research_findings: list[str] = Field(default_factory=list)
+    dynamic_evidence_refs: list[str] = Field(default_factory=list)
+    dynamic_open_questions: list[str] = Field(default_factory=list)
+    dynamic_suggested_static_actions: list[str] = Field(default_factory=list)
     recommended_static_skill: dict[str, Any] | None = None
     final_response: dict[str, Any] = Field(default_factory=dict)
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
@@ -442,6 +451,8 @@ class NodeOutputPatchState(StrictStateModel):
             object.__setattr__(
                 self, "knowledge_snapshot", KnowledgeSnapshotState.model_validate(self.knowledge_snapshot)
             )
+        if self.analysis_brief is not None and not isinstance(self.analysis_brief, AnalysisBriefState):
+            object.__setattr__(self, "analysis_brief", AnalysisBriefState.model_validate(self.analysis_brief))
         if self.execution_record is not None and not isinstance(self.execution_record, ExecutionRecord):
             object.__setattr__(self, "execution_record", ExecutionRecord.model_validate(self.execution_record))
         if not isinstance(self.audit_result, AuditResultState):
@@ -525,10 +536,12 @@ class RetrievalPlan(BaseModel):
     )
     routing_strategy: str = Field(default="hybrid", description="路由策略: rule / llm / hybrid")
     enable_rerank: bool = Field(default=True, description="是否启用交叉重排")
-    top_k: int = Field(default=15, description="最终保留的文档片段数")
+    top_k: int = Field(default=15, ge=1, le=50, description="最终保留的文档片段数")
     budget_tokens: int = Field(default=4000, description="上下文预算上限")
     max_latency_ms: int = Field(default=800, description="最大允许延迟(超时降级用)")
     cost_budget: float = Field(default=0.01, description="单次检索LLM成本预算($)")
+    preferred_date_terms: list[str] = Field(default_factory=list, description="编译态偏好的日期列名")
+    temporal_constraints: list[str] = Field(default_factory=list, description="编译态时间约束摘要")
 
 
 class ExecutionControlState(StrictStateModel):
@@ -594,6 +607,7 @@ class ExecutionKnowledgeState(StrictStateModel):
     business_context: BusinessContextState = Field(default_factory=BusinessContextState)
     knowledge_snapshot: KnowledgeSnapshotState = Field(default_factory=KnowledgeSnapshotState)
     analysis_brief: AnalysisBriefState = Field(default_factory=AnalysisBriefState)
+    compiled: CompiledKnowledgeState = Field(default_factory=CompiledKnowledgeState)
 
     @model_validator(mode="after")
     def _coerce_typed_payloads(self) -> "ExecutionKnowledgeState":
@@ -605,6 +619,8 @@ class ExecutionKnowledgeState(StrictStateModel):
             )
         if not isinstance(self.analysis_brief, AnalysisBriefState):
             object.__setattr__(self, "analysis_brief", AnalysisBriefState.model_validate(self.analysis_brief))
+        if not isinstance(self.compiled, CompiledKnowledgeState):
+            object.__setattr__(self, "compiled", CompiledKnowledgeState.model_validate(self.compiled))
         return self
 
 
@@ -637,6 +653,10 @@ class ExecutionDynamicState(StrictStateModel):
     trace: list[DynamicTraceEventState] = Field(default_factory=list)
     trace_refs: list[str] = Field(default_factory=list)
     artifacts: list[str] = Field(default_factory=list)
+    research_findings: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    suggested_static_actions: list[str] = Field(default_factory=list)
     recommended_static_skill: dict[str, Any] | None = None
 
     @model_validator(mode="after")

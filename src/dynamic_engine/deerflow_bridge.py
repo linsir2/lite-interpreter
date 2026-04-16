@@ -47,6 +47,10 @@ class DeerflowTaskResult:
     summary: str
     trace_refs: list[str] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
+    research_findings: list[str] = field(default_factory=list)
+    evidence_refs: list[str] = field(default_factory=list)
+    open_questions: list[str] = field(default_factory=list)
+    suggested_static_actions: list[str] = field(default_factory=list)
     recommended_skill: dict[str, Any] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
@@ -67,6 +71,10 @@ class DeerflowTaskResult:
             ],
             "dynamic_trace_refs": list(self.trace_refs),
             "dynamic_artifacts": list(self.artifacts),
+            "dynamic_research_findings": list(self.research_findings),
+            "dynamic_evidence_refs": list(self.evidence_refs),
+            "dynamic_open_questions": list(self.open_questions),
+            "dynamic_suggested_static_actions": list(self.suggested_static_actions),
             "recommended_static_skill": dict(self.recommended_skill),
         }
 
@@ -264,6 +272,10 @@ class DeerflowBridge:
             summary="Dynamic swarm request prepared; install/configure DeerFlow before live execution.",
             trace_refs=[trace_id],
             artifacts=[],
+            research_findings=[],
+            evidence_refs=[],
+            open_questions=["DeerFlow runtime not available yet"],
+            suggested_static_actions=["在静态链中说明当前仅完成动态研究准备，尚未执行真实外部检索"],
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": metadata.get("confidence", "pending"),
@@ -274,6 +286,15 @@ class DeerflowBridge:
                 "effective_runtime_mode": "preview",
             },
         )
+
+    @staticmethod
+    def _copy_research_payload(result: DeerflowTaskResult) -> dict[str, Any]:
+        return {
+            "research_findings": list(result.research_findings),
+            "evidence_refs": list(result.evidence_refs),
+            "open_questions": list(result.open_questions),
+            "suggested_static_actions": list(result.suggested_static_actions),
+        }
 
     def _run_via_embedded(
         self,
@@ -325,6 +346,10 @@ class DeerflowBridge:
             summary=summary,
             trace_refs=[f"deerflow:{thread_id}"],
             artifacts=artifacts,
+            research_findings=[summary] if summary else [],
+            evidence_refs=[f"deerflow:{thread_id}", *artifacts],
+            open_questions=[],
+            suggested_static_actions=["将动态研究结论转为静态分析计划并生成可审计代码"],
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": "medium",
@@ -388,6 +413,10 @@ class DeerflowBridge:
             summary=summary,
             trace_refs=[f"deerflow-sidecar:{request.task_id}"],
             artifacts=artifacts,
+            research_findings=[summary] if summary else [],
+            evidence_refs=[f"deerflow-sidecar:{request.task_id}", *artifacts],
+            open_questions=[],
+            suggested_static_actions=["将动态研究结论转为静态分析计划并生成可审计代码"],
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": "medium",
@@ -421,6 +450,7 @@ class DeerflowBridge:
                     summary=f"Failed to reach DeerFlow sidecar `{self.runtime_config.sidecar_url}`: {exc}",
                     trace_refs=preview.trace_refs,
                     artifacts=preview.artifacts,
+                    **self._copy_research_payload(preview),
                     recommended_skill=preview.recommended_skill,
                     trace=preview.trace,
                     runtime_metadata={
@@ -449,6 +479,7 @@ class DeerflowBridge:
                     summary=result.summary,
                     trace_refs=result.trace_refs,
                     artifacts=result.artifacts,
+                    **self._copy_research_payload(result),
                     recommended_skill=result.recommended_skill,
                     trace=result.trace,
                     runtime_metadata={
@@ -470,6 +501,7 @@ class DeerflowBridge:
                 ),
                 trace_refs=preview.trace_refs,
                 artifacts=preview.artifacts,
+                **self._copy_research_payload(preview),
                 recommended_skill=preview.recommended_skill,
                 trace=preview.trace,
                 runtime_metadata={

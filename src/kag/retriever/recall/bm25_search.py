@@ -6,7 +6,7 @@ from typing import Any
 
 from src.storage.repository.knowledge_repo import KnowledgeRepo
 
-from .filters import extract_query_terms, normalize_filters
+from .filters import exact_match_filters, extract_query_terms, normalize_filters, temporal_query_terms
 
 DEFAULT_WORKSPACE = "default_ws"
 
@@ -18,12 +18,13 @@ def recall(
     workspace_id: str = DEFAULT_WORKSPACE,
     top_k: int = 20,
 ) -> list[dict[str, object]]:
-    terms = extract_query_terms(query)
+    normalized_filters = normalize_filters(filters or {})
+    terms = extract_query_terms(query, temporal_query_terms(normalized_filters))
     results = KnowledgeRepo.search_text_chunks(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         query_terms=terms,
-        filters=normalize_filters(filters or {}),
+        filters=exact_match_filters(normalized_filters),
         limit=top_k,
     )
     for item in results:

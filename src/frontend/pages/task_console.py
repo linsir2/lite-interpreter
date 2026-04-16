@@ -130,6 +130,7 @@ def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]
         or task_result.get("knowledge_snapshot")
         or {}
     )
+    compiled_knowledge = dict((final_response.get("details") or {}).get("compiled_knowledge") or {})
     return {
         "findings": list(final_response.get("key_findings") or []),
         "outputs": list(final_response.get("outputs") or []),
@@ -143,6 +144,7 @@ def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]
         "filter_checks": list((final_response.get("details") or {}).get("filter_checks") or []),
         "analysis_brief": [analysis_brief] if analysis_brief else [],
         "knowledge_snapshot": [knowledge_snapshot] if knowledge_snapshot else [],
+        "compiled_knowledge": [compiled_knowledge] if compiled_knowledge else [],
         "historical_skill_matches": list(
             skills.get("historical_matches") or task_result.get("historical_skill_matches") or []
         ),
@@ -381,6 +383,40 @@ def render_task_console() -> None:
                         st.caption(str(metadata))
                 else:
                     st.caption("No knowledge snapshot recorded.")
+
+                st.markdown("#### Compiled Knowledge")
+                compiled_knowledge = sections["compiled_knowledge"][0] if sections["compiled_knowledge"] else {}
+                if compiled_knowledge:
+                    rule_specs = compiled_knowledge.get("rule_specs", []) or []
+                    metric_specs = compiled_knowledge.get("metric_specs", []) or []
+                    filter_specs = compiled_knowledge.get("filter_specs", []) or []
+                    parse_errors = compiled_knowledge.get("spec_parse_errors", []) or []
+                    graph_summary = compiled_knowledge.get("graph_compilation_summary", {}) or {}
+                    st.caption(
+                        "rules="
+                        f"{len(rule_specs)} metrics={len(metric_specs)} filters={len(filter_specs)} "
+                        f"parse_errors={len(parse_errors)}"
+                    )
+                    if graph_summary:
+                        st.caption(
+                            "graph "
+                            f"candidates={graph_summary.get('candidate_count', 0)} "
+                            f"accepted={graph_summary.get('accepted_count', 0)} "
+                            f"rejected={graph_summary.get('rejected_count', 0)}"
+                        )
+                        reject_reasons = graph_summary.get("reject_reasons", {}) or {}
+                        if reject_reasons:
+                            st.caption(f"reject_reasons={reject_reasons}")
+                    for item in rule_specs[:3]:
+                        st.caption(f"rule_spec: {item.get('source_text') or item.get('normalized_text')}")
+                    for item in metric_specs[:3]:
+                        st.caption(f"metric_spec: {item.get('metric_name') or item.get('source_text')}")
+                    for item in filter_specs[:3]:
+                        st.caption(f"filter_spec: {item.get('field')} {item.get('operator')} {item.get('value')}")
+                    for item in parse_errors[:3]:
+                        st.caption(f"parse_error: {item.get('spec_kind')}::{item.get('error_code')}")
+                else:
+                    st.caption("No compiled knowledge recorded.")
 
                 st.markdown("#### Historical Skill Matches")
                 if sections["historical_skill_matches"]:

@@ -115,6 +115,10 @@ def _build_dynamic_patch(result_patch: dict[str, Any]) -> dict[str, Any]:
         "trace": result_patch.get("dynamic_trace") or [],
         "trace_refs": result_patch.get("dynamic_trace_refs") or [],
         "artifacts": result_patch.get("dynamic_artifacts") or [],
+        "research_findings": result_patch.get("dynamic_research_findings") or [],
+        "evidence_refs": result_patch.get("dynamic_evidence_refs") or [],
+        "open_questions": result_patch.get("dynamic_open_questions") or [],
+        "suggested_static_actions": result_patch.get("dynamic_suggested_static_actions") or [],
         "recommended_static_skill": result_patch.get("recommended_static_skill"),
     }
 

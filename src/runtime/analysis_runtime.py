@@ -8,6 +8,7 @@ This module intentionally stays narrow:
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -18,25 +19,61 @@ from typing import Any
 import yaml
 from config.settings import ANALYSIS_RUNTIME_POLICY_PATH
 
+from src.common.llm_client import LiteLLMClient
+from src.kag.compiler.lexicon import LexiconMatcher
+from src.runtime.guidance_runner import run_route_selection
+
 
 @dataclass(frozen=True)
 class AnalysisTaskProfile:
     """Normalized classification of one analysis task."""
 
     analysis_mode: str
+    coarse_mode: str
+    final_mode: str
     evidence_strategy: str
     routing_mode: str
+    destinations: tuple[str, ...]
+    route_candidates: tuple[str, ...]
+    routing_stage: str
+    routing_confidence: float
+    routing_degraded: bool
+    degrade_reason: str
+    requires_static_execution: bool
+    requires_external_research: bool
+    fine_routing_invoked: bool
+    fallback_mode: str
+    fallback_destinations: tuple[str, ...]
+    fallback_reason: str
     effective_tools: tuple[str, ...]
     known_gaps: tuple[str, ...]
+    routing_reasons: tuple[str, ...]
+    complexity_score: float
     decision_reason: str
 
     def to_metadata(self) -> dict[str, Any]:
         return {
             "analysis_mode": self.analysis_mode,
+            "coarse_mode": self.coarse_mode,
+            "final_mode": self.final_mode,
             "evidence_strategy": self.evidence_strategy,
             "routing_mode": self.routing_mode,
+            "destinations": list(self.destinations),
+            "route_candidates": list(self.route_candidates),
+            "routing_stage": self.routing_stage,
+            "routing_confidence": self.routing_confidence,
+            "routing_degraded": self.routing_degraded,
+            "degrade_reason": self.degrade_reason,
+            "requires_static_execution": self.requires_static_execution,
+            "requires_external_research": self.requires_external_research,
+            "fine_routing_invoked": self.fine_routing_invoked,
+            "fallback_mode": self.fallback_mode,
+            "fallback_destinations": list(self.fallback_destinations),
+            "fallback_reason": self.fallback_reason,
             "effective_tools": list(self.effective_tools),
             "known_gaps": list(self.known_gaps),
+            "routing_reasons": list(self.routing_reasons),
+            "complexity_score": self.complexity_score,
             "decision_reason": self.decision_reason,
         }
 
@@ -48,10 +85,26 @@ class AnalysisRuntimeDecision:
     call_purpose: str
     model_alias: str
     analysis_mode: str
+    coarse_mode: str
+    final_mode: str
     evidence_strategy: str
     routing_mode: str
+    destinations: tuple[str, ...]
+    route_candidates: tuple[str, ...]
+    routing_stage: str
+    routing_confidence: float
+    routing_degraded: bool
+    degrade_reason: str
+    requires_static_execution: bool
+    requires_external_research: bool
+    fine_routing_invoked: bool
+    fallback_mode: str
+    fallback_destinations: tuple[str, ...]
+    fallback_reason: str
     effective_tools: tuple[str, ...]
     known_gaps: tuple[str, ...]
+    routing_reasons: tuple[str, ...]
+    complexity_score: float
     decision_reason: str
 
     def to_metadata(self) -> dict[str, Any]:
@@ -59,10 +112,26 @@ class AnalysisRuntimeDecision:
             "call_purpose": self.call_purpose,
             "effective_model_alias": self.model_alias,
             "analysis_mode": self.analysis_mode,
+            "coarse_mode": self.coarse_mode,
+            "final_mode": self.final_mode,
             "evidence_strategy": self.evidence_strategy,
             "routing_mode": self.routing_mode,
+            "destinations": list(self.destinations),
+            "route_candidates": list(self.route_candidates),
+            "routing_stage": self.routing_stage,
+            "routing_confidence": self.routing_confidence,
+            "routing_degraded": self.routing_degraded,
+            "degrade_reason": self.degrade_reason,
+            "requires_static_execution": self.requires_static_execution,
+            "requires_external_research": self.requires_external_research,
+            "fine_routing_invoked": self.fine_routing_invoked,
+            "fallback_mode": self.fallback_mode,
+            "fallback_destinations": list(self.fallback_destinations),
+            "fallback_reason": self.fallback_reason,
             "effective_tools": list(self.effective_tools),
             "known_gaps": list(self.known_gaps),
+            "routing_reasons": list(self.routing_reasons),
+            "complexity_score": self.complexity_score,
             "decision_reason": self.decision_reason,
         }
 
@@ -147,6 +216,15 @@ def _normalize_strings(values: Sequence[Any] | None) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def _unique_strings(values: Sequence[str]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in ordered:
+            ordered.append(text)
+    return tuple(ordered)
+
+
 def _safe_len(value: Any) -> int:
     try:
         return len(value or [])
@@ -170,6 +248,227 @@ def _business_context(exec_data: Any) -> tuple[list[str], list[str], list[str]]:
     return rules, metrics, filters
 
 
+def _has_business_context(exec_data: Any) -> bool:
+    rules, metrics, filters = _business_context(exec_data)
+    return bool(rules or metrics or filters)
+
+
+def _resolve_static_destinations(
+    *,
+    query: str,
+    exec_data: Any | None,
+    document_keywords: Sequence[str],
+    structured_count: int,
+    document_signal: bool,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    lowered_query = str(query or "").lower()
+    inputs = getattr(exec_data, "inputs", None)
+    structured_datasets = list(getattr(inputs, "structured_datasets", None) or [])
+    business_documents = list(getattr(inputs, "business_documents", None) or [])
+    destinations: list[str] = []
+    reasons: list[str] = []
+
+    if structured_datasets:
+        has_uninspected_data = any(not str(getattr(dataset, "dataset_schema", "") or "").strip() for dataset in structured_datasets)
+        if has_uninspected_data:
+            destinations.append("data_inspector")
+            reasons.append("发现新增的或尚未探查的结构化文件")
+
+    if business_documents:
+        has_unparsed_docs = any(str(getattr(document, "status", "") or "").strip() != "parsed" for document in business_documents)
+        if has_unparsed_docs:
+            destinations.append("kag_retriever")
+            reasons.append("发现新增的业务文档，需追加提取业务规则")
+        elif not _has_business_context(exec_data):
+            destinations.append("kag_retriever")
+            reasons.append("业务文档已存在但尚未形成业务上下文，需补齐规则准备")
+
+    if structured_count > 0 and document_signal and not _has_business_context(exec_data):
+        if "kag_retriever" not in destinations:
+            destinations.append("kag_retriever")
+        reasons.append("混合分析缺少已抽取的业务上下文，需补齐规则准备")
+
+    if not business_documents:
+        needs_business_context = any(keyword.lower() in lowered_query for keyword in document_keywords)
+        if needs_business_context and not _has_business_context(exec_data):
+            destinations.append("kag_retriever")
+            reasons.append("缺少业务上下文，需先检索规则/文档知识")
+
+    if not destinations:
+        destinations.append("analyst")
+        reasons.append("信息已齐备或无需前置检索，直通 Analyst")
+
+    return _unique_strings(destinations), tuple(reasons)
+
+
+def _score_routing_complexity(
+    *,
+    query: str,
+    dynamic_hits: Sequence[str],
+    structured_count: int,
+    document_signal: bool,
+    requires_static_execution: bool,
+) -> float:
+    lowered_query = str(query or "").lower()
+    score = 0.0
+    if len(query) >= 40:
+        score += 0.15
+    if dynamic_hits:
+        score += min(0.45, 0.16 * len(dynamic_hits))
+    coordination_hints = ("结合", "并", "同时", "然后", "再", "并且")
+    if sum(1 for hint in coordination_hints if hint in query) >= 2:
+        score += 0.15
+    if structured_count > 0 and document_signal:
+        score += 0.15
+    if requires_static_execution and ("找数据" in query or "research" in lowered_query or "benchmark" in lowered_query):
+        score += 0.15
+    if ("预测" in query or "走势" in query or "宏观" in query) and ("财报" in query or "数据" in query):
+        score += 0.1
+    return min(score, 1.0)
+
+
+def _coarse_confidence(
+    *,
+    coarse_mode: str,
+    route_candidates: Sequence[str],
+    structured_count: int,
+    document_signal: bool,
+    dynamic_hits: Sequence[str],
+) -> float:
+    confidence = 0.62
+    if coarse_mode == "dynamic":
+        confidence += 0.15 + min(0.12, 0.04 * len(dynamic_hits))
+    elif coarse_mode == "hybrid":
+        confidence += 0.2 if structured_count > 0 and document_signal else 0.12
+    else:
+        confidence += 0.18 if structured_count > 0 or document_signal else 0.08
+    if len(route_candidates) == 1:
+        confidence += 0.1
+    else:
+        confidence -= 0.05
+    return max(0.05, min(confidence, 0.97))
+
+
+def _extract_json_object(content: str) -> dict[str, Any]:
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("fine routing response must be a JSON object")
+    return payload
+
+
+def _maybe_refine_route_with_llm(
+    *,
+    query: str,
+    route_candidates: Sequence[str],
+    coarse_mode: str,
+    coarse_confidence: float,
+    complexity_score: float,
+    policy: Mapping[str, Any],
+    model_alias: str,
+) -> tuple[str, str, bool, bool, str, float, str | None]:
+    fine_policy = policy.get("fine_routing", {})
+    enabled = bool(fine_policy.get("enabled", False)) and _fine_routing_runtime_enabled(model_alias)
+    min_candidate_count = int(fine_policy.get("min_candidate_count", 2) or 2)
+    ambiguity_threshold = float(fine_policy.get("ambiguity_threshold", 0.45) or 0.45)
+    if not enabled or len(route_candidates) < min_candidate_count or complexity_score < ambiguity_threshold:
+        return coarse_mode, "coarse", False, False, "", coarse_confidence, None
+
+    try:
+        result = run_route_selection(query=query, route_candidates=list(route_candidates), model_alias=model_alias)
+        payload = dict(result.payload)
+        final_mode = str(payload.get("final_mode") or coarse_mode).strip()
+        confidence = float(payload.get("confidence") or coarse_confidence)
+        rationale = str(payload.get("rationale") or "").strip()
+        return (
+            final_mode,
+            "fine",
+            True,
+            bool(result.degraded),
+            str(result.degrade_reason or ""),
+            max(coarse_confidence, min(confidence, 0.99)),
+            rationale or None,
+        )
+    except Exception as exc:
+        return coarse_mode, "fallback", True, True, f"fine routing unavailable: {exc}", coarse_confidence, None
+
+
+def _fine_routing_runtime_enabled(model_alias: str) -> bool:
+    try:
+        config = LiteLLMClient.get_model_config(model_alias)
+    except Exception:
+        return False
+    api_key = str(config.params.get("api_key") or "").strip()
+    return bool(api_key)
+
+
+def _analysis_mode_for_static_branch(
+    *,
+    structured_count: int,
+    document_signal: bool,
+    static_mode: str,
+) -> str:
+    if static_mode == "hybrid":
+        return "hybrid_analysis"
+    if structured_count > 0:
+        return "dataset_analysis"
+    if document_signal:
+        return "document_rule_analysis"
+    return "need_more_inputs"
+
+
+def _build_non_dynamic_profile(
+    *,
+    policy: Mapping[str, Any],
+    analysis_mode: str,
+    final_mode: str,
+    destinations: tuple[str, ...],
+    route_candidates: tuple[str, ...],
+    structured_count: int,
+    document_signal: bool,
+    allowed: tuple[str, ...],
+    known_gaps: list[str],
+    decision_reason: str,
+    routing_reasons: tuple[str, ...],
+    complexity_score: float,
+    requires_static_execution: bool,
+) -> AnalysisTaskProfile:
+    profile_payload = policy["profiles"][analysis_mode]
+    return AnalysisTaskProfile(
+        analysis_mode=analysis_mode,
+        coarse_mode=final_mode,
+        final_mode=final_mode,
+        evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
+        routing_mode=str(profile_payload.get("routing_mode") or "static"),
+        destinations=destinations,
+        route_candidates=route_candidates,
+        routing_stage="coarse",
+        routing_confidence=_coarse_confidence(
+            coarse_mode=final_mode,
+            route_candidates=route_candidates,
+            structured_count=structured_count,
+            document_signal=document_signal,
+            dynamic_hits=(),
+        ),
+        routing_degraded=False,
+        degrade_reason="",
+        requires_static_execution=requires_static_execution,
+        requires_external_research=False,
+        fine_routing_invoked=False,
+        fallback_mode=final_mode,
+        fallback_destinations=destinations,
+        fallback_reason="",
+        effective_tools=allowed,
+        known_gaps=tuple(dict.fromkeys(known_gaps)),
+        routing_reasons=routing_reasons,
+        complexity_score=complexity_score,
+        decision_reason=decision_reason,
+    )
+
+
 def _keywords_for(policy: Mapping[str, Any], key: str) -> tuple[str, ...]:
     return _normalize_strings(policy.get(key))
 
@@ -179,6 +478,7 @@ def classify_analysis_task(
     query: str,
     exec_data: Any | None = None,
     allowed_tools: Sequence[str] | None = None,
+    fine_model_alias: str | None = None,
 ) -> AnalysisTaskProfile:
     """Classify the task while keeping the project focused on data analysis."""
 
@@ -191,75 +491,174 @@ def classify_analysis_task(
     rules, metrics, filters = _business_context(exec_data)
     known_gaps: list[str] = []
     allowed = _normalize_strings(allowed_tools)
+    lexical_signals = LexiconMatcher().classify_query(query)
 
-    dynamic_hits = [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query]
-    dataset_signal = structured_count > 0 or any(token.lower() in lowered_query for token in dataset_keywords)
+    dynamic_hits = list(
+        dict.fromkeys([match.canonical for match in lexical_signals.dynamic_hits] or [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query])
+    )
+    dataset_signal = structured_count > 0 or bool(lexical_signals.dataset_hits) or any(
+        token.lower() in lowered_query for token in dataset_keywords
+    )
     document_signal = (
         document_count > 0
+        or bool(lexical_signals.document_hits)
         or any(token.lower() in lowered_query for token in document_keywords)
         or bool(rules or metrics or filters)
+    )
+    static_destinations, static_reasons = _resolve_static_destinations(
+        query=query,
+        exec_data=exec_data,
+        document_keywords=document_keywords,
+        structured_count=structured_count,
+        document_signal=document_signal,
+    )
+    static_mode = "hybrid" if structured_count > 0 and document_signal else "static"
+    static_analysis_mode = _analysis_mode_for_static_branch(
+        structured_count=structured_count,
+        document_signal=document_signal,
+        static_mode=static_mode,
+    )
+    requires_static_execution = bool(structured_count > 0 or "写代码" in query or "验证" in query or static_mode == "hybrid")
+    complexity_score = _score_routing_complexity(
+        query=query,
+        dynamic_hits=dynamic_hits,
+        structured_count=structured_count,
+        document_signal=document_signal,
+        requires_static_execution=requires_static_execution,
     )
 
     if dynamic_hits:
         known_gaps.extend(gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps)
-        profile_payload = policy["profiles"]["dynamic_research_analysis"]
-        return AnalysisTaskProfile(
-            analysis_mode="dynamic_research_analysis",
-            evidence_strategy=str(profile_payload.get("evidence_strategy") or "external_research"),
-            routing_mode=str(profile_payload.get("routing_mode") or "dynamic"),
-            effective_tools=allowed,
-            known_gaps=tuple(known_gaps),
-            decision_reason=f"命中动态研究信号: {', '.join(dynamic_hits[:3])}",
+        coarse_mode = "dynamic"
+        coarse_analysis_mode = "dynamic_research_analysis"
+        route_candidates = _unique_strings(("dynamic", static_mode))
+        coarse_reasons = [f"命中动态研究信号: {', '.join(dynamic_hits[:3])}"]
+        coarse_confidence = _coarse_confidence(
+            coarse_mode=coarse_mode,
+            route_candidates=route_candidates,
+            structured_count=structured_count,
+            document_signal=document_signal,
+            dynamic_hits=dynamic_hits,
         )
-
-    if structured_count > 0 and document_signal:
-        profile_payload = policy["profiles"]["hybrid_analysis"]
+        final_mode, routing_stage, fine_routing_invoked, routing_degraded, degrade_reason, routing_confidence, fine_rationale = _maybe_refine_route_with_llm(
+            query=query,
+            route_candidates=route_candidates,
+            coarse_mode=coarse_mode,
+            coarse_confidence=coarse_confidence,
+            complexity_score=complexity_score,
+            policy=policy,
+            model_alias=str(fine_model_alias or policy.get("fine_routing", {}).get("model_alias") or "reasoning_model"),
+        )
+        if fine_rationale:
+            coarse_reasons.append(f"精筛理由: {fine_rationale}")
+        analysis_mode = coarse_analysis_mode if final_mode == "dynamic" else static_analysis_mode
+        profile_key = analysis_mode
+        destinations = ("dynamic_swarm",) if final_mode == "dynamic" else static_destinations
+        fallback_mode = static_mode
+        fallback_destinations = static_destinations
+        fallback_reason = (
+            "dynamic unavailable or denied -> degrade to precomputed static path" if final_mode != "dynamic" else ""
+        )
+        decision_reason = coarse_reasons[0]
+        supporting_reasons: list[str] = list(coarse_reasons[1:])
+        if final_mode != "dynamic":
+            supporting_reasons.extend(static_reasons)
+    elif structured_count > 0 and document_signal:
         if not rules and not metrics and not filters:
             known_gaps.append("业务规则尚未抽取完成")
-        return AnalysisTaskProfile(
+        return _build_non_dynamic_profile(
+            policy=policy,
             analysis_mode="hybrid_analysis",
-            evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_and_rules"),
-            routing_mode=str(profile_payload.get("routing_mode") or "static"),
-            effective_tools=allowed,
-            known_gaps=tuple(known_gaps),
+            final_mode="hybrid",
+            destinations=static_destinations,
+            route_candidates=("hybrid", "static"),
+            structured_count=structured_count,
+            document_signal=document_signal,
+            allowed=allowed,
+            known_gaps=known_gaps,
             decision_reason="任务同时涉及结构化数据与业务规则/文档",
+            routing_reasons=static_reasons,
+            complexity_score=complexity_score,
+            requires_static_execution=requires_static_execution,
         )
-
-    if structured_count > 0 or dataset_signal:
-        profile_payload = policy["profiles"]["dataset_analysis"]
+    elif structured_count > 0 or dataset_signal:
         if structured_count == 0:
             known_gaps.append("尚未上传结构化数据")
-        return AnalysisTaskProfile(
+        return _build_non_dynamic_profile(
+            policy=policy,
             analysis_mode="dataset_analysis",
-            evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
-            routing_mode=str(profile_payload.get("routing_mode") or "static"),
-            effective_tools=allowed,
-            known_gaps=tuple(known_gaps),
+            final_mode="static",
+            destinations=static_destinations,
+            route_candidates=("static",),
+            structured_count=structured_count,
+            document_signal=document_signal,
+            allowed=allowed,
+            known_gaps=known_gaps,
             decision_reason="任务以结构化数据分析为主",
+            routing_reasons=static_reasons,
+            complexity_score=complexity_score,
+            requires_static_execution=requires_static_execution,
         )
-
-    if document_signal:
-        profile_payload = policy["profiles"]["document_rule_analysis"]
+    elif document_signal:
         if document_count == 0 and not (rules or metrics or filters):
             known_gaps.append("缺少业务文档输入")
-        return AnalysisTaskProfile(
+        return _build_non_dynamic_profile(
+            policy=policy,
             analysis_mode="document_rule_analysis",
-            evidence_strategy=str(profile_payload.get("evidence_strategy") or "rules_first"),
-            routing_mode=str(profile_payload.get("routing_mode") or "static"),
-            effective_tools=allowed,
-            known_gaps=tuple(known_gaps),
+            final_mode="static",
+            destinations=static_destinations,
+            route_candidates=("static",),
+            structured_count=structured_count,
+            document_signal=document_signal,
+            allowed=allowed,
+            known_gaps=known_gaps,
             decision_reason="任务以业务规则/口径解释为主",
+            routing_reasons=static_reasons,
+            complexity_score=complexity_score,
+            requires_static_execution=requires_static_execution,
+        )
+    else:
+        known_gaps.extend(["缺少结构化数据", "缺少业务规则文档"])
+        return _build_non_dynamic_profile(
+            policy=policy,
+            analysis_mode="need_more_inputs",
+            final_mode="static",
+            destinations=static_destinations,
+            route_candidates=("static",),
+            structured_count=structured_count,
+            document_signal=document_signal,
+            allowed=allowed,
+            known_gaps=known_gaps,
+            decision_reason="当前输入不足以支撑可靠的数据分析结论",
+            routing_reasons=static_reasons,
+            complexity_score=complexity_score,
+            requires_static_execution=requires_static_execution,
         )
 
-    profile_payload = policy["profiles"]["need_more_inputs"]
-    known_gaps.extend(["缺少结构化数据", "缺少业务规则文档"])
+    profile_payload = policy["profiles"][profile_key]
     return AnalysisTaskProfile(
-        analysis_mode="need_more_inputs",
-        evidence_strategy=str(profile_payload.get("evidence_strategy") or "input_gap"),
-        routing_mode=str(profile_payload.get("routing_mode") or "static"),
+        analysis_mode=analysis_mode,
+        coarse_mode=coarse_mode,
+        final_mode=final_mode,
+        evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
+        routing_mode="dynamic" if final_mode == "dynamic" else str(profile_payload.get("routing_mode") or "static"),
+        destinations=tuple(destinations),
+        route_candidates=tuple(route_candidates),
+        routing_stage=routing_stage,
+        routing_confidence=routing_confidence,
+        routing_degraded=routing_degraded,
+        degrade_reason=degrade_reason,
+        requires_static_execution=requires_static_execution,
+        requires_external_research=bool(dynamic_hits),
+        fine_routing_invoked=fine_routing_invoked,
+        fallback_mode=fallback_mode,
+        fallback_destinations=tuple(fallback_destinations),
+        fallback_reason=fallback_reason,
         effective_tools=allowed,
-        known_gaps=tuple(known_gaps),
-        decision_reason="当前输入不足以支撑可靠的数据分析结论",
+        known_gaps=tuple(dict.fromkeys(known_gaps)),
+        routing_reasons=tuple(supporting_reasons),
+        complexity_score=complexity_score,
+        decision_reason=decision_reason,
     )
 
 
@@ -290,19 +689,38 @@ def resolve_runtime_decision(
     exec_data: Any | None = None,
     allowed_tools: Sequence[str] | None = None,
 ) -> AnalysisRuntimeDecision:
+    assess_model_alias = _resolve_model_alias(call_purpose, state or {})
+    fine_model_alias = _resolve_model_alias("routing_refine", state or {})
     profile = classify_analysis_task(
         query=query,
         exec_data=exec_data,
         allowed_tools=allowed_tools or (state.get("allowed_tools") if isinstance(state, Mapping) else []) or [],
+        fine_model_alias=fine_model_alias,
     )
     return AnalysisRuntimeDecision(
         call_purpose=call_purpose,
-        model_alias=_resolve_model_alias(call_purpose, state or {}),
+        model_alias=fine_model_alias if profile.routing_stage in {"fine", "fallback"} else assess_model_alias,
         analysis_mode=profile.analysis_mode,
+        coarse_mode=profile.coarse_mode,
+        final_mode=profile.final_mode,
         evidence_strategy=profile.evidence_strategy,
         routing_mode=profile.routing_mode,
+        destinations=profile.destinations,
+        route_candidates=profile.route_candidates,
+        routing_stage=profile.routing_stage,
+        routing_confidence=profile.routing_confidence,
+        routing_degraded=profile.routing_degraded,
+        degrade_reason=profile.degrade_reason,
+        requires_static_execution=profile.requires_static_execution,
+        requires_external_research=profile.requires_external_research,
+        fine_routing_invoked=profile.fine_routing_invoked,
+        fallback_mode=profile.fallback_mode,
+        fallback_destinations=profile.fallback_destinations,
+        fallback_reason=profile.fallback_reason,
         effective_tools=profile.effective_tools,
         known_gaps=profile.known_gaps,
+        routing_reasons=profile.routing_reasons,
+        complexity_score=profile.complexity_score,
         decision_reason=profile.decision_reason,
     )
 

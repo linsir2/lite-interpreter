@@ -9,11 +9,20 @@ from starlette.responses import JSONResponse
 from src.api.auth import (
     authenticate_user_credentials,
     request_auth_context,
+    session_auth_enabled,
 )
 from src.api.schemas import SessionLoginRequest, validation_error_payload
 
 
 async def login_session(request: Request) -> JSONResponse:
+    if not session_auth_enabled():
+        return JSONResponse(
+            {
+                "error": "session login not configured",
+                "hint": "configure API_AUTH_USERS_JSON or skip session login when API auth is disabled",
+            },
+            status_code=503,
+        )
     try:
         body = await request.json()
     except ValueError:

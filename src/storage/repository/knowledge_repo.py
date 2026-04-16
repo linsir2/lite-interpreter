@@ -62,6 +62,11 @@ class KnowledgeRepo:
     def save_graph_triples(cls, tenant_id: str, workspace_id: str, triples: list[KnowledgeTriple]) -> bool:
         if not triples:
             return True
+        for triple in triples:
+            provenance = dict(triple.properties.get("provenance") or {})
+            if not provenance or not provenance.get("template_id") or not provenance.get("source_chunk_id"):
+                logger.error("[KnowledgeRepo] 图谱三元组缺少强约束 provenance，拒绝写入。")
+                return False
         try:
             neo4j_client.merge_triples(tenant_id, workspace_id, triples)
             return True
@@ -158,9 +163,18 @@ class KnowledgeRepo:
         tenant_id: str,
         workspace_id: str,
         query_terms: list[str],
+        temporal_terms: list[str] | None = None,
+        prefer_temporal: bool = False,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
-        return neo4j_client.search_facts(tenant_id, workspace_id, query_terms, top_k=limit)
+        return neo4j_client.search_facts(
+            tenant_id,
+            workspace_id,
+            query_terms,
+            temporal_terms=temporal_terms,
+            prefer_temporal=prefer_temporal,
+            top_k=limit,
+        )
 
     @classmethod
     def has_vector_index(cls, tenant_id: str, workspace_id: str) -> bool:

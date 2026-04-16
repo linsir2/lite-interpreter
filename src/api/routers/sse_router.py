@@ -13,7 +13,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from src.api.audit_logging import record_api_audit
 from src.api.auth import require_request_role
-from src.api.request_scope import endpoint_disabled, ensure_resource_scope
+from src.api.request_scope import endpoint_disabled, ensure_resource_scope, require_request_scope
 from src.api.schemas import TaskStreamEvent
 from src.blackboard import TaskNotExistError, global_blackboard
 from src.common import EventTopic, event_bus, event_journal
@@ -58,16 +58,20 @@ async def stream_task_events(request: Request) -> StreamingResponse:
     try:
         task = global_blackboard.get_task_state(task_id)
     except TaskNotExistError:
-        return JSONResponse({"error": "task not found", "task_id": task_id}, status_code=404)
-    scope_error = ensure_resource_scope(
-        request,
-        tenant_id=task.tenant_id,
-        workspace_id=task.workspace_id,
-    )
-    if scope_error is not None:
-        return scope_error
-    tenant_id = task.tenant_id
-    workspace_id = task.workspace_id
+        requested_scope = require_request_scope(request)
+        if isinstance(requested_scope, JSONResponse):
+            return requested_scope
+        tenant_id, workspace_id = requested_scope
+    else:
+        scope_error = ensure_resource_scope(
+            request,
+            tenant_id=task.tenant_id,
+            workspace_id=task.workspace_id,
+        )
+        if scope_error is not None:
+            return scope_error
+        tenant_id = task.tenant_id
+        workspace_id = task.workspace_id
     record_api_audit(
         request,
         action="task.events.stream",

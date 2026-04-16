@@ -220,7 +220,7 @@ conda run -n lite_interpreter python -m uvicorn src.api.main:app --host 127.0.0.
 3. Start the Task Console:
 
 ```bash
-conda run -n lite_interpreter streamlit run src/frontend/app.py
+PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
 ```
 
 4. Trigger a fake task trace:

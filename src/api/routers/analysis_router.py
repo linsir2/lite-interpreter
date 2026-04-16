@@ -51,6 +51,7 @@ from src.dag_engine.nodes.debugger_node import debugger_node
 from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
 from src.dag_engine.nodes.executor_node import executor_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
+from src.dag_engine.nodes.research_merge_node import research_merge_node
 from src.dag_engine.nodes.router_node import router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
 from src.dag_engine.nodes.summarizer_node import summarizer_node
@@ -193,6 +194,7 @@ async def _run_task_flow(
                 nodes={
                     "router": router_node,
                     "dynamic_swarm": dynamic_swarm_node,
+                    "research_merge": research_merge_node,
                     "skill_harvester": skill_harvester_node,
                     "summarizer": summarizer_node,
                     "data_inspector": data_inspector_node,

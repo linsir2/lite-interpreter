@@ -15,6 +15,7 @@ class EvalCase:
     expected_route: str
     structured_datasets: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     business_documents: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+    business_context: dict[str, Any] = field(default_factory=dict)
     knowledge_hits: tuple[dict[str, Any], ...] = field(default_factory=tuple)
     expected_evidence_refs: tuple[str, ...] = field(default_factory=tuple)
     allowed_tools: tuple[str, ...] = field(default_factory=tuple)
@@ -38,7 +39,7 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         description="Rule explanation questions should use the document/rule profile.",
         query="请解释报销制度里的审批时效口径和合同上传要求",
         expected_analysis_mode="document_rule_analysis",
-        expected_route="analyst",
+        expected_route="kag_retriever",
         business_documents=({"file_name": "rule.pdf", "path": "/tmp/rule.pdf", "status": "parsed"},),
     ),
     EvalCase(
@@ -92,6 +93,7 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
             {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},
         ),
         business_documents=({"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"},),
+        business_context={"rules": ["合同必须上传"], "metrics": ["审批时效"], "filters": []},
     ),
     EvalCase(
         case_id="context_evidence_pinning",
@@ -128,6 +130,7 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
             {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},
         ),
         business_documents=({"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"},),
+        business_context={"rules": ["必须上传合同"], "metrics": [], "filters": []},
         knowledge_hits=(
             {
                 "chunk_id": "rule-1",

@@ -10,7 +10,9 @@ from src.kag.builder.chunker import ChunkingStrategy, DocumentChunker
 from src.kag.builder.classifier import DocProcessClass, DocumentClassifier
 from src.kag.builder.orchestrator import KagBuilderOrchestrator
 from src.kag.builder.parser import DocumentParser
+from src.kag.context.formatter import ContextFormatter
 from src.kag.retriever.query_engine import QueryEngine, is_keyword_query
+from src.kag.retriever.recall.graph_search import recall as graph_recall
 from src.mcp_gateway.tools.knowledge_query_tool import KnowledgeQueryTool
 from src.storage.schema import ParsedDocument
 
@@ -71,6 +73,66 @@ def test_query_engine_uses_rrf_and_rerank(monkeypatch):
     assert hits[0]["chunk_id"] in {"a", "b"}
 
 
+def test_query_engine_bounds_rerank_pool_and_top_k(monkeypatch):
+    bm25_hits = [
+        {"chunk_id": f"chunk-{index}", "text": f"报销规则 {index}", "score": float(index), "source": "bm25", "retrieval_type": "bm25"}
+        for index in range(20)
+    ]
+    monkeypatch.setattr("src.kag.retriever.recall.bm25_search.recall", lambda *args, **kwargs: bm25_hits)
+    monkeypatch.setattr("src.kag.retriever.recall.hybrid_search.vector_recall", lambda *args, **kwargs: [])
+    monkeypatch.setattr("src.kag.retriever.recall.graph_search.recall", lambda *args, **kwargs: [])
+
+    captured = {}
+
+    def fake_rerank(query, candidates, top_k):
+        captured["candidate_count"] = len(candidates)
+        captured["top_k"] = top_k
+        return list(candidates)[:top_k]
+
+    monkeypatch.setattr("src.kag.retriever.query_engine.cross_encoder_rerank", fake_rerank)
+    packet = QueryEngine.execute_with_evidence(
+        "报销规则",
+        RetrievalPlan(recall_strategies=["bm25"], top_k=50),
+        tenant_id="tenant_bounds",
+        workspace_id="ws_bounds",
+    )
+
+    assert captured["top_k"] == 50
+    assert captured["candidate_count"] <= 60
+    assert packet.metadata["final_top_k"] == 50
+
+
+def test_knowledge_query_tool_clamps_requested_top_k(monkeypatch):
+    observed = {}
+
+    def fake_execute_with_evidence(*, query, plan, tenant_id, workspace_id):
+        observed["top_k"] = plan.top_k
+        observed["preferred_date_terms"] = plan.preferred_date_terms
+        observed["temporal_constraints"] = plan.temporal_constraints
+        return EvidencePacket(
+            query=query,
+            rewritten_query=query,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            hits=[],
+            evidence_refs=[],
+            recall_strategies=plan.recall_strategies,
+        )
+
+    monkeypatch.setattr("src.kag.retriever.query_engine.QueryEngine.execute_with_evidence", fake_execute_with_evidence)
+    KnowledgeQueryTool.run(
+        "规则",
+        tenant_id="tenant_a",
+        workspace_id="ws",
+        top_k=500,
+        preferred_date_terms=["biz_date"],
+        temporal_constraints=["2024"],
+    )
+    assert observed["top_k"] == 50
+    assert observed["preferred_date_terms"] == ["biz_date"]
+    assert observed["temporal_constraints"] == ["2024"]
+
+
 def test_query_engine_returns_evidence_packet(monkeypatch):
     monkeypatch.setattr(
         "src.kag.retriever.recall.bm25_search.recall",
@@ -88,11 +150,63 @@ def test_query_engine_returns_evidence_packet(monkeypatch):
     )
 
     plan = RetrievalPlan(recall_strategies=["bm25"], top_k=3)
-    packet = QueryEngine.execute_with_evidence("报销规则", plan, tenant_id="tenant_a", workspace_id="ws")
+    packet = QueryEngine.execute_with_evidence("报销规则", plan, tenant_id="tenant_packet", workspace_id="ws")
     assert packet.query == "报销规则"
     assert packet.hits
     assert packet.evidence_refs == ["a"]
     assert packet.recall_strategies == ["bm25"]
+
+
+def test_query_engine_projects_retrieval_plan_temporal_preferences(monkeypatch):
+    monkeypatch.setattr(
+        "src.kag.retriever.recall.bm25_search.recall",
+        lambda *args, **kwargs: [
+            {"chunk_id": "a", "text": "报销规则", "score": 1.0, "source": "bm25", "retrieval_type": "bm25"}
+        ],
+    )
+    monkeypatch.setattr("src.kag.retriever.recall.hybrid_search.vector_recall", lambda *args, **kwargs: [])
+    monkeypatch.setattr("src.kag.retriever.recall.graph_search.recall", lambda *args, **kwargs: [])
+
+    packet = QueryEngine.execute_with_evidence(
+        "按biz_date筛选2024年报销规则",
+        RetrievalPlan(
+            recall_strategies=["bm25"],
+            top_k=3,
+            preferred_date_terms=["biz_date"],
+            temporal_constraints=["2024"],
+        ),
+        tenant_id="tenant_temporal_plan",
+        workspace_id="ws",
+    )
+
+    assert packet.filters["preferred_date_terms"] == ["biz_date"]
+    assert packet.filters["temporal_constraints"] == ["2024"]
+    assert packet.metadata["preferred_date_terms"] == ["biz_date"]
+    assert packet.metadata["temporal_constraints"] == ["2024"]
+
+
+def test_bm25_recall_extends_query_terms_with_temporal_preferences(monkeypatch):
+    observed = {}
+
+    def fake_search_text_chunks(*, tenant_id, workspace_id, query_terms, filters, limit):
+        observed["query_terms"] = list(query_terms)
+        observed["filters"] = dict(filters)
+        return []
+
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.search_text_chunks", fake_search_text_chunks)
+
+    from src.kag.retriever.recall.bm25_search import recall
+
+    recall(
+        "审批时效",
+        tenant_id="tenant_a",
+        workspace_id="ws",
+        filters={"preferred_date_terms": ["biz_date"], "temporal_constraints": ["2024"], "year": "2024"},
+    )
+
+    assert "biz_date" in observed["query_terms"]
+    assert "2024" in observed["query_terms"]
+    assert observed["filters"] == {"year": "2024"}
 
 
 def test_is_keyword_query_rejects_long_chinese_question_without_spaces():
@@ -115,6 +229,19 @@ def test_knowledge_query_tool_returns_evidence_packet(monkeypatch):
     result = KnowledgeQueryTool.run("规则", tenant_id="tenant_a", workspace_id="ws")
     assert result["evidence_refs"] == ["chunk-1"]
     assert result["hits"][0]["chunk_id"] == "chunk-1"
+
+
+def test_context_formatter_uses_compiled_signals_for_rule_and_metric_detection():
+    context, refined = ContextFormatter.format(
+        [
+            {"text": "合同必须上传，否则审批流程会被影响。", "source": "rule.pdf", "retrieval_type": "bm25"},
+            {"text": "审批时效按合同分组统计。", "source": "metric.pdf", "retrieval_type": "vector"},
+        ]
+    )
+
+    assert context["rules"]
+    assert context["metrics"]
+    assert "审批流程" in refined
 
 
 def test_context_builder_writes_business_context():
@@ -220,6 +347,183 @@ def test_context_builder_can_fall_back_to_knowledge_snapshot_hits():
     assert result["analysis_brief"]["evidence_refs"] == ["c9"]
 
 
+def test_context_builder_projects_temporal_preferences_into_snapshot_metadata():
+    tenant_id = "tenant_ctx_temporal"
+    task_id = "task_ctx_temporal"
+    exec_data = ExecutionData(task_id=task_id, tenant_id=tenant_id)
+    execution_blackboard.write(tenant_id, task_id, exec_data)
+
+    state = {
+        "tenant_id": tenant_id,
+        "task_id": task_id,
+        "workspace_id": "default_ws",
+        "input_query": "按biz_date筛选2024年审批时效",
+        "raw_retrieved_candidates": [
+            {
+                "chunk_id": "c-time",
+                "text": "审批时效口径：按biz_date统计审批时效，并按2024年过滤。",
+                "score": 1.0,
+                "source": "metric.pdf",
+                "retrieval_type": "bm25",
+            }
+        ],
+        "next_actions": [],
+        "retry_count": 0,
+        "current_error_type": None,
+    }
+
+    result = context_builder_node(state)
+    metadata = result["knowledge_snapshot"]["metadata"]
+    assert "biz_date" in metadata["preferred_date_terms"]
+    assert "2024" in metadata["temporal_constraints"]
+
+
+def test_context_builder_compiles_temporal_graph_from_business_specs(monkeypatch):
+    tenant_id = "tenant_ctx_temporal_graph"
+    task_id = "task_ctx_temporal_graph"
+    exec_data = ExecutionData(task_id=task_id, tenant_id=tenant_id)
+    execution_blackboard.write(tenant_id, task_id, exec_data)
+    persisted = {}
+
+    def fake_save_graph_triples(*, tenant_id, workspace_id, triples):
+        persisted["tenant_id"] = tenant_id
+        persisted["workspace_id"] = workspace_id
+        persisted["triples"] = list(triples)
+        return True
+
+    state = {
+        "tenant_id": tenant_id,
+        "task_id": task_id,
+        "workspace_id": "default_ws",
+        "input_query": "按biz_date筛选2024年审批时效",
+        "raw_retrieved_candidates": [
+            {
+                "chunk_id": "c-time-graph",
+                "text": "审批时效口径：按biz_date统计审批时效，并按2024年过滤。",
+                "score": 1.0,
+                "source": "metric.pdf",
+                "retrieval_type": "bm25",
+            }
+        ],
+        "next_actions": [],
+        "retry_count": 0,
+        "current_error_type": None,
+    }
+
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.save_graph_triples", fake_save_graph_triples)
+    context_builder_node(state)
+    updated = execution_blackboard.read(tenant_id, task_id)
+
+    assert updated is not None
+    assert updated.knowledge.compiled.graph_compilation_summary.accepted_count > 0
+    assert updated.knowledge.compiled.graph_compilation_summary.candidate_count >= updated.knowledge.compiled.graph_compilation_summary.accepted_count
+    assert any(triple.relation == "OCCURS_AT" for triple in updated.knowledge.compiled.compiled_graph_triples)
+    assert any(triple.tail == "biz_date" for triple in updated.knowledge.compiled.compiled_graph_triples)
+    assert any(triple.tail == "2024" for triple in updated.knowledge.compiled.compiled_graph_triples)
+    assert persisted["tenant_id"] == tenant_id
+    assert persisted["workspace_id"] == "default_ws"
+    assert any(triple.tail == "biz_date" for triple in persisted["triples"])
+    assert any(triple.tail == "2024" for triple in persisted["triples"])
+
+
+def test_graph_recall_extends_query_terms_with_temporal_preferences(monkeypatch):
+    observed = {}
+
+    def fake_search_graph_facts(*, tenant_id, workspace_id, query_terms, temporal_terms, prefer_temporal, limit):
+        observed["tenant_id"] = tenant_id
+        observed["workspace_id"] = workspace_id
+        observed["query_terms"] = list(query_terms)
+        observed["temporal_terms"] = list(temporal_terms)
+        observed["prefer_temporal"] = prefer_temporal
+        observed["limit"] = limit
+        return []
+
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.search_graph_facts", fake_search_graph_facts)
+
+    graph_recall(
+        "审批时效",
+        tenant_id="tenant_graph_temporal",
+        workspace_id="ws_graph_temporal",
+        top_k=4,
+        filters={"preferred_date_terms": ["biz_date"], "temporal_constraints": ["2024"]},
+    )
+
+    assert observed["tenant_id"] == "tenant_graph_temporal"
+    assert observed["workspace_id"] == "ws_graph_temporal"
+    assert observed["limit"] == 4
+    assert "审批时效" in observed["query_terms"]
+    assert "biz_date" in observed["query_terms"]
+    assert "2024" in observed["query_terms"]
+    assert observed["temporal_terms"] == ["biz_date", "2024"]
+    assert observed["prefer_temporal"] is True
+
+
+def test_graph_client_scores_temporal_hits_higher_than_generic_hits():
+    from src.storage.graph_client import GraphDBClient
+
+    generic_row = {
+        "head": "审批时效",
+        "tail": "合同",
+        "relation": "RELATED_TO",
+        "graph_type": "semantic",
+        "provenance": {"template_id": "semantic.cooccurrence.related_to"},
+    }
+    temporal_row = {
+        "head": "审批时效",
+        "tail": "biz_date",
+        "relation": "OCCURS_AT",
+        "graph_type": "temporal",
+        "provenance": {"template_id": "metric.temporal.preference.occurs_at"},
+    }
+
+    generic_score = GraphDBClient._fact_score(
+        generic_row,
+        query_terms=["审批时效", "biz_date", "2024"],
+        temporal_terms=["biz_date", "2024"],
+        prefer_temporal=True,
+    )
+    temporal_score = GraphDBClient._fact_score(
+        temporal_row,
+        query_terms=["审批时效", "biz_date", "2024"],
+        temporal_terms=["biz_date", "2024"],
+        prefer_temporal=True,
+    )
+
+    assert temporal_score > generic_score
+
+
+def test_query_engine_uses_graph_chunk_ids_as_evidence_refs(monkeypatch):
+    monkeypatch.setattr(
+        "src.kag.retriever.query_engine.analyze_query",
+        lambda *args, **kwargs: ("审批时效 关系", {}, 0.9, True),
+    )
+    monkeypatch.setattr("src.kag.retriever.recall.bm25_search.recall", lambda *args, **kwargs: [])
+    monkeypatch.setattr("src.kag.retriever.recall.hybrid_search.vector_recall", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        "src.kag.retriever.recall.graph_search.recall",
+        lambda *args, **kwargs: [
+            {
+                "chunk_id": "compiled:metric:0",
+                "text": "审批时效 -[OCCURS_AT]-> biz_date",
+                "score": 3.0,
+                "source": "compiled:metric:0",
+                "graph_type": "temporal",
+                "retrieval_type": "graph",
+            }
+        ],
+    )
+
+    packet = QueryEngine.execute_with_evidence(
+        "审批时效关系",
+        RetrievalPlan(recall_strategies=["graph"], top_k=3),
+        tenant_id="tenant_graph_packet",
+        workspace_id="ws_graph_packet",
+    )
+
+    assert packet.hits[0]["chunk_id"] == "compiled:metric:0"
+    assert packet.evidence_refs == ["compiled:metric:0"]
+
+
 def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
     tenant_id = "tenant_snapshot"
     task_id = global_blackboard.create_task(tenant_id, "ws", "规则")
@@ -270,6 +574,54 @@ def test_kag_retriever_writes_knowledge_snapshot(monkeypatch):
     assert updated.knowledge.knowledge_snapshot.evidence_refs == ["chunk-9"]
     assert knowledge_state is not None
     assert knowledge_state.latest_retrieval_snapshot.evidence_refs == ["chunk-9"]
+
+
+def test_kag_retriever_fast_path_injection_uses_lexical_overlap(monkeypatch, tmp_path):
+    tenant_id = "tenant_fast_path_lexical"
+    task_id = global_blackboard.create_task(tenant_id, "ws", "费用报销规则")
+    small_doc = tmp_path / "rule-small.txt"
+    small_doc.write_text("报销规则：合同必须上传。", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws",
+            inputs={
+                "business_documents": [
+                    {
+                        "file_name": "rule-small.txt",
+                        "path": str(small_doc),
+                        "status": "parsed",
+                        "is_newly_uploaded": True,
+                    }
+                ]
+            },
+        ),
+    )
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_vector_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr("src.storage.repository.knowledge_repo.KnowledgeRepo.has_graph_index", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "src.kag.retriever.query_engine.QueryEngine.execute_with_evidence",
+        lambda *args, **kwargs: EvidencePacket(
+            query="费用报销规则",
+            rewritten_query="费用报销规则",
+            tenant_id=tenant_id,
+            workspace_id="ws",
+            hits=[],
+            evidence_refs=[],
+            recall_strategies=["bm25"],
+            metadata={},
+        ),
+    )
+
+    result = kag_retriever_node(
+        {"tenant_id": tenant_id, "task_id": task_id, "workspace_id": "ws", "input_query": "费用报销规则"}
+    )
+
+    assert result["raw_retrieved_candidates"]
+    assert result["raw_retrieved_candidates"][0]["type"] == "fast_path_injection"
 
 
 def test_kag_retriever_persists_document_progress_incrementally(monkeypatch, tmp_path):

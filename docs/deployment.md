@@ -108,7 +108,7 @@ make run-sidecar
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
-conda run -n lite_interpreter streamlit run src/frontend/app.py
+PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
 ```
 
 或：

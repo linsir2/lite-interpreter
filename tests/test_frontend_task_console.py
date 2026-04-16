@@ -62,6 +62,7 @@ def test_collect_result_sections_extracts_lists():
     assert sections["task_lease"][0]["owner_id"] == "host:pid"
     assert sections["analysis_brief"] == []
     assert sections["parser_reports"] == []
+    assert sections["compiled_knowledge"] == []
 
 
 def test_select_stream_target_prefers_execution_stream_when_available():
@@ -177,12 +178,14 @@ def test_collect_result_sections_extracts_knowledge_snapshot():
                 "rewritten_query": "报销 规则",
                 "recall_strategies": ["bm25", "vector"],
                 "filters": {"year": "2024"},
+                "metadata": {"preferred_date_terms": ["biz_date"], "temporal_constraints": ["2024"]},
             }
         }
     }
     sections = collect_result_sections(payload)
     assert sections["knowledge_snapshot"][0]["rewritten_query"] == "报销 规则"
     assert sections["knowledge_snapshot"][0]["filters"]["year"] == "2024"
+    assert sections["knowledge_snapshot"][0]["metadata"]["preferred_date_terms"] == ["biz_date"]
 
 
 def test_collect_result_sections_extracts_analysis_brief():
@@ -205,6 +208,30 @@ def test_collect_result_sections_extracts_analysis_brief():
     assert sections["analysis_brief"][0]["analysis_mode"] == "hybrid_analysis"
     assert sections["analysis_brief"][0]["dataset_summaries"][0].startswith("expenses.csv")
     assert sections["analysis_brief"][0]["business_rules"] == ["规则：必须上传合同。"]
+
+
+def test_collect_result_sections_extracts_compiled_knowledge():
+    payload = {
+        "response": {
+            "details": {
+                "compiled_knowledge": {
+                    "rule_specs": [{"source_text": "合同必须上传"}],
+                    "metric_specs": [{"metric_name": "审批时效"}],
+                    "filter_specs": [{"field": "keyword", "operator": "contains", "value": "上海"}],
+                    "spec_parse_errors": [{"spec_kind": "rule", "error_code": "antlr_rule_parse_failed"}],
+                    "graph_compilation_summary": {
+                        "candidate_count": 3,
+                        "accepted_count": 2,
+                        "rejected_count": 1,
+                        "reject_reasons": {"missing_causal_marker": 1},
+                    },
+                }
+            }
+        }
+    }
+    sections = collect_result_sections(payload)
+    assert sections["compiled_knowledge"][0]["rule_specs"][0]["source_text"] == "合同必须上传"
+    assert sections["compiled_knowledge"][0]["graph_compilation_summary"]["accepted_count"] == 2
 
 
 def test_collect_result_sections_extracts_historical_skill_matches():

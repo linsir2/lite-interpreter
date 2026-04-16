@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+import pytest
 from src.blackboard import ExecutionData, MemoryData, execution_blackboard, global_blackboard, memory_blackboard
 from src.common import ExecutionRecord
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
@@ -13,8 +14,10 @@ from src.dag_engine.nodes.data_inspector import data_inspector_node
 from src.dag_engine.nodes.debugger_node import debugger_node
 from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
 from src.dag_engine.nodes.executor_node import executor_node
+from src.dag_engine.nodes.research_merge_node import research_merge_node
 from src.dag_engine.nodes.router_node import _has_business_context, router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
+from src.dag_engine.nodes.static_codegen import build_dataset_aware_code
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
@@ -137,6 +140,64 @@ def test_build_dag_graph_compiles_or_gracefully_skips():
     assert graph is None or hasattr(graph, "invoke")
 
 
+def test_build_dag_graph_reenters_static_flow_after_dynamic_success(monkeypatch):
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.router_node.router_node",
+        lambda state: {
+            "next_actions": ["dynamic_swarm"],
+            "execution_intent": {
+                "intent": "dynamic_flow",
+                "destinations": ["dynamic_swarm"],
+                "metadata": {"requires_static_execution": True, "fallback_destinations": ["analyst"]},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.dynamic_swarm_node.dynamic_swarm_node",
+        lambda state: {"dynamic_status": "completed", "dynamic_summary": "researched", "dynamic_research_findings": ["f1"]},
+    )
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.research_merge_node.research_merge_node",
+        lambda state: {"analysis_brief": {"question": state["input_query"]}, "next_actions": ["analyst"]},
+    )
+    monkeypatch.setattr("src.dag_engine.nodes.analyst_node.analyst_node", lambda state: {"analysis_plan": "plan"})
+    monkeypatch.setattr("src.dag_engine.nodes.coder_node.coder_node", lambda state: {"generated_code": "print('ok')"})
+    monkeypatch.setattr("src.dag_engine.nodes.auditor_node.auditor_node", lambda state: {"next_actions": ["executor"]})
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.executor_node.executor_node",
+        lambda state: {
+            "execution_record": ExecutionRecord(
+                session_id="session-graph-phase3",
+                tenant_id="tenant-graph-phase3",
+                workspace_id="ws-graph-phase3",
+                task_id="task-graph-phase3",
+                success=True,
+                trace_id="trace-graph-phase3",
+                duration_seconds=0.1,
+                output="ok",
+            ).model_dump(mode="json")
+        },
+    )
+    monkeypatch.setattr("src.dag_engine.nodes.skill_harvester_node.skill_harvester_node", lambda state: {})
+    monkeypatch.setattr("src.dag_engine.nodes.summarizer_node.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
+
+    graph = build_dag_graph()
+    if graph is None:
+        pytest.skip("LangGraph unavailable in current environment")
+
+    result = graph.invoke(
+        {
+            "tenant_id": "tenant-graph-phase3",
+            "task_id": "task-graph-phase3",
+            "workspace_id": "ws-graph-phase3",
+            "input_query": "帮我自己找数据并写代码验证",
+        }
+    )
+
+    assert result["final_response"]["mode"] == "static"
+    assert result["generated_code"] == "print('ok')"
+
+
 def test_router_routes_complex_task_to_dynamic_swarm():
     tenant_id = "tenant_dynamic"
     task_id = global_blackboard.create_task(tenant_id, "ws_dynamic", "placeholder")
@@ -163,7 +224,12 @@ def test_router_routes_complex_task_to_dynamic_swarm():
     assert result["next_actions"] == ["dynamic_swarm"]
     assert result["execution_intent"]["complexity_score"] >= 0.7
     assert result["execution_intent"]["metadata"]["analysis_mode"] == "dynamic_research_analysis"
-    assert result["execution_intent"]["metadata"]["effective_model_alias"] == "fast_model"
+    routing_stage = result["execution_intent"]["metadata"]["routing_stage"]
+    expected_alias = "reasoning_model" if routing_stage in {"fine", "fallback"} else "fast_model"
+    assert result["execution_intent"]["metadata"]["effective_model_alias"] == expected_alias
+    assert result["execution_intent"]["metadata"]["final_mode"] == "dynamic"
+    assert result["execution_intent"]["metadata"]["fallback_destinations"]
+    assert result["execution_intent"]["metadata"]["routing_stage"] in {"coarse", "fine", "fallback"}
 
 
 def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
@@ -180,6 +246,7 @@ def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
                 "structured_datasets": [{"file_name": "expenses.csv", "path": "/tmp/expenses.csv"}],
                 "business_documents": [{"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"}],
             },
+            knowledge={"business_context": {"rules": ["合同必须上传"]}},
         ),
     )
 
@@ -193,7 +260,92 @@ def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
     )
 
     assert result["execution_intent"]["metadata"]["analysis_mode"] == "hybrid_analysis"
+    assert result["execution_intent"]["metadata"]["final_mode"] == "hybrid"
     assert result["next_actions"] != ["dynamic_swarm"]
+
+
+def test_router_uses_runtime_decision_as_single_semantic_source():
+    tenant_id = "tenant_runtime_source"
+    task_id = global_blackboard.create_task(tenant_id, "ws_runtime_source", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_runtime_source",
+        ),
+    )
+
+    fake_runtime_decision = type(
+        "FakeRuntimeDecision",
+        (),
+        {
+            "call_purpose": "routing_assess",
+            "model_alias": "fast_model",
+            "analysis_mode": "dataset_analysis",
+            "coarse_mode": "static",
+            "final_mode": "static",
+            "evidence_strategy": "dataset_first",
+            "routing_mode": "static",
+            "destinations": ("analyst",),
+            "route_candidates": ("static",),
+            "routing_stage": "coarse",
+            "routing_confidence": 0.91,
+            "routing_degraded": False,
+            "degrade_reason": "",
+            "requires_static_execution": True,
+            "requires_external_research": False,
+            "fine_routing_invoked": False,
+            "fallback_mode": "static",
+            "fallback_destinations": ("analyst",),
+            "fallback_reason": "",
+            "effective_tools": (),
+            "known_gaps": (),
+            "routing_reasons": ("runtime selected analyst path",),
+            "complexity_score": 0.11,
+            "decision_reason": "runtime override",
+            "to_metadata": lambda self: {
+                "call_purpose": "routing_assess",
+                "effective_model_alias": "fast_model",
+                "analysis_mode": "dataset_analysis",
+                "coarse_mode": "static",
+                "final_mode": "static",
+                "evidence_strategy": "dataset_first",
+                "routing_mode": "static",
+                "destinations": ["analyst"],
+                "route_candidates": ["static"],
+                "routing_stage": "coarse",
+                "routing_confidence": 0.91,
+                "routing_degraded": False,
+                "degrade_reason": "",
+                "requires_static_execution": True,
+                "requires_external_research": False,
+                "fine_routing_invoked": False,
+                "fallback_mode": "static",
+                "fallback_destinations": ["analyst"],
+                "fallback_reason": "",
+                "effective_tools": [],
+                "known_gaps": [],
+                "routing_reasons": ["runtime selected analyst path"],
+                "complexity_score": 0.11,
+                "decision_reason": "runtime override",
+            },
+        },
+    )()
+
+    with patch("src.dag_engine.nodes.router_node.resolve_runtime_decision", return_value=fake_runtime_decision):
+        result = router_node(
+            {
+                "tenant_id": tenant_id,
+                "task_id": task_id,
+                "workspace_id": "ws_runtime_source",
+                "input_query": "帮我分析这份财报，并结合宏观经济数据预测下季度走势，自己找数据并写代码验证",
+            }
+        )
+
+    assert result["next_actions"] == ["analyst"]
+    assert result["execution_intent"]["metadata"]["decision_reason"] == "runtime override"
 
 
 def test_dynamic_swarm_and_harvester_form_minimal_closed_loop():
@@ -294,6 +446,203 @@ def test_dynamic_swarm_denies_unknown_tool_requests():
     persisted = execution_blackboard.read(tenant_id, task_id)
     assert persisted is not None
     assert persisted.control.decision_log
+
+
+def test_research_merge_node_materializes_dynamic_findings_into_analysis_context():
+    tenant_id = "tenant_research_merge"
+    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_research_merge",
+        ),
+    )
+
+    result = research_merge_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_research_merge",
+            "input_query": "基于动态研究结果生成执行代码",
+            "execution_intent": {"metadata": {"requires_static_execution": True}},
+            "dynamic_summary": "研究表明行业均值高于内部数据",
+            "dynamic_research_findings": ["行业均值高于内部数据", "需要重点核对合同缺失样本"],
+            "dynamic_evidence_refs": ["trace-1"],
+            "dynamic_artifacts": ["/tmp/report.md"],
+            "dynamic_open_questions": ["缺少地区维度公开样本"],
+            "dynamic_suggested_static_actions": ["先生成静态分析计划再输出代码"],
+        }
+    )
+
+    persisted = execution_blackboard.read(tenant_id, task_id)
+    assert persisted is not None
+    assert persisted.knowledge.analysis_brief.question == "基于动态研究结果生成执行代码"
+    assert "trace-1" in persisted.knowledge.knowledge_snapshot.evidence_refs
+    assert result["next_actions"] == ["analyst"]
+    assert "研究发现" in result["refined_context"]
+
+
+def test_research_merge_node_skips_reentry_when_static_execution_not_required():
+    tenant_id = "tenant_research_merge_dynamic_only"
+    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge_dynamic_only", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_research_merge_dynamic_only",
+        ),
+    )
+
+    result = research_merge_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_research_merge_dynamic_only",
+            "input_query": "只做动态调研",
+            "execution_intent": {"metadata": {"requires_static_execution": False}},
+            "dynamic_summary": "research only",
+        }
+    )
+
+    assert result["next_actions"] == ["skill_harvester"]
+
+
+def test_execute_task_flow_reenters_static_path_after_dynamic_success_when_required():
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-reentry",
+            "task_id": "task-dynamic-reentry",
+            "workspace_id": "ws-dynamic-reentry",
+            "input_query": "research then code",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {"metadata": {"requires_static_execution": True}},
+            },
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_summary": "researched",
+                "dynamic_research_findings": ["f1"],
+                "dynamic_evidence_refs": ["trace-1"],
+            },
+            "research_merge": lambda state: {"analysis_brief": {"question": "research then code"}, "next_actions": ["analyst"]},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: {"analysis": "ok"},
+            "coder": lambda state: {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert result["terminal_sub_status"] == "动态研究回流后静态链执行完成"
+    assert result["dynamic_status"] == "completed"
+
+
+def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(monkeypatch):
+    tenant_id = "tenant-dynamic-real-merge"
+    task_id = global_blackboard.create_task(tenant_id, "ws-dynamic-real-merge", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(tenant_id=tenant_id, task_id=task_id, workspace_id="ws-dynamic-real-merge"),
+    )
+
+    fake_result = DeerflowTaskResult(
+        status="completed",
+        summary="外部研究结论：行业均值高于内部数据",
+        trace_refs=["deerflow:test-thread"],
+        artifacts=["/tmp/report.md"],
+        research_findings=["行业均值高于内部数据", "建议先生成静态校验代码"],
+        evidence_refs=["deerflow:test-thread", "/tmp/report.md"],
+        suggested_static_actions=["将研究发现转成静态分析计划"],
+        recommended_skill={"source": "dynamic_swarm", "source_task_type": "dynamic_task"},
+        trace=[],
+    )
+    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result)
+
+    result = execute_task_flow(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws-dynamic-real-merge",
+            "input_query": "帮我自己找数据并写代码验证",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {
+                    "intent": "dynamic_flow",
+                    "destinations": ["dynamic_swarm"],
+                    "metadata": {"requires_static_execution": True, "fallback_destinations": ["analyst"]},
+                },
+            },
+            "dynamic_swarm": dynamic_swarm_node,
+            "research_merge": research_merge_node,
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: {"analysis_plan": "plan"},
+            "coder": lambda state: {"generated_code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {
+                "execution_record": ExecutionRecord(
+                    session_id="session-dynamic-real-merge",
+                    tenant_id=tenant_id,
+                    workspace_id="ws-dynamic-real-merge",
+                    task_id=task_id,
+                    success=True,
+                    trace_id="trace-dynamic-real-merge",
+                    duration_seconds=0.1,
+                    output="ok",
+                ).model_dump(mode="json")
+            },
+        },
+    )
+
+    persisted = execution_blackboard.read(tenant_id, task_id)
+    assert persisted is not None
+    assert "deerflow:test-thread" in persisted.knowledge.knowledge_snapshot.evidence_refs
+    assert persisted.knowledge.analysis_brief.recommended_next_step == "将研究发现转成静态分析计划"
+    assert result["terminal_status"] == "success"
+
+
+def test_research_merge_reuses_router_static_prep_plan_when_present():
+    tenant_id = "tenant_research_merge_fallback_plan"
+    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge_fallback_plan", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(tenant_id=tenant_id, task_id=task_id, workspace_id="ws_research_merge_fallback_plan"),
+    )
+
+    result = research_merge_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_research_merge_fallback_plan",
+            "input_query": "帮我自己找数据并写代码验证",
+            "execution_intent": {"metadata": {"requires_static_execution": True, "fallback_destinations": ["data_inspector", "kag_retriever"]}},
+            "dynamic_summary": "需要补齐数据和规则上下文",
+            "dynamic_research_findings": ["需要补齐数据和规则上下文"],
+        }
+    )
+
+    assert result["next_actions"] == ["data_inspector", "kag_retriever"]
 
 
 def test_dynamic_swarm_does_not_duplicate_trace_when_runtime_event_has_source():
@@ -555,6 +904,82 @@ def test_execute_task_flow_waits_for_human_when_kag_ingestion_blocks():
     assert result["failure_type"] == "knowledge_ingestion"
 
 
+def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_denied():
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-denied-fallback",
+            "task_id": "task-dynamic-denied-fallback",
+            "workspace_id": "ws-dynamic-denied-fallback",
+            "input_query": "research then execute",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {
+                    "metadata": {
+                        "fallback_destinations": ["analyst"],
+                        "fallback_reason": "dynamic denied -> static fallback",
+                    }
+                },
+            },
+            "dynamic_swarm": lambda state: {"dynamic_status": "denied", "dynamic_summary": "policy denied"},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "fallback"}, "observed_degrade_reason": state.get("degrade_reason")},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: {"analysis": "ok"},
+            "coder": lambda state: {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert result["terminal_sub_status"] == "动态任务降级后静态链执行完成"
+    assert result["routing_degraded"] is True
+    assert result["degrade_reason"] == "dynamic denied -> static fallback"
+
+
+def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_unavailable():
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-unavailable-fallback",
+            "task_id": "task-dynamic-unavailable-fallback",
+            "workspace_id": "ws-dynamic-unavailable-fallback",
+            "input_query": "research then execute",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {
+                    "metadata": {
+                        "fallback_destinations": ["data_inspector", "kag_retriever"],
+                        "fallback_reason": "dynamic unavailable -> static fallback",
+                    }
+                },
+            },
+            "dynamic_swarm": lambda state: {"dynamic_status": "unavailable", "dynamic_summary": "runtime unavailable"},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "fallback"}},
+            "data_inspector": lambda state: {"inspected": True},
+            "kag_retriever": lambda state: {"blocked": False},
+            "context_builder": lambda state: {"context_ready": True},
+            "analyst": lambda state: {"analysis": "ok"},
+            "coder": lambda state: {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert result["terminal_sub_status"] == "动态任务降级后静态链执行完成"
+    assert result["routing_degraded"] is True
+    assert result["degrade_reason"] == "dynamic unavailable -> static fallback"
+
+
 def test_executor_node_passes_task_context_to_sandbox(monkeypatch):
     tenant_id = "tenant_exec"
     task_id = global_blackboard.create_task(tenant_id, "ws_exec", "placeholder")
@@ -715,7 +1140,20 @@ def test_static_nodes_form_minimal_safe_chain():
                 ],
             },
             knowledge={
-                "business_context": {"rules": ["报销金额需含税"], "metrics": [], "filters": [], "sources": ["rule.pdf"]}
+                "business_context": {"rules": ["报销金额需含税"], "metrics": [], "filters": [], "sources": ["rule.pdf"]},
+                "compiled": {
+                    "rule_specs": [
+                        {
+                            "source_text": "报销金额需含税",
+                            "normalized_text": "报销金额需含税",
+                            "subject_terms": ["报销规则"],
+                            "required_terms": ["合同"],
+                            "prohibited_terms": [],
+                            "temporal_constraints": [],
+                            "causal_constraints": [],
+                        }
+                    ]
+                },
             },
         ),
     )
@@ -760,6 +1198,7 @@ def test_static_nodes_form_minimal_safe_chain():
     assert "approved_skills" in state["generated_code"]
     assert "skill_strategy_hints" in state["generated_code"]
     assert "historical_skill_demo" in state["generated_code"]
+    assert "compiled_knowledge" in state["generated_code"]
     persisted = memory_blackboard.read(tenant_id, task_id)
     persisted_execution = execution_blackboard.read(tenant_id, task_id)
     assert persisted is not None
@@ -776,6 +1215,162 @@ def test_static_nodes_form_minimal_safe_chain():
     state.update(auditor_node(state))
     assert state["audit_result"]["safe"] is True
     assert state["next_actions"] == ["executor"]
+
+
+def test_build_dataset_aware_code_executes_with_compiled_signal_globals():
+    payload = {
+        "query": "总结报销规则",
+        "analysis_plan": "plan",
+        "analysis_mode": "static",
+        "analysis_brief": {},
+        "business_context": {"rules": ["报销金额需含税"], "metrics": ["审批时效口径"], "filters": ["上海"]},
+        "compiled_knowledge": {
+            "rule_specs": [
+                {
+                    "source_text": "报销金额需含税",
+                    "subject_terms": ["报销规则"],
+                    "required_terms": ["合同"],
+                    "prohibited_terms": [],
+                }
+            ],
+            "metric_specs": [
+                {
+                    "source_text": "审批时效口径",
+                    "metric_name": "审批时效口径",
+                    "measure_terms": ["审批时效"],
+                    "group_terms": ["contract_id"],
+                }
+            ],
+            "filter_specs": [
+                {
+                    "source_text": "上海",
+                    "field": "keyword",
+                    "operator": "contains",
+                    "value": "上海",
+                    "preferred_date_terms": ["biz_date"],
+                }
+            ],
+            "spec_parse_errors": [{"spec_kind": "rule", "error_code": "antlr_rule_parse_failed"}],
+            "graph_compilation_summary": {"candidate_count": 3, "accepted_count": 2, "rejected_count": 1},
+        },
+        "approved_skills": [],
+        "skill_strategy_hints": [],
+        "refined_context_excerpt": "",
+        "input_mounts": [],
+        "structured_dataset_summaries": [],
+    }
+    code = build_dataset_aware_code(payload)
+    namespace: dict[str, object] = {}
+    exec(code, namespace)
+    result = namespace["result"]
+    assert result["status"] == "static_chain_generated"
+    assert any("图谱编译摘要" in item for item in result["derived_findings"])
+    assert any("编译态记录了" in item for item in result["derived_findings"])
+
+
+def test_build_dataset_aware_code_uses_compiled_terms_for_document_keyword_hits(tmp_path):
+    document_path = tmp_path / "rule.txt"
+    document_path.write_text("上海合同审批规则说明。", encoding="utf-8")
+    payload = {
+        "query": "检查上海合同规则",
+        "analysis_plan": "plan",
+        "analysis_mode": "static",
+        "analysis_brief": {},
+        "business_context": {"rules": [], "metrics": [], "filters": []},
+        "compiled_knowledge": {
+            "rule_specs": [
+                {
+                    "source_text": "合同必须上传",
+                    "subject_terms": ["合同"],
+                    "required_terms": ["合同"],
+                    "prohibited_terms": [],
+                }
+            ],
+            "metric_specs": [],
+            "filter_specs": [{"source_text": "上海", "field": "keyword", "operator": "contains", "value": "上海"}],
+            "spec_parse_errors": [],
+            "graph_compilation_summary": {},
+        },
+        "approved_skills": [],
+        "skill_strategy_hints": [],
+        "refined_context_excerpt": "",
+        "input_mounts": [
+            {
+                "kind": "business_document",
+                "file_name": "rule.txt",
+                "container_path": str(document_path),
+            }
+        ],
+        "structured_dataset_summaries": [],
+    }
+    code = build_dataset_aware_code(payload)
+    namespace: dict[str, object] = {}
+    exec(code, namespace)
+    result = namespace["result"]
+    assert result["documents"][0]["keyword_hits"]
+    assert "合同" in result["documents"][0]["keyword_hits"] or "上海" in result["documents"][0]["keyword_hits"]
+
+
+def test_build_dataset_aware_code_uses_spec_terms_for_metric_and_filter_checks(tmp_path):
+    csv_path = tmp_path / "sales.csv"
+    csv_path.write_text(
+        "contract_id,amount,duration_days,created_at,biz_date,city\n"
+        "A,100,3,2023-12-31,2024-01-01,上海\n"
+        "A,120,1,2024-01-02,2024-01-03,上海\n"
+        "B,90,2,2024-01-04,2024-01-05,北京\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "query": "检查审批时效和上海过滤",
+        "analysis_plan": "plan",
+        "analysis_mode": "static",
+        "analysis_brief": {},
+        "business_context": {"rules": [], "metrics": [], "filters": []},
+        "compiled_knowledge": {
+            "rule_specs": [],
+            "metric_specs": [
+                {
+                    "source_text": "审批时效口径",
+                    "metric_name": "审批时效口径",
+                    "measure_terms": ["duration_days", "审批时效"],
+                    "group_terms": ["contract_id"],
+                    "preferred_date_terms": ["biz_date"],
+                }
+            ],
+            "filter_specs": [{"source_text": "上海", "field": "keyword", "operator": "contains", "value": "上海"}],
+            "spec_parse_errors": [],
+            "graph_compilation_summary": {},
+        },
+        "approved_skills": [],
+        "skill_strategy_hints": [],
+        "refined_context_excerpt": "",
+        "input_mounts": [
+            {
+                "kind": "structured_dataset",
+                "file_name": "sales.csv",
+                "container_path": str(csv_path),
+                "encoding": "utf-8",
+                "sep": ",",
+            }
+        ],
+        "structured_dataset_summaries": [],
+    }
+    code = build_dataset_aware_code(payload)
+    namespace: dict[str, object] = {}
+    exec(code, namespace)
+    result = namespace["result"]
+    assert result["metric_checks"][0]["matched_columns"]
+    assert "duration_days" in result["metric_checks"][0]["matched_columns"]
+    assert result["metric_checks"][0]["matched_groups"]
+    assert result["metric_checks"][0]["matched_groups"] == ["contract_id -> duration_days"]
+    assert result["datasets"][0]["group_summaries"][0]["measure"] == "duration_days"
+    assert result["datasets"][0]["group_summaries"][0]["group_by"] == "contract_id"
+    assert result["datasets"][0]["date_profiles"][0]["column"] == "biz_date"
+    assert len(result["datasets"][0]["date_profiles"]) == 1
+    assert result["filter_checks"][0]["matched_datasets"]
+    assert result["filter_checks"][0]["matched_values"]
+    assert any("编译态优先指标列为 duration_days" in item for item in result["derived_findings"])
+    assert any("编译态优先日期列为 biz_date" in item for item in result["derived_findings"])
 
 
 def test_debugger_node_rewrites_safe_fallback():
@@ -859,11 +1454,56 @@ def test_summarizer_node_builds_static_final_response():
                     "filters": ["上海"],
                     "sources": ["rule.pdf"],
                 },
+                "compiled": {
+                    "rule_specs": [
+                        {
+                            "source_text": "报销金额必须含税并上传合同",
+                            "normalized_text": "报销金额必须含税并上传合同",
+                            "subject_terms": ["合同"],
+                            "required_terms": ["合同"],
+                            "prohibited_terms": [],
+                            "temporal_constraints": [],
+                            "causal_constraints": [],
+                        }
+                    ],
+                    "metric_specs": [
+                        {
+                            "source_text": "审批时效口径",
+                            "normalized_text": "审批时效口径",
+                            "metric_name": "审批时效口径",
+                            "measure_terms": ["审批时效"],
+                            "group_terms": ["contract_id"],
+                            "preferred_date_terms": ["biz_date"],
+                            "temporal_constraints": [{"anchor_type": "year", "value": "2024", "source_text": "审批时效口径"}],
+                        }
+                    ],
+                    "filter_specs": [
+                        {
+                            "source_text": "上海",
+                            "normalized_text": "上海",
+                            "field": "keyword",
+                            "operator": "contains",
+                            "value": "上海",
+                            "preferred_date_terms": ["biz_date"],
+                            "temporal_constraints": [{"anchor_type": "year", "value": "2024", "source_text": "上海"}],
+                        }
+                    ],
+                    "graph_compilation_summary": {
+                        "candidate_count": 3,
+                        "accepted_count": 2,
+                        "rejected_count": 1,
+                        "reject_reasons": {"missing_causal_marker": 1},
+                    },
+                },
                 "knowledge_snapshot": {
                     "rewritten_query": "报销 规则 上海",
                     "recall_strategies": ["bm25", "vector"],
                     "cache_hit": True,
-                    "metadata": {"selected_count": 2},
+                    "metadata": {
+                        "selected_count": 2,
+                        "preferred_date_terms": ["biz_date"],
+                        "temporal_constraints": ["2024"],
+                    },
                     "evidence_refs": ["chunk-1"],
                 },
             },
@@ -916,20 +1556,28 @@ def test_summarizer_node_builds_static_final_response():
     assert any("日期列" in item for item in result["final_response"]["key_findings"])
     assert any("过滤条件" in item for item in result["final_response"]["key_findings"])
     assert any("分组统计" in item for item in result["final_response"]["key_findings"])
+    assert any("编译态优先日期列" in item for item in result["final_response"]["key_findings"])
+    assert any("检索偏好日期列" in item for item in result["final_response"]["key_findings"])
     assert result["final_response"]["details"]["rule_checks"][0]["issue_count"] == 2
     assert result["final_response"]["details"]["metric_checks"][0]["metric"] == "审批时效口径"
     assert result["final_response"]["details"]["metric_checks"][0]["matched_groups"][0] == "contract_id -> a"
     assert result["final_response"]["details"]["filter_checks"][0]["filter"] == "上海"
     assert result["final_response"]["details"]["knowledge_snapshot"]["rewritten_query"] == "报销 规则 上海"
+    assert result["final_response"]["details"]["knowledge_snapshot"]["metadata"]["preferred_date_terms"] == ["biz_date"]
     assert result["final_response"]["details"]["analysis_brief"]["question"] == ""
+    assert result["final_response"]["details"]["compiled_knowledge"]["rule_specs"][0]["source_text"] == "报销金额必须含税并上传合同"
+    assert result["final_response"]["details"]["compiled_knowledge"]["graph_compilation_summary"]["accepted_count"] == 2
     assert result["final_response"]["details"]["approved_skills"][0]["name"] == "approved_skill_demo"
     assert result["final_response"]["details"]["skill_strategy_hints"][0]["name"] == "approved_skill_demo"
     assert result["final_response"]["details"]["used_historical_skills"] == []
     assert any("税额缺失" in item for item in result["final_response"]["caveats"])
     assert any("指标提示" in item for item in result["final_response"]["caveats"])
     assert any("日期范围" in item for item in result["final_response"]["caveats"])
+    assert any("编译态时间约束" in item for item in result["final_response"]["caveats"])
+    assert any("检索时间约束" in item for item in result["final_response"]["caveats"])
     assert result["final_response"]["key_findings"]
     assert any("知识检索通道" in item for item in result["final_response"]["key_findings"])
+    assert any("编译态规则规格" in item for item in result["final_response"]["key_findings"])
 
 
 def test_summarizer_node_builds_dynamic_final_response():

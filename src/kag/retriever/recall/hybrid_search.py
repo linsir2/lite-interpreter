@@ -10,7 +10,7 @@ from config.settings import HYBRID_RRF_K, VECTOR_TOP_K
 from src.kag.builder.embedding import EmbeddingGenerator
 from src.storage.repository.knowledge_repo import KnowledgeRepo
 
-from .filters import normalize_filters
+from .filters import exact_match_filters, normalize_filters
 
 DEFAULT_WORKSPACE = "default_ws"
 
@@ -24,11 +24,12 @@ def vector_recall(
 ) -> list[dict[str, object]]:
     embedder = EmbeddingGenerator()
     query_vector = embedder.embed_query(query)
+    normalized_filters = normalize_filters(filters or {})
     results = KnowledgeRepo.search_vector_chunks(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         query_vector=query_vector,
-        filters=normalize_filters(filters or {}),
+        filters=exact_match_filters(normalized_filters),
         limit=top_k,
     )
     for item in results:

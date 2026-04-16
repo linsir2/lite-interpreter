@@ -13,12 +13,29 @@ from src.common import fit_items_to_budget, get_logger
 from src.common.control_plane import knowledge_evidence_refs
 from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
+from src.kag.builder.fusion import KnowledgeFusion
+from src.kag.compiler import GraphCompilationSummaryState, GraphCompiler, LexiconMatcher, SpecCompiler
 from src.kag.context.compressor import ContextCompressor
 from src.kag.context.formatter import ContextFormatter
 from src.kag.context.selector import ContextSelector
 from src.runtime import build_analysis_brief, resolve_runtime_decision
+from src.storage.repository.knowledge_repo import KnowledgeRepo
 
 logger = get_logger(__name__)
+
+
+def _build_graph_summary(compilation: Any) -> GraphCompilationSummaryState:
+    reject_reasons: dict[str, int] = {}
+    for item in list(getattr(compilation, "rejected", []) or []):
+        code = str(item.get("code") or "").strip()
+        if code:
+            reject_reasons[code] = reject_reasons.get(code, 0) + 1
+    return GraphCompilationSummaryState(
+        candidate_count=len(list(getattr(compilation, "accepted", []) or [])) + len(list(getattr(compilation, "rejected", []) or [])),
+        accepted_count=len(list(getattr(compilation, "accepted", []) or [])),
+        rejected_count=len(list(getattr(compilation, "rejected", []) or [])),
+        reject_reasons=reject_reasons,
+    )
 
 
 def context_builder_node(state: DagGraphState) -> dict[str, Any]:
@@ -68,6 +85,32 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
     business_context, refined_context = ContextFormatter.format(compressed)
     business_context_state = BusinessContextState.model_validate(business_context)
     exec_data.knowledge.business_context = business_context_state
+    spec_result = SpecCompiler().compile_business_context(
+        rules=business_context_state.rules,
+        metrics=business_context_state.metrics,
+        filters=business_context_state.filters,
+    )
+    exec_data.knowledge.compiled.query_signals = LexiconMatcher().classify_query(query)
+    exec_data.knowledge.compiled.rule_specs = list(spec_result.rules)
+    exec_data.knowledge.compiled.metric_specs = list(spec_result.metrics)
+    exec_data.knowledge.compiled.filter_specs = list(spec_result.filters)
+    exec_data.knowledge.compiled.spec_parse_errors = list(spec_result.errors)
+    graph_compilation = GraphCompiler.compile_spec_relations(
+        rule_specs=list(spec_result.rules),
+        metric_specs=list(spec_result.metrics),
+        filter_specs=list(spec_result.filters),
+    )
+    compiled_graph_triples = KnowledgeFusion.fuse([item.triple for item in list(graph_compilation.accepted or [])])
+    exec_data.knowledge.compiled.compiled_graph_triples = compiled_graph_triples
+    exec_data.knowledge.compiled.graph_compilation_summary = _build_graph_summary(graph_compilation)
+    if compiled_graph_triples:
+        persisted = KnowledgeRepo.save_graph_triples(
+            tenant_id=tenant_id,
+            workspace_id=exec_data.workspace_id,
+            triples=compiled_graph_triples,
+        )
+        if not persisted:
+            logger.warning("[ContextBuilder] 编译态图谱三元组写入失败，保留任务态结果继续执行。")
     analysis_brief = build_analysis_brief(
         query=query,
         exec_data=exec_data,
@@ -91,6 +134,22 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
             "dropped_candidate_count": max(0, len(raw_candidates) - len(compressed)),
             "analysis_mode": runtime_decision.analysis_mode,
             "evidence_strategy": runtime_decision.evidence_strategy,
+            "preferred_date_terms": list(
+                dict.fromkeys(
+                    str(value).strip()
+                    for spec in list(spec_result.metrics) + list(spec_result.filters)
+                    for value in list(getattr(spec, "preferred_date_terms", []) or [])
+                    if str(value).strip()
+                )
+            ),
+            "temporal_constraints": list(
+                dict.fromkeys(
+                    str(constraint.value).strip()
+                    for spec in list(spec_result.metrics) + list(spec_result.filters)
+                    for constraint in list(getattr(spec, "temporal_constraints", []) or [])
+                    if str(getattr(constraint, "value", "")).strip()
+                )
+            ),
         }
     )
     snapshot_payload["metadata"] = metadata

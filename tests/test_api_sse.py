@@ -83,6 +83,25 @@ def test_stream_route_returns_event_stream_response():
     assert response.media_type == "text/event-stream"
 
 
+def test_stream_route_allows_demo_subscription_before_task_exists():
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/tasks/demo-task-001/events",
+            "query_string": b"tenant_id=tenant-1&workspace_id=ws-1",
+            "path_params": {"task_id": "demo-task-001"},
+            "headers": [],
+        },
+        receive=receive,
+    )
+    response = asyncio.run(stream_task_events(request))
+    assert response.media_type == "text/event-stream"
+
+
 def test_stream_route_replays_journal_backlog():
     event_journal.clear()
     task_id = global_blackboard.create_task("tenant-1", "ws-1", "backlog")

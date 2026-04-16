@@ -74,6 +74,7 @@ HARNESS_POLICY_PATH = Path(_env_str("HARNESS_POLICY_PATH", str(PROJECT_ROOT / "c
 ANALYSIS_RUNTIME_POLICY_PATH = Path(
     _env_str("ANALYSIS_RUNTIME_POLICY_PATH", str(PROJECT_ROOT / "config" / "analysis_runtime.yaml"))
 )
+GRAPH_LEXICON_PATH = Path(_env_str("GRAPH_LEXICON_PATH", str(PROJECT_ROOT / "config" / "graph_lexicon.yaml")))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PROMETHEUS_PORT = _env_int("PROMETHEUS_PORT", 8000)
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -171,6 +172,8 @@ EMBEDDING_BATCH_SIZE: Final[int] = _env_int("EMBEDDING_BATCH_SIZE", 32)  # 批�
 # 图谱抽取配置
 EXTRACTION_MODEL_NAME: Final[str] = os.getenv("EXTRACTION_MODEL_NAME", "reasoning_model")  # 实体关系抽取模型别名
 GRAPH_TYPES: Final[list[str]] = os.getenv("GRAPH_TYPES", "semantic,temporal,causal,entity").split(",")  # MAGMA图谱类型
+GRAPH_EXTRACTOR_VERSION: Final[str] = _env_str("GRAPH_EXTRACTOR_VERSION", "2.0")
+GRAPH_STRUCTURED_LLM_ENABLED: Final[bool] = _env_bool("GRAPH_STRUCTURED_LLM_ENABLED", False)
 
 # 分块策略配置
 PARENT_CHUNK_SIZE: Final[int] = _env_int("PARENT_CHUNK_SIZE", 2000)  # 父块大小
@@ -188,6 +191,9 @@ VECTOR_TOP_K: Final[int] = _env_int("VECTOR_TOP_K", 20)  # 向量召回数量
 GRAPH_TOP_K: Final[int] = _env_int("GRAPH_TOP_K", 10)  # 图谱召回数量
 HYBRID_RRF_K: Final[int] = _env_int("HYBRID_RRF_K", 60)  # RRF融合数量
 RERANK_TOP_K: Final[int] = _env_int("RERANK_TOP_K", 15)  # 重排序后保留数量
+MAX_RETRIEVAL_TOP_K: Final[int] = _env_int("MAX_RETRIEVAL_TOP_K", 50)  # 对外暴露的 top_k 上限
+RERANK_CANDIDATE_LIMIT: Final[int] = _env_int("RERANK_CANDIDATE_LIMIT", 60)  # 重排前最大候选池
+RERANK_CANDIDATE_MULTIPLIER: Final[int] = _env_int("RERANK_CANDIDATE_MULTIPLIER", 4)  # 相对 top_k 的候选扩展倍数
 
 # 监控配置
 LANGFUSE_HOST: Final[str] = os.getenv("LANGFUSE_HOST", "http://localhost:3000")  # Langfuse服务地址

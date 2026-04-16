@@ -6,7 +6,7 @@ from typing import Any
 
 from src.storage.repository.knowledge_repo import KnowledgeRepo
 
-from .filters import extract_query_terms, normalize_filters
+from .filters import exact_match_filters, extract_query_terms, normalize_filters, temporal_query_terms
 
 SYNONYMS = {
     "规则": ["标准", "制度", "口径"],
@@ -22,7 +22,8 @@ def recall(
     workspace_id: str = "default_ws",
     top_k: int = 20,
 ) -> list[dict[str, object]]:
-    terms = extract_query_terms(query)
+    normalized_filters = normalize_filters(filters or {})
+    terms = extract_query_terms(query, temporal_query_terms(normalized_filters))
     expanded = list(terms)
     for term in terms:
         expanded.extend(SYNONYMS.get(term, []))
@@ -30,7 +31,7 @@ def recall(
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         query_terms=expanded,
-        filters=normalize_filters(filters or {}),
+        filters=exact_match_filters(normalized_filters),
         limit=top_k,
     )
     for item in results:

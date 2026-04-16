@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.common import generate_uuid, get_logger
+from src.kag.compiler.lexicon import LexiconMatcher
 from src.storage.schema import EntityNode
 
 logger = get_logger(__name__)
@@ -38,6 +39,7 @@ class ExtractedEntity:
 class EntityExtractor:
     def __init__(self, use_llm: bool = True):
         self.use_llm = False if use_llm else False
+        self._matcher = LexiconMatcher()
         logger.info(f"[EntityExtractor] 初始化完成，use_llm={self.use_llm}")
 
     def extract_entities(self, text: str, doc_id: str, chunk_id: str) -> list[EntityNode]:
@@ -50,11 +52,40 @@ class EntityExtractor:
 
     def _extract_with_rules(self, text: str) -> list[ExtractedEntity]:
         entities: list[ExtractedEntity] = []
+        entities.extend(self._extract_lexicon_entities(text))
         entities.extend(self._extract_named_entities(text))
         entities.extend(self._extract_temporal_entities(text))
         entities.extend(self._extract_causal_entities(text))
         entities.extend(self._extract_semantic_entities(text))
         return self._deduplicate_entities(entities)
+
+    def _extract_lexicon_entities(self, text: str) -> list[ExtractedEntity]:
+        entities: list[ExtractedEntity] = []
+        for match in self._matcher.match_text(text):
+            if match.category == "entity":
+                node_type = str(match.metadata.get("graph_label") or "semantic")
+                entity_type = EntityType.NAMED if node_type == "named" else EntityType.SEMANTIC
+            elif match.category == "temporal":
+                entity_type = EntityType.TEMPORAL
+            elif match.category == "causal":
+                entity_type = EntityType.CAUSAL
+            else:
+                continue
+            entities.append(
+                ExtractedEntity(
+                    text=match.canonical,
+                    type=entity_type,
+                    start_pos=match.span_start,
+                    end_pos=match.span_end,
+                    confidence=match.confidence,
+                    properties={
+                        "category": match.category,
+                        "source_lexicon": match.source_lexicon,
+                        "match_id": match.match_id,
+                    },
+                )
+            )
+        return entities
 
     def _extract_named_entities(self, text: str) -> list[ExtractedEntity]:
         entities: list[ExtractedEntity] = []
