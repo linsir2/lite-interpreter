@@ -40,6 +40,8 @@
 - `API_ENABLE_DIAGNOSTICS`
 - `API_ENABLE_POLICY_API`
 - `API_ENABLE_DEMO_TRACE`
+- `UPLOAD_MAX_FILE_BYTES`
+- `UPLOAD_MAX_REQUEST_BYTES`
 
 ### 2.4 认证
 
@@ -144,6 +146,7 @@ export API_SESSION_SECRET='replace-this-with-a-real-secret'
 - 支持多文件上传
 - 单文件上传返回兼容结构
 - 多文件上传返回 `uploaded_files` + `file_count`
+- 超过上传限制时返回 `413`
 
 如果你要让 workspace 资产进入新任务，不是自动发生的，需要在创建任务时传：
 

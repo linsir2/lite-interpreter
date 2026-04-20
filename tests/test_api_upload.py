@@ -189,6 +189,44 @@ def test_upload_asset_supports_multiple_files():
     assert len(body["uploaded_files"]) == 2
 
 
+def test_upload_asset_rejects_file_over_size_limit(monkeypatch):
+    monkeypatch.setattr("src.api.routers.upload_router.UPLOAD_MAX_FILE_BYTES", 4)
+    request = _FakeRequest(
+        form_data={
+            "tenant_id": "tenant-upload-limit-file",
+            "workspace_id": "ws-upload-limit-file",
+            "asset_kind": "business_document",
+            "file": _FakeUploadFile("rule.txt", b"12345"),
+        }
+    )
+    response = asyncio.run(upload_asset(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 413
+    assert body["error"] == "upload_file_too_large"
+
+
+def test_upload_asset_rejects_request_over_total_size_limit(monkeypatch):
+    monkeypatch.setattr("src.api.routers.upload_router.UPLOAD_MAX_FILE_BYTES", 10)
+    monkeypatch.setattr("src.api.routers.upload_router.UPLOAD_MAX_REQUEST_BYTES", 6)
+    form_data = _FakeFormData(
+        {
+            "tenant_id": "tenant-upload-limit-request",
+            "workspace_id": "ws-upload-limit-request",
+            "asset_kind": "business_document",
+        },
+        file_list=[
+            _FakeUploadFile("rule-a.txt", b"1234"),
+            _FakeUploadFile("rule-b.txt", b"1234"),
+        ],
+    )
+    response = asyncio.run(upload_asset(_FakeRequest(form_data=form_data)))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 413
+    assert body["error"] == "upload_request_too_large"
+
+
 def test_upload_asset_is_idempotent_per_task():
     _clear_upload_dir("tenant-upload-idempotent", "ws-upload-idempotent")
     task_id = global_blackboard.create_task(

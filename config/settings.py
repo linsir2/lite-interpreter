@@ -106,6 +106,8 @@ API_SESSION_TTL_SECONDS: Final[int] = _env_int("API_SESSION_TTL_SECONDS", 43200)
 DATA_DIR = PROJECT_ROOT / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
+UPLOAD_MAX_FILE_BYTES: Final[int] = _env_int("UPLOAD_MAX_FILE_BYTES", 25 * 1024 * 1024)
+UPLOAD_MAX_REQUEST_BYTES: Final[int] = _env_int("UPLOAD_MAX_REQUEST_BYTES", 50 * 1024 * 1024)
 
 # Dynamic engine / DeerFlow integration
 # DeerFlow is expected to be installed as a Python package such as

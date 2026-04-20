@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from config.settings import UPLOAD_DIR
+from config.settings import UPLOAD_DIR, UPLOAD_MAX_FILE_BYTES, UPLOAD_MAX_REQUEST_BYTES
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -165,7 +165,7 @@ def _build_temp_upload_path(target_dir: Path, file_name: str) -> Path:
     return target_dir / f".{file_name}.{generate_uuid()}.uploading"
 
 
-async def _stream_upload_to_temp(upload: Any, temp_path: Path) -> tuple[str, int]:
+async def _stream_upload_to_temp(upload: Any, temp_path: Path, *, max_bytes: int) -> tuple[str, int]:
     hasher = hashlib.sha256()
     total_size = 0
     temp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +187,8 @@ async def _stream_upload_to_temp(upload: Any, temp_path: Path) -> tuple[str, int
             hasher.update(chunk)
             handle.write(chunk)
             total_size += len(chunk)
+            if total_size > max_bytes:
+                raise ValueError("upload_too_large")
             if not supports_sized_reads:
                 break
     return hasher.hexdigest(), total_size
@@ -437,6 +439,7 @@ async def upload_asset(request: Request) -> JSONResponse:
 
     target_dir = Path(UPLOAD_DIR) / tenant_id / workspace_id
     uploaded_items: list[dict[str, Any]] = []
+    total_request_size = 0
     for upload in uploads:
         safe_name = _safe_name(getattr(upload, "filename", "upload.bin"))
         deduplicated = False
@@ -447,7 +450,21 @@ async def upload_asset(request: Request) -> JSONResponse:
             return JSONResponse({"error": str(exc), "file_name": safe_name}, status_code=400)
         temp_path = _build_temp_upload_path(target_dir, safe_name)
         try:
-            payload_sha256, payload_size = await _stream_upload_to_temp(upload, temp_path)
+            payload_sha256, payload_size = await _stream_upload_to_temp(
+                upload,
+                temp_path,
+                max_bytes=UPLOAD_MAX_FILE_BYTES,
+            )
+            total_request_size += payload_size
+            if total_request_size > UPLOAD_MAX_REQUEST_BYTES:
+                _cleanup_temp_upload(temp_path)
+                return JSONResponse(
+                    {
+                        "error": "upload_request_too_large",
+                        "max_request_bytes": UPLOAD_MAX_REQUEST_BYTES,
+                    },
+                    status_code=413,
+                )
             if task_id and execution_data is not None:
                 try:
                     existing_path, deduplicated = _find_existing_task_asset(
@@ -546,6 +563,18 @@ async def upload_asset(request: Request) -> JSONResponse:
                         file_path=str(target_path),
                         file_sha256=payload_sha256,
                     )
+        except ValueError as exc:
+            _cleanup_temp_upload(temp_path)
+            if str(exc) == "upload_too_large":
+                return JSONResponse(
+                    {
+                        "error": "upload_file_too_large",
+                        "file_name": safe_name,
+                        "max_file_bytes": UPLOAD_MAX_FILE_BYTES,
+                    },
+                    status_code=413,
+                )
+            raise
         except Exception:
             _cleanup_temp_upload(temp_path)
             raise

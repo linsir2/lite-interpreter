@@ -105,6 +105,9 @@
 
 - 单文件上传时，响应保持原有兼容结构
 - 多文件上传时，响应返回 `uploaded_files` 和 `file_count`
+- 上传同时受两层大小限制约束：
+  - 单文件大小上限：`UPLOAD_MAX_FILE_BYTES`
+  - 单请求总大小上限：`UPLOAD_MAX_REQUEST_BYTES`
 
 ## 快速开始
 
