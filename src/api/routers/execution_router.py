@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from src.api.audit_logging import record_api_audit
 from src.api.auth import require_request_role
@@ -18,7 +18,9 @@ from src.api.execution_resources import (
     build_task_workspace_payload,
     filter_records_after_event_id,
     matches_execution_stream_record,
+    read_artifact_content,
     read_task_execution_data,
+    resolve_execution_artifact,
     resolve_execution_resource,
     task_identity_for_execution,
     to_jsonable_payload,
@@ -250,6 +252,48 @@ async def list_execution_artifacts(request: Request) -> JSONResponse:
         metadata={"artifact_count": len(payload.get("artifacts", []))},
     )
     return JSONResponse(payload)
+
+
+async def get_execution_artifact_content(request: Request) -> Response:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
+    execution_id = request.path_params["execution_id"]
+    artifact_id = request.path_params["artifact_id"]
+    summary, execution_data = resolve_execution_resource(execution_id)
+    if summary is None or execution_data is None:
+        return JSONResponse({"error": "execution not found", "execution_id": execution_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+    )
+    if scope_error is not None:
+        return scope_error
+    artifact = resolve_execution_artifact(execution_data, execution_id, artifact_id)
+    if artifact is None:
+        return JSONResponse({"error": "artifact not found", "artifact_id": artifact_id}, status_code=404)
+    content = read_artifact_content(artifact)
+    if content is None:
+        return JSONResponse({"error": "artifact content unavailable", "artifact_id": artifact_id}, status_code=404)
+    payload, filename, media_type = content
+    record_api_audit(
+        request,
+        action="execution.artifact.content.read",
+        outcome="success",
+        tenant_id=execution_data.tenant_id,
+        workspace_id=execution_data.workspace_id,
+        task_id=execution_data.task_id,
+        execution_id=execution_id,
+        resource_type="execution_artifact_content",
+        resource_id=artifact_id,
+        metadata={"file_name": filename, "media_type": media_type},
+    )
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 async def list_execution_tool_calls(request: Request) -> JSONResponse:

@@ -10,8 +10,10 @@ from src.frontend.pages.task_console import (
     build_output_cards,
     collect_result_sections,
     describe_output_asset,
+    fetch_execution_artifact_bytes,
     fetch_json_payload,
     fetch_task_console_bundle,
+    find_artifact_reference,
     list_directory_entries,
     select_stream_target,
     summarize_result_header,
@@ -114,6 +116,24 @@ def test_collect_result_sections_extracts_lists():
     assert sections["compiled_knowledge"] == []
 
 
+def test_find_artifact_reference_matches_by_path():
+    task_result = {
+        "execution_artifacts": {
+            "sandbox:session-1": [
+                {
+                    "artifact_id": "sandbox:session-1:artifact:1",
+                    "path": "/tmp/report.txt",
+                }
+            ]
+        }
+    }
+    ref = find_artifact_reference(task_result, {"path": "/tmp/report.txt"})
+    assert ref == {
+        "execution_id": "sandbox:session-1",
+        "artifact_id": "sandbox:session-1:artifact:1",
+    }
+
+
 def test_select_stream_target_prefers_execution_stream_when_available():
     target = select_stream_target(
         {
@@ -157,6 +177,23 @@ def test_fetch_json_payload_returns_dict(monkeypatch):
     monkeypatch.setattr(httpx, "get", lambda url, timeout=20.0, headers=None: _FakeResponse())
     payload = fetch_json_payload("http://127.0.0.1:8000/api/tasks/task-1/result")
     assert payload["ok"] is True
+
+
+def test_fetch_execution_artifact_bytes_returns_bytes(monkeypatch):
+    class _FakeResponse:
+        is_error = False
+        content = b"artifact"
+        headers = {"content-type": "text/plain"}
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: _FakeResponse())
+    payload = fetch_execution_artifact_bytes(
+        "http://127.0.0.1:8000",
+        execution_id="sandbox:session-1",
+        artifact_id="sandbox:session-1:artifact:1",
+        tenant_id="tenant-1",
+        workspace_id="ws-1",
+    )
+    assert payload == (b"artifact", "text/plain")
 
 
 def test_fetch_task_console_bundle_uses_execution_endpoints(monkeypatch):

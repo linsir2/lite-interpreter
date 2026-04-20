@@ -80,6 +80,7 @@
 - 不再支持通过 query string 传 `access_token`
 - session login 只有在显式配置 `API_AUTH_USERS_JSON` 和 `API_SESSION_SECRET` 时才可用
 - `viewer / operator / admin` 三层角色仍然保留
+- 前端流式状态改为带 `Authorization` header 的 polling，不再通过浏览器 query token 建立 `EventSource`
 
 ### 执行产物暴露
 
@@ -88,6 +89,22 @@
 - 只允许暴露受控根目录内的本地产物路径（上传目录 / 输出目录）
 - 允许显式的 `http/https` 远端引用
 - 不再把任意绝对路径当作可预览/可下载文件直接交给前端
+- 文本和图片类 artifact 现在通过 execution artifact content API 读取内容，而不是前端直接读本机路径
+
+### Workspace 资产与任务输入
+
+当前版本支持更明确的“workspace 资产 -> task 输入”流：
+
+- workspace 层上传后，每个文件都有稳定 `file_sha256`
+- 新建 task 时，可通过 `workspace_asset_refs` 显式挂接这些资产
+- 前端工作台支持从当前 workspace 资产列表里选择要附带到新任务的输入
+
+### 多文件上传
+
+当前 `/api/uploads` 支持一次上传多个文件：
+
+- 单文件上传时，响应保持原有兼容结构
+- 多文件上传时，响应返回 `uploaded_files` 和 `file_count`
 
 ## 快速开始
 

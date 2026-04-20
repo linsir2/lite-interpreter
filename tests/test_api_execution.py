@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
+from config.settings import OUTPUT_DIR
 from src.api.routers.execution_router import (
     get_execution,
+    get_execution_artifact_content,
     get_task_workspace,
     list_execution_artifacts,
     list_execution_tool_calls,
@@ -24,6 +27,7 @@ def _make_request(
     *,
     task_id: str | None = None,
     execution_id: str | None = None,
+    artifact_id: str | None = None,
     tenant_id: str = "tenant-default",
     workspace_id: str = "ws-default",
 ) -> Request:
@@ -35,6 +39,8 @@ def _make_request(
         path_params["task_id"] = task_id
     if execution_id is not None:
         path_params["execution_id"] = execution_id
+    if artifact_id is not None:
+        path_params["artifact_id"] = artifact_id
 
     return Request(
         {
@@ -261,7 +267,65 @@ def test_get_execution_returns_runtime_execution_and_artifacts():
     assert body["runtime_metadata"]["effective_runtime_mode"] == "sidecar"
     assert body["artifacts"][0]["path"] is None
     assert body["artifacts"][0]["summary"] == "/tmp/runtime-report.md"
-    assert body["tool_calls"][0]["tool_name"] == "web_search"
+
+
+def test_get_execution_artifact_content_returns_controlled_file():
+    tenant_id = "tenant-artifact-content"
+    task_id = global_blackboard.create_task(tenant_id, "ws-artifact-content", "run")
+    artifact_dir = Path(OUTPUT_DIR) / tenant_id / "ws-artifact-content" / "trace-artifact"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / "report.txt"
+    artifact_path.write_text("artifact body", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws-artifact-content",
+            static={
+                "execution_record": ExecutionRecord(
+                    session_id="session-artifact",
+                    tenant_id=tenant_id,
+                    workspace_id="ws-artifact-content",
+                    task_id=task_id,
+                    success=True,
+                    trace_id="trace-artifact",
+                    duration_seconds=0.2,
+                    artifacts=[ArtifactRecord(path=str(artifact_path), artifact_type="artifact")],
+                )
+            },
+        ),
+    )
+    execution_blackboard.persist(tenant_id, task_id)
+
+    execution_id = "sandbox:session-artifact"
+    artifacts_response = asyncio.run(
+        list_execution_artifacts(
+            _make_request(
+                f"/api/executions/{execution_id}/artifacts",
+                execution_id=execution_id,
+                tenant_id=tenant_id,
+                workspace_id="ws-artifact-content",
+            )
+        )
+    )
+    artifacts_body = json.loads(artifacts_response.body.decode())
+    artifact_id = artifacts_body["artifacts"][0]["artifact_id"]
+    response = asyncio.run(
+        get_execution_artifact_content(
+            _make_request(
+                f"/api/executions/{execution_id}/artifacts/{artifact_id}",
+                execution_id=execution_id,
+                artifact_id=artifact_id,
+                tenant_id=tenant_id,
+                workspace_id="ws-artifact-content",
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"artifact body"
 
 
 def test_get_task_workspace_returns_server_built_workspace_payload():

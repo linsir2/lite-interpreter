@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 from src.blackboard import MemoryData, memory_blackboard
@@ -290,6 +291,12 @@ def test_memory_repo_usage_idempotency_survives_memory_reset_with_postgres_paylo
                 record["usage_count"] = int(params["usage_count"])
                 record["payload"] = json.loads(payload) if isinstance(payload, str) else payload
                 return _FakeResult([])
+            if "UPDATE agent_memories" in query:
+                payload = params["memory_payload"]
+                record = self.store.setdefault(key, {"usage_count": 0, "payload": {}})
+                record["usage_count"] = int(params["usage_count"])
+                record["payload"] = json.loads(payload) if isinstance(payload, str) else payload
+                return _FakeResult([])
             raise AssertionError(f"Unexpected SQL: {query}")
 
     class _FakeEngine:
@@ -437,6 +444,77 @@ def test_memory_repo_records_outcome_in_memory():
     assert skill["usage"]["success_count"] == 1
     assert skill["usage"]["failure_count"] == 0
     assert skill["usage"]["success_rate"] == 1.0
+
+
+def test_memory_repo_usage_updates_survive_concurrent_in_memory_calls():
+    MemoryRepo.clear()
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_usage_concurrent",
+        "ws_repo_usage_concurrent",
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+
+    threads = [
+        threading.Thread(
+            target=lambda task_id=task_id: MemoryRepo.record_skill_usage(
+                "tenant_repo_usage_concurrent",
+                "ws_repo_usage_concurrent",
+                "skill_usage_demo",
+                task_id=task_id,
+                stage="router",
+            )
+        )
+        for task_id in ("task-a", "task-b")
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    skill = MemoryRepo.list_approved_skills("tenant_repo_usage_concurrent", "ws_repo_usage_concurrent")[0]
+    assert skill["usage"]["usage_count"] == 2
+
+
+def test_memory_repo_outcome_updates_survive_concurrent_in_memory_calls():
+    MemoryRepo.clear()
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_outcome_concurrent",
+        "ws_repo_outcome_concurrent",
+        [
+            {
+                "name": "skill_outcome_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+
+    threads = [
+        threading.Thread(
+            target=lambda task_id=task_id, success=success: MemoryRepo.record_skill_outcome(
+                "tenant_repo_outcome_concurrent",
+                "ws_repo_outcome_concurrent",
+                "skill_outcome_demo",
+                task_id=task_id,
+                success=success,
+            )
+        )
+        for task_id, success in (("task-a", True), ("task-b", False))
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    skill = MemoryRepo.list_approved_skills("tenant_repo_outcome_concurrent", "ws_repo_outcome_concurrent")[0]
+    assert skill["usage"]["success_count"] == 1
+    assert skill["usage"]["failure_count"] == 1
 
 
 def test_memory_repo_outcome_is_idempotent_for_same_task():

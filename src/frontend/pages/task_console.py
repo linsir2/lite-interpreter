@@ -104,6 +104,7 @@ def fetch_task_console_bundle(
 
     executions: list[dict[str, Any]] = list(result_payload.get("executions") or [])
     tool_calls: list[dict[str, Any]] = list(result_payload.get("tool_calls") or [])
+    execution_artifacts: dict[str, list[dict[str, Any]]] = {}
     if not executions:
         try:
             executions_payload = fetch_json_payload(
@@ -133,10 +134,44 @@ def fetch_task_console_bundle(
             except Exception:
                 continue
             tool_calls.extend(list(tool_calls_payload.get("tool_calls") or []))
+            try:
+                artifacts_payload = fetch_json_payload(
+                    _scoped_url(
+                        base_url,
+                        f"/api/executions/{execution_id}/artifacts",
+                        tenant_id=tenant_id,
+                        workspace_id=workspace_id,
+                    ),
+                    timeout=timeout,
+                    api_token=api_token,
+                )
+                execution_artifacts[execution_id] = list(artifacts_payload.get("artifacts") or [])
+            except Exception:
+                execution_artifacts[execution_id] = []
+    elif executions:
+        for execution in executions:
+            execution_id = str(execution.get("execution_id", "")).strip()
+            if not execution_id:
+                continue
+            try:
+                artifacts_payload = fetch_json_payload(
+                    _scoped_url(
+                        base_url,
+                        f"/api/executions/{execution_id}/artifacts",
+                        tenant_id=tenant_id,
+                        workspace_id=workspace_id,
+                    ),
+                    timeout=timeout,
+                    api_token=api_token,
+                )
+                execution_artifacts[execution_id] = list(artifacts_payload.get("artifacts") or [])
+            except Exception:
+                execution_artifacts[execution_id] = []
 
     enriched = dict(result_payload)
     enriched["executions"] = executions
     enriched["tool_calls"] = tool_calls
+    enriched["execution_artifacts"] = execution_artifacts
     return enriched
 
 
@@ -154,6 +189,32 @@ def fetch_workspace_assets(
         api_token=api_token,
     )
     return list(payload.get("assets") or [])
+
+
+def fetch_execution_artifact_bytes(
+    api_base_url: str,
+    *,
+    execution_id: str,
+    artifact_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    api_token: str = "",
+    timeout: float = 20.0,
+) -> tuple[bytes, str] | None:
+    headers = api_auth_headers(api_token) or {}
+    response = httpx.get(
+        _scoped_url(
+            api_base_url.rstrip("/"),
+            f"/api/executions/{execution_id}/artifacts/{artifact_id}",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+        ),
+        timeout=timeout,
+        headers=headers,
+    )
+    if response.is_error:
+        return None
+    return response.content, str(response.headers.get("content-type") or "application/octet-stream")
 
 
 def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]:
@@ -249,6 +310,22 @@ def describe_output_asset(output: dict[str, Any]) -> dict[str, Any]:
         "preview_kind": preview_kind,
         "download_name": str((path_obj.name if path_obj else output.get("name")) or "artifact"),
     }
+
+
+def find_artifact_reference(task_result: dict[str, Any], output: dict[str, Any]) -> dict[str, str] | None:
+    path_value = str(output.get("path") or "").strip()
+    if not path_value:
+        return None
+    execution_artifacts = dict(task_result.get("execution_artifacts") or {})
+    for execution_id, artifacts in execution_artifacts.items():
+        for artifact in list(artifacts or []):
+            if str(artifact.get("path") or "").strip() != path_value:
+                continue
+            artifact_id = str(artifact.get("artifact_id") or "").strip()
+            if not artifact_id:
+                continue
+            return {"execution_id": str(execution_id), "artifact_id": artifact_id}
+    return None
 
 
 def list_directory_entries(path_value: str, max_items: int = 12) -> list[dict[str, Any]]:
@@ -455,7 +532,7 @@ def _render_analysis_body(st: Any, *, sections: dict[str, list[Any]]) -> None:
                                 if not entry["is_dir"] and entry["size"] is not None:
                                     st.caption(f"size={entry['size']} bytes")
                 elif asset["exists"] and asset["preview_kind"] in {"image", "text"}:
-                    st.caption("Preview/download disabled in client. Use controlled artifact APIs instead.")
+                    st.caption("Artifact preview/download depends on execution-level artifact handles.")
                 st.divider()
         else:
             st.caption("No outputs recorded.")
@@ -893,6 +970,7 @@ def render_task_console() -> None:
                         sections["outputs"], build_output_cards(sections["outputs"]), strict=False
                     ):
                         asset = describe_output_asset(raw_output)
+                        artifact_ref = find_artifact_reference(task_result, raw_output) if isinstance(task_result, dict) else None
                         st.markdown(
                             "\n".join(
                                 [
@@ -914,8 +992,35 @@ def render_task_console() -> None:
                                         st.code(entry["path"], language=None)
                                         if not entry["is_dir"] and entry["size"] is not None:
                                             st.caption(f"size={entry['size']} bytes")
+                        elif artifact_ref and asset["preview_kind"] in {"image", "text"}:
+                            fetched = fetch_execution_artifact_bytes(
+                                api_base_url,
+                                execution_id=artifact_ref["execution_id"],
+                                artifact_id=artifact_ref["artifact_id"],
+                                tenant_id=tenant_id,
+                                workspace_id=workspace_id,
+                                api_token=api_token,
+                            )
+                            if fetched is not None:
+                                file_bytes, content_type = fetched
+                                if asset["preview_kind"] == "image":
+                                    st.image(file_bytes, use_container_width=True)
+                                else:
+                                    preview_text = file_bytes.decode("utf-8", errors="ignore")[:1200]
+                                    if preview_text:
+                                        st.caption(preview_text)
+                                st.download_button(
+                                    label=f"Download {asset['display_name']}",
+                                    data=file_bytes,
+                                    file_name=asset["download_name"],
+                                    key=f"download-{task_id}-{artifact_ref['artifact_id']}",
+                                    mime=content_type,
+                                    use_container_width=True,
+                                )
+                            else:
+                                st.caption("Artifact API unavailable for this output.")
                         elif asset["exists"] and asset["preview_kind"] in {"image", "text"}:
-                            st.caption("Preview/download disabled in client. Use controlled artifact APIs instead.")
+                            st.caption("Artifact path present, but no safe artifact handle was found.")
                         st.divider()
                 else:
                     st.caption("No outputs recorded.")

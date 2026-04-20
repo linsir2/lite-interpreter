@@ -227,6 +227,28 @@ router
 
 其中真正的主产品面仍是 `Analysis Workspace`。
 
+### 4.1 产物消费边界
+
+当前 artifact 消费分两层：
+
+1. `execution_artifacts`
+   - 列出 artifact 元数据
+   - 包含稳定 `artifact_id`
+   - 不再把任意绝对路径当作前端直接可读文件
+
+2. `execution artifact content API`
+   - 通过 `GET /api/executions/{execution_id}/artifacts/{artifact_id}` 读取受控内容
+   - 只允许受控上传根和输出根内的本地文件
+   - 文本/图片预览与下载都应走这条 API
+
+### 4.2 workspace 资产到 task 输入
+
+当前控制面已经把“workspace 资产”和“task 输入”拆开：
+
+- workspace 上传只是把资产放进当前 workspace
+- task 真正执行什么输入，必须通过 `workspace_asset_refs` 显式绑定
+- 这样可以避免“一个 workspace 里所有资产自动污染每个新任务”的隐式行为
+
 ## 5. 当前最重要的工程结论
 
 1. **系统核心不是“更多模块”，而是边界更清楚**

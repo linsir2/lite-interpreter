@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import mimetypes
 from collections.abc import Mapping
 from datetime import date, datetime, time
+from pathlib import Path
 from typing import Any
 
 from src.blackboard import execution_blackboard
@@ -125,20 +127,49 @@ def build_execution_artifacts(execution_data: ExecutionData, execution_id: str) 
     execution_record = serialize_execution_record(execution_data.static.execution_record)
     if execution_id.startswith("sandbox:"):
         if execution_record and execution_id == f"sandbox:{execution_record['session_id']}":
-            return list(execution_record.get("artifacts", []) or [])
+            return [
+                {
+                    **dict(artifact),
+                    "artifact_id": f"{execution_id}:artifact:{index}",
+                }
+                for index, artifact in enumerate(list(execution_record.get("artifacts", []) or []), start=1)
+            ]
         return []
 
     if execution_id == f"runtime:{execution_data.task_id}":
         return [
             {
+                "artifact_id": f"{execution_id}:artifact:{index}",
                 "path": sanitize_artifact_reference(str(artifact)),
                 "artifact_type": "runtime_artifact",
                 "summary": str(artifact),
             }
-            for artifact in execution_data.dynamic.artifacts
+            for index, artifact in enumerate(execution_data.dynamic.artifacts, start=1)
             if artifact
         ]
     return []
+
+
+def resolve_execution_artifact(
+    execution_data: ExecutionData,
+    execution_id: str,
+    artifact_id: str,
+) -> dict[str, Any] | None:
+    for artifact in build_execution_artifacts(execution_data, execution_id):
+        if str(artifact.get("artifact_id") or "").strip() == str(artifact_id or "").strip():
+            return artifact
+    return None
+
+
+def read_artifact_content(artifact: Mapping[str, Any]) -> tuple[bytes, str, str] | None:
+    artifact_path = str(artifact.get("path") or "").strip()
+    if not artifact_path:
+        return None
+    path = Path(artifact_path)
+    if not path.exists() or not path.is_file():
+        return None
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return path.read_bytes(), path.name, media_type
 
 
 def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str | None) -> list[dict[str, Any]]:

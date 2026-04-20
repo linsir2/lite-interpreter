@@ -11,6 +11,7 @@
 3. 动态链与静态链之间的 handoff 是否稳定
 4. sandbox / auth / scope / artifact 边界是否安全
 5. docs 与 runtime contract 是否没有明显漂移
+6. workspace 资产、task 输入、artifact content API 这些产品流是否闭环
 
 ## 2. 常用命令
 
@@ -82,6 +83,8 @@ python3 scripts/check_hybrid_readiness.py
 - task/result/workspace/execution 读模型
 - 事件流与回放
 - 上传与资产枚举
+- workspace 资产显式挂接 task
+- artifact content API
 - diagnostics / conformance / runtime capability
 
 ### 3.4 前端层

@@ -11,7 +11,15 @@ def render_analysis_body(
     sections: dict[str, list[Any]],
     build_output_cards: Any,
     describe_output_asset: Any,
+    find_artifact_reference: Any,
+    fetch_execution_artifact_bytes: Any,
     list_directory_entries: Any,
+    task_result: dict[str, Any],
+    api_base_url: str,
+    tenant_id: str,
+    workspace_id: str,
+    api_token: str,
+    task_id: str,
 ) -> None:
     info_col1, info_col2 = st.columns(2)
     with info_col1:
@@ -173,6 +181,7 @@ def render_analysis_body(
         if sections["outputs"]:
             for raw_output, card in zip(sections["outputs"], build_output_cards(sections["outputs"]), strict=False):
                 asset = describe_output_asset(raw_output)
+                artifact_ref = find_artifact_reference(task_result, raw_output) if isinstance(task_result, dict) else None
                 st.markdown("\n".join([f"**[{card['icon']}] {card['title']}**", f"`{card['type']}`", card["subtitle"]]))
                 if asset["path"]:
                     st.code(asset["path"], language=None)
@@ -186,8 +195,35 @@ def render_analysis_body(
                                 st.code(entry["path"], language=None)
                                 if not entry["is_dir"] and entry["size"] is not None:
                                     st.caption(f"size={entry['size']} bytes")
+                elif artifact_ref and asset["preview_kind"] in {"image", "text"}:
+                    fetched = fetch_execution_artifact_bytes(
+                        api_base_url,
+                        execution_id=artifact_ref["execution_id"],
+                        artifact_id=artifact_ref["artifact_id"],
+                        tenant_id=tenant_id,
+                        workspace_id=workspace_id,
+                        api_token=api_token,
+                    )
+                    if fetched is not None:
+                        file_bytes, content_type = fetched
+                        if asset["preview_kind"] == "image":
+                            st.image(file_bytes, use_container_width=True)
+                        else:
+                            preview_text = file_bytes.decode("utf-8", errors="ignore")[:1200]
+                            if preview_text:
+                                st.caption(preview_text)
+                        st.download_button(
+                            label=f"Download {asset['display_name']}",
+                            data=file_bytes,
+                            file_name=asset["download_name"],
+                            key=f"download-{task_id}-{artifact_ref['artifact_id']}",
+                            mime=content_type,
+                            use_container_width=True,
+                        )
+                    else:
+                        st.caption("Artifact API unavailable for this output.")
                 elif asset["exists"] and asset["preview_kind"] in {"image", "text"}:
-                    st.caption("Preview/download disabled in client. Use controlled artifact APIs instead.")
+                    st.caption("Artifact path present, but no safe artifact handle was found.")
                 st.divider()
         else:
             st.caption("No outputs recorded.")

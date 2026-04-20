@@ -17,6 +17,7 @@ from src.api.routers.audit_router import list_audit_logs
 from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
 from src.api.routers.execution_router import (
     get_execution,
+    get_execution_artifact_content,
     get_task_workspace,
     list_execution_artifacts,
     list_execution_tool_calls,
@@ -99,6 +100,11 @@ app = Starlette(
         Route("/api/skills", list_workspace_skills, methods=["GET"]),
         Route("/api/executions/{execution_id}", get_execution, methods=["GET"]),
         Route("/api/executions/{execution_id}/artifacts", list_execution_artifacts, methods=["GET"]),
+        Route(
+            "/api/executions/{execution_id}/artifacts/{artifact_id}",
+            get_execution_artifact_content,
+            methods=["GET"],
+        ),
         Route("/api/executions/{execution_id}/tool-calls", list_execution_tool_calls, methods=["GET"]),
         Route("/api/executions/{execution_id}/events", stream_execution_events, methods=["GET"]),
         Route("/api/executions/{execution_id}/events/poll", poll_execution_events, methods=["GET"]),

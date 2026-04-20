@@ -78,6 +78,11 @@ cd /home/linsir365/projects/lite-interpreter
 PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
 ```
 
+说明：
+
+- 当前前端状态流采用 polling，不再依赖浏览器 query-token `EventSource`
+- 因此前端请求必须能携带正常的 `Authorization: Bearer ...` 头
+
 ## 4. 推荐配置
 
 ### 4.1 动态运行时
@@ -130,6 +135,21 @@ export API_SESSION_SECRET='replace-this-with-a-real-secret'
 - `parquet`
 
 建议先预转换，再上传。
+
+### 5.1 上传接口行为
+
+当前 `/api/uploads` 行为：
+
+- 支持单文件上传
+- 支持多文件上传
+- 单文件上传返回兼容结构
+- 多文件上传返回 `uploaded_files` + `file_count`
+
+如果你要让 workspace 资产进入新任务，不是自动发生的，需要在创建任务时传：
+
+- `workspace_asset_refs`
+
+其值是上传返回的 `file_sha256` 列表。
 
 ### 业务文档
 

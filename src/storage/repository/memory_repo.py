@@ -460,6 +460,99 @@ class MemoryRepo:
             return existing_payload, usage_count
 
     @classmethod
+    def _mutate_approved_skill_in_memory(
+        cls,
+        tenant_id: str,
+        workspace_id: str,
+        skill_name: str,
+        mutator,
+    ) -> dict[str, Any] | None:
+        key = ("approved_skill", str(skill_name).strip())
+        with cls._lock:
+            workspace_bucket = cls._memory_store.setdefault(tenant_id, {}).setdefault(workspace_id, {})
+            payload = dict(workspace_bucket.get(key, {}) or {})
+            if not payload:
+                return None
+            updated = mutator(payload)
+            if not updated:
+                return None
+            workspace_bucket[key] = dict(updated)
+            return dict(updated)
+
+    @classmethod
+    def _mutate_approved_skill_in_postgres(
+        cls,
+        tenant_id: str,
+        workspace_id: str,
+        skill_name: str,
+        mutator,
+    ) -> dict[str, Any] | None:
+        cls._require_backend("mutate_approved_skill")
+        if not pg_client.engine:
+            return None
+        cls._ensure_table()
+        select_sql = text(
+            """
+            SELECT memory_payload, usage_count
+            FROM agent_memories
+            WHERE tenant_id = :tenant_id
+              AND workspace_id = :workspace_id
+              AND memory_kind = 'approved_skill'
+              AND memory_key = :memory_key
+            FOR UPDATE
+            """
+        )
+        update_sql = text(
+            """
+            UPDATE agent_memories
+            SET memory_payload = :memory_payload,
+                usage_count = :usage_count,
+                last_used_at = :last_used_at,
+                updated_at = NOW()
+            WHERE tenant_id = :tenant_id
+              AND workspace_id = :workspace_id
+              AND memory_kind = 'approved_skill'
+              AND memory_key = :memory_key
+            """
+        )
+        try:
+            with pg_client.engine.begin() as conn:
+                row = conn.execute(
+                    select_sql,
+                    {
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                        "memory_key": skill_name,
+                    },
+                ).fetchone()
+                if not row:
+                    return None
+                payload = row[0]
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                current_payload = dict(payload or {})
+                updated = mutator(current_payload)
+                if not updated:
+                    return None
+                usage = dict(updated.get("usage", {}) or {})
+                conn.execute(
+                    update_sql,
+                    {
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                        "memory_key": skill_name,
+                        "memory_payload": json.dumps(updated, default=str, ensure_ascii=False),
+                        "usage_count": int(usage.get("usage_count", 0) or 0),
+                        "last_used_at": usage.get("last_used_at"),
+                    },
+                )
+            cls._set_memory_record(tenant_id, workspace_id, "approved_skill", skill_name, updated)
+            return updated
+        except Exception as exc:
+            cls._handle_backend_error("原子更新 approved skill", exc)
+            return None
+
+    @classmethod
     def record_skill_usage(
         cls,
         tenant_id: str,
@@ -469,29 +562,20 @@ class MemoryRepo:
         task_id: str,
         stage: str,
     ) -> dict[str, Any] | None:
-        existing_payload, existing_count = cls._load_skill_usage_snapshot(
-            tenant_id,
-            workspace_id,
-            skill_name,
-        )
-        existing_usage = dict((existing_payload or {}).get("usage", {}) or {})
-        if str(existing_usage.get("last_task_id", "")) == str(task_id) and str(
-            existing_usage.get("last_stage", "")
-        ) == str(stage):
-            return existing_payload
+        def _mutator(payload: dict[str, Any]) -> dict[str, Any] | None:
+            usage = dict(payload.get("usage", {}) or {})
+            if str(usage.get("last_task_id", "")) == str(task_id) and str(usage.get("last_stage", "")) == str(stage):
+                return payload
+            usage["last_used_at"] = get_utc_now().isoformat()
+            usage["usage_count"] = int(usage.get("usage_count", 0) or 0) + 1
+            usage["last_task_id"] = task_id
+            usage["last_stage"] = stage
+            payload["usage"] = usage
+            return payload
 
-        updated_skill = dict(existing_payload or {})
-        if not updated_skill:
-            return None
-        usage = dict(updated_skill.get("usage", {}) or {})
-        usage["last_used_at"] = get_utc_now().isoformat()
-        usage["usage_count"] = max(existing_count, int(usage.get("usage_count", 0) or 0)) + 1
-        usage["last_task_id"] = task_id
-        usage["last_stage"] = stage
-        updated_skill["usage"] = usage
-        if cls.save_approved_skills(tenant_id, workspace_id, [updated_skill]):
-            return updated_skill
-        return None
+        if pg_client.engine:
+            return cls._mutate_approved_skill_in_postgres(tenant_id, workspace_id, skill_name, _mutator)
+        return cls._mutate_approved_skill_in_memory(tenant_id, workspace_id, skill_name, _mutator)
 
     @classmethod
     def record_skill_outcome(
@@ -503,34 +587,24 @@ class MemoryRepo:
         task_id: str,
         success: bool,
     ) -> dict[str, Any] | None:
-        existing_payload = next(
-            (
-                skill
-                for skill in cls.list_approved_skills(tenant_id, workspace_id, limit=1000)
-                if str(skill.get("name", "")).strip() == str(skill_name).strip()
-            ),
-            None,
-        )
-        existing_usage = dict((existing_payload or {}).get("usage", {}) or {})
-        if str(existing_usage.get("last_outcome_task_id", "")) == str(task_id) and bool(
-            existing_usage.get("last_outcome_success")
-        ) == bool(success):
-            return existing_payload
+        def _mutator(payload: dict[str, Any]) -> dict[str, Any] | None:
+            usage = dict(payload.get("usage", {}) or {})
+            if str(usage.get("last_outcome_task_id", "")) == str(task_id) and bool(
+                usage.get("last_outcome_success")
+            ) == bool(success):
+                return payload
+            usage["success_count"] = int(usage.get("success_count", 0) or 0) + (1 if success else 0)
+            usage["failure_count"] = int(usage.get("failure_count", 0) or 0) + (0 if success else 1)
+            total = usage["success_count"] + usage["failure_count"]
+            usage["success_rate"] = round(usage["success_count"] / total, 4) if total else 0.0
+            usage["last_outcome_task_id"] = task_id
+            usage["last_outcome_success"] = bool(success)
+            payload["usage"] = usage
+            return payload
 
-        updated_skill = dict(existing_payload or {})
-        if not updated_skill:
-            return None
-        usage = dict(updated_skill.get("usage", {}) or {})
-        usage["success_count"] = int(usage.get("success_count", 0) or 0) + (1 if success else 0)
-        usage["failure_count"] = int(usage.get("failure_count", 0) or 0) + (0 if success else 1)
-        total = usage["success_count"] + usage["failure_count"]
-        usage["success_rate"] = round(usage["success_count"] / total, 4) if total else 0.0
-        usage["last_outcome_task_id"] = task_id
-        usage["last_outcome_success"] = bool(success)
-        updated_skill["usage"] = usage
-        if cls.save_approved_skills(tenant_id, workspace_id, [updated_skill]):
-            return updated_skill
-        return None
+        if pg_client.engine:
+            return cls._mutate_approved_skill_in_postgres(tenant_id, workspace_id, skill_name, _mutator)
+        return cls._mutate_approved_skill_in_memory(tenant_id, workspace_id, skill_name, _mutator)
 
     @classmethod
     def clear(cls) -> None:
