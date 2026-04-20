@@ -117,16 +117,6 @@ capability_registry.register(
 )
 capability_registry.register(
     CapabilityDescriptor(
-        capability_id="state_sync",
-        category="control-plane",
-        description="Write structured patches back to the execution blackboard.",
-        aliases=("blackboard_sync",),
-        risk_tags=("state-write",),
-        writes_state=True,
-    )
-)
-capability_registry.register(
-    CapabilityDescriptor(
         capability_id="dynamic_trace",
         category="control-plane",
         description="Write dynamic runtime trace events into the control plane.",

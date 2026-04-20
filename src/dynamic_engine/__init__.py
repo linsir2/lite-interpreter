@@ -9,8 +9,7 @@ from src.dynamic_engine.deerflow_bridge import (
     DeerflowTaskRequest,
     DeerflowTaskResult,
 )
-from src.dynamic_engine.runtime_gateway import RuntimeGateway
-from src.dynamic_engine.runtime_registry import runtime_registry
+from src.dynamic_engine.runtime_backends import get_runtime_manifest, list_runtime_manifests
 from src.dynamic_engine.supervisor import DynamicRunPlan, DynamicSupervisor
 from src.dynamic_engine.trace_normalizer import TraceNormalizer
 
@@ -22,7 +21,7 @@ __all__ = [
     "DeerflowBridge",
     "DeerflowTaskRequest",
     "DeerflowTaskResult",
-    "RuntimeGateway",
     "TraceNormalizer",
-    "runtime_registry",
+    "get_runtime_manifest",
+    "list_runtime_manifests",
 ]

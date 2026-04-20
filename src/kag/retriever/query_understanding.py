@@ -6,8 +6,7 @@ import re
 from typing import Any
 
 from src.common.logger import get_logger
-from src.kag.compiler import SpecCompiler, SpecParseError
-from src.kag.compiler.lexicon import LexiconMatcher
+from src.kag.compiler import KnowledgeCompilerService, SpecParseError
 
 logger = get_logger(__name__)
 
@@ -28,9 +27,7 @@ def validate_filters(filters: dict[str, Any]) -> dict[str, Any]:
 
 
 def analyze_query(query: str, tenant_id: str) -> tuple[str, dict[str, Any], float, bool]:
-    matcher = LexiconMatcher()
-    spec_compiler = SpecCompiler(matcher)
-    signals = matcher.classify_query(query)
+    signals = KnowledgeCompilerService.classify_query(query)
     filters: dict[str, Any] = {}
     year_match = re.search(r"(20\d{2})", query)
     if year_match:
@@ -39,7 +36,7 @@ def analyze_query(query: str, tenant_id: str) -> tuple[str, dict[str, Any], floa
         if keyword in query or any(item.canonical == keyword for item in signals.entity_hits):
             filters["doc_type"] = doc_type
             break
-    filter_spec = spec_compiler.parse_filter(query)
+    filter_spec = KnowledgeCompilerService.parse_filter(query)
     if not isinstance(filter_spec, SpecParseError):
         if filter_spec.field == "year" and str(filter_spec.value).strip():
             filters["year"] = str(filter_spec.value).strip()

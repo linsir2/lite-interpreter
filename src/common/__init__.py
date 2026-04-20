@@ -34,7 +34,9 @@ from .utils import (
     generate_uuid,
     get_current_timestamp,
     get_utc_now,
+    scope_identifier_to_db_name,
     truncate_string,
+    validate_scope_identifier,
 )
 
 __all__ = [
@@ -56,6 +58,8 @@ __all__ = [
     "format_utc_datetime",
     "get_current_timestamp",
     "build_tenant_key",
+    "validate_scope_identifier",
+    "scope_identifier_to_db_name",
     "event_bus",
     "event_journal",
     "capability_registry",

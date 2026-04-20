@@ -6,11 +6,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from src.blackboard.task_state_services import ExecutionStateService
 from src.mcp_gateway.tools.knowledge_query_tool import KnowledgeQueryTool
 from src.mcp_gateway.tools.memory_sync_tool import MemorySyncTool
 from src.mcp_gateway.tools.sandbox_exec_tool import SandboxExecTool
 from src.mcp_gateway.tools.skill_auth_tool import SkillAuthTool
-from src.mcp_gateway.tools.state_sync_tool import StateSyncTool
 
 ToolHandler = Callable[[dict[str, Any], dict[str, Any]], Any]
 
@@ -88,25 +88,13 @@ def _build_default_server() -> MCPToolServer:
     )
     server.register(
         ToolSpec(
-            name="state_sync",
-            capability_id=StateSyncTool.CAPABILITY_ID,
-            description="Apply a partial execution-blackboard patch.",
-            handler=lambda args, ctx: StateSyncTool.sync_execution_patch(
-                str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
-                str(args.get("task_id") or ctx.get("task_id") or ""),
-                dict(args.get("patch") or {}),
-            ),
-        )
-    )
-    server.register(
-        ToolSpec(
             name="dynamic_trace",
             capability_id="dynamic_trace",
             description="Append one normalized dynamic trace event.",
-            handler=lambda args, ctx: StateSyncTool.append_dynamic_trace_event(
-                str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
-                str(args.get("task_id") or ctx.get("task_id") or ""),
-                dict(args.get("event") or {}),
+            handler=lambda args, ctx: ExecutionStateService.append_dynamic_trace_event(
+                tenant_id=str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
+                task_id=str(args.get("task_id") or ctx.get("task_id") or ""),
+                event=dict(args.get("event") or {}),
             ),
         )
     )

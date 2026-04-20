@@ -34,6 +34,20 @@ def _encode_sse(data: dict) -> str:
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _records_after_event_id(records: list[dict[str, Any]], after_event_id: str | None) -> list[dict[str, Any]]:
+    if not after_event_id:
+        return records
+    seen = False
+    filtered: list[dict[str, Any]] = []
+    for record in records:
+        if seen:
+            filtered.append(record)
+            continue
+        if str(record.get("event_id", "")) == after_event_id:
+            seen = True
+    return filtered
+
+
 def _event_matches_subscription(
     event: Event,
     *,
@@ -144,6 +158,49 @@ async def stream_task_events(request: Request) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
         },
+    )
+
+
+async def poll_task_events(request: Request) -> JSONResponse:
+    role_error = require_request_role(request, "viewer")
+    if role_error is not None:
+        return role_error
+    task_id = request.path_params["task_id"]
+    try:
+        task = global_blackboard.get_task_state(task_id)
+    except TaskNotExistError:
+        return JSONResponse({"error": "task not found", "task_id": task_id}, status_code=404)
+    scope_error = ensure_resource_scope(
+        request,
+        tenant_id=task.tenant_id,
+        workspace_id=task.workspace_id,
+    )
+    if scope_error is not None:
+        return scope_error
+    after_event_id = str(request.query_params.get("after_event_id") or "").strip() or None
+    backlog = event_journal.read(task.tenant_id, task_id, workspace_id=task.workspace_id)
+    filtered = _records_after_event_id(backlog, after_event_id)
+    events = [TaskStreamEvent.from_record(record).to_dict() for record in filtered]
+    record_api_audit(
+        request,
+        action="task.events.poll",
+        outcome="success",
+        tenant_id=task.tenant_id,
+        workspace_id=task.workspace_id,
+        task_id=task_id,
+        resource_type="task_event_poll",
+        resource_id=task_id,
+        metadata={"event_count": len(events)},
+    )
+    return JSONResponse(
+        {
+            "task_id": task_id,
+            "tenant_id": task.tenant_id,
+            "workspace_id": task.workspace_id,
+            "after_event_id": after_event_id,
+            "last_event_id": str(events[-1]["event_id"]) if events else after_event_id,
+            "events": events,
+        }
     )
 
 

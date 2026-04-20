@@ -17,6 +17,7 @@ from src.common.control_plane import (
     execution_success,
     knowledge_evidence_refs,
     parser_reports_from_documents,
+    sanitize_artifact_reference,
     static_artifacts,
     task_governance_profile,
 )
@@ -67,6 +68,7 @@ def _preferred_temporal_summary(compiled_knowledge_payload: dict[str, Any]) -> l
 def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, Any]:
     output = execution_output(exec_data.static.execution_record)
     structured_output = _as_json(output)
+    is_debugger_fallback = str(structured_output.get("status") or "").strip() == "debugger_fallback"
     analysis_brief_payload = exec_data.knowledge.analysis_brief.model_dump(mode="json")
     business_context_payload = exec_data.knowledge.business_context.model_dump(mode="json")
     knowledge_snapshot_payload = exec_data.knowledge.knowledge_snapshot.model_dump(mode="json")
@@ -164,14 +166,23 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
             if check.get("matched_datasets") or check.get("matched_documents") or check.get("matched_date_ranges")
         ]
     )
-    if not findings:
+    if is_debugger_fallback:
+        findings = ["静态链未能生成可执行分析代码，当前结果仅包含调试回退诊断信息"]
+    elif not findings:
         findings.append("静态链已成功执行，但未提取出更多结构化结论")
 
-    answer = (
-        "已完成静态链分析。"
-        f" {'；'.join(findings)}。"
-        f" 任务输出状态为 {'成功' if execution_success(exec_data.static.execution_record) else '失败'}。"
-    )
+    if is_debugger_fallback:
+        answer = (
+            "静态链未完成。"
+            f" 调试回退诊断为：{_trim(str(structured_output.get('error') or exec_data.static.latest_error_traceback or 'unknown error'), limit=400)}。"
+            " 当前输出不是有效分析结果。"
+        )
+    else:
+        answer = (
+            "已完成静态链分析。"
+            f" {'；'.join(findings)}。"
+            f" 任务输出状态为 {'成功' if execution_success(exec_data.static.execution_record) else '失败'}。"
+        )
     evidence_refs = knowledge_evidence_refs(knowledge_snapshot_payload)
     if not evidence_refs:
         evidence_refs = [
@@ -237,6 +248,8 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     caveats = []
     if exec_data.static.latest_error_traceback:
         caveats.append(_trim(exec_data.static.latest_error_traceback))
+    if is_debugger_fallback:
+        caveats.append("debugger fallback 只提供错误诊断，不代表分析成功。")
     for check in rule_checks[:5]:
         warnings = check.get("warnings", []) or []
         for warning in warnings[:2]:
@@ -322,8 +335,8 @@ def _build_dynamic_response(task_id: str, exec_data, memory_data) -> dict[str, A
         {
             "type": "artifact",
             "name": os.path.basename(str(artifact)) if artifact else "artifact",
-            "path": artifact,
-            "summary": artifact,
+            "path": sanitize_artifact_reference(str(artifact)),
+            "summary": str(artifact),
         }
         for artifact in exec_data.dynamic.artifacts
     ]
@@ -378,11 +391,9 @@ def summarizer_node(state: Mapping[str, Any]) -> dict[str, Any]:
         sub_status="正在组装最终回复",
     )
 
-    mode = (
-        "dynamic"
-        if execution_intent_routing_mode(exec_data.control.execution_intent) == "dynamic" or exec_data.dynamic.summary
-        else "static"
-    )
+    routing_mode = execution_intent_routing_mode(exec_data.control.execution_intent)
+    has_static_execution = exec_data.static.execution_record is not None
+    mode = "static" if has_static_execution else "dynamic" if routing_mode == "dynamic" or exec_data.dynamic.summary else "static"
     final_response = (
         _build_dynamic_response(task_id, exec_data, memory_data)
         if mode == "dynamic"

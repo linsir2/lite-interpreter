@@ -7,7 +7,7 @@ from config.settings import MAX_RETRIEVAL_TOP_K, RERANK_CANDIDATE_LIMIT
 from src.blackboard.schema import RetrievalPlan
 from src.common import EvidencePacket
 from src.common.logger import get_logger
-from src.kag.compiler import LexiconMatcher
+from src.kag.compiler import KnowledgeCompilerService
 
 from .budget import enforce_budget
 from .cache import RetrievalCache
@@ -33,7 +33,7 @@ def is_keyword_query(query: str) -> bool:
 
     has_chinese = any("\u4e00" <= char <= "\u9fff" for char in normalized)
     if has_chinese:
-        lexical_hits = LexiconMatcher().match_text(normalized)
+        lexical_hits = KnowledgeCompilerService.match_text(normalized)
         if lexical_hits and len(lexical_hits) <= 4:
             return True
         compact = normalized.replace(" ", "")

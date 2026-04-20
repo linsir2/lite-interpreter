@@ -16,6 +16,7 @@ __all__ = [
     "LexiconMatch",
     "LexiconMatcher",
     "MetricSpec",
+    "KnowledgeCompilerService",
     "QueryLexicalSignals",
     "RuleSpec",
     "SpecCompilationResult",
@@ -42,6 +43,10 @@ def __getattr__(name: str):
         from .parser import SpecCompilationResult, SpecCompiler
 
         return {"SpecCompiler": SpecCompiler, "SpecCompilationResult": SpecCompilationResult}[name]
+    if name == "KnowledgeCompilerService":
+        from .service import KnowledgeCompilerService
+
+        return KnowledgeCompilerService
     if name in {"GraphCompilationResult", "GraphCompiler", "GraphConstraintViolation", "GraphValidator"}:
         from .graph import GraphCompilationResult, GraphCompiler, GraphConstraintViolation, GraphValidator
 

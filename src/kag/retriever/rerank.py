@@ -6,14 +6,13 @@ import re
 
 from config.settings import RERANK_CANDIDATE_LIMIT, RERANK_CANDIDATE_MULTIPLIER
 
-from src.kag.compiler.lexicon import LexiconMatcher
+from src.kag.compiler import KnowledgeCompilerService
 
 
 class KeywordReranker:
     @staticmethod
     def score(query: str, text: str) -> float:
-        matcher = LexiconMatcher()
-        lexical_terms = [match.canonical for match in matcher.match_text(query) if match.canonical]
+        lexical_terms = [match.canonical for match in KnowledgeCompilerService.match_text(query) if match.canonical]
         keywords = lexical_terms or [token for token in re.split(r"\W+", query.lower()) if token]
         lowered_text = text.lower()
         return float(sum(lowered_text.count(keyword) for keyword in keywords))

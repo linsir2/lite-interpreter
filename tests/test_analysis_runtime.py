@@ -44,7 +44,8 @@ def test_runtime_decision_classifies_dynamic_research():
     assert decision.final_mode == "dynamic"
     assert decision.coarse_mode == "dynamic"
     assert decision.destinations == ("dynamic_swarm",)
-    assert decision.fallback_destinations
+    assert decision.continuation == "finish"
+    assert decision.next_static_steps == ()
     assert decision.requires_external_research is True
     assert decision.routing_stage in {"coarse", "fine", "fallback"}
     assert "外部事实核验" in decision.known_gaps[0] or "联网检索" in "".join(decision.known_gaps)
@@ -59,7 +60,7 @@ def test_runtime_decision_prefers_document_rule_analysis_for_rule_only_query():
 
     assert decision.analysis_mode == "document_rule_analysis"
     assert decision.final_mode == "static"
-    assert decision.fallback_reason == ""
+    assert decision.continuation == "finish"
 
 
 def test_runtime_decision_marks_hybrid_mode_and_metadata():

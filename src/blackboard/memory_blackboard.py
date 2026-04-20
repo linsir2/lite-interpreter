@@ -63,9 +63,12 @@ class MemoryBlackboard(BaseSubBlackboard):
         if not data:
             return False
         try:
-            full_state = StateRepo.load_blackboard_state(tenant_id, task_id) or {}
-            full_state[self.board_name] = data.model_dump(mode="json")
-            StateRepo.save_blackboard_state(tenant_id, task_id, data.workspace_id, full_state)
+            StateRepo.merge_blackboard_sections(
+                tenant_id,
+                task_id,
+                data.workspace_id,
+                {self.board_name: data.model_dump(mode="json")},
+            )
             return True
         except Exception as exc:
             logger.error(f"记忆数据持久化失败: {exc}", extra={"trace_id": task_id})

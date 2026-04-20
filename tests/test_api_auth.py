@@ -39,17 +39,17 @@ def _make_request(
         "headers": headers or [],
     }
     if auth_context is not None:
-        scope["state"] = {"auth_context": auth_context}
+        scope["state"] = {"auth_context": auth_context, "auth_checked": True}
     return Request(scope, receive=receive)
 
 
-def test_request_bearer_token_reads_query_access_token():
+def test_request_bearer_token_ignores_query_access_token():
     request = _make_request(
         method="GET",
         path="/api/tasks/task-1/events",
         query_string=b"access_token=query-token",
     )
-    assert request_bearer_token(request) == "query-token"
+    assert request_bearer_token(request) == ""
 
 
 def test_authenticate_request_accepts_configured_bearer_token(monkeypatch):
@@ -71,6 +71,7 @@ def test_authenticate_request_accepts_configured_bearer_token(monkeypatch):
 
 
 def test_login_session_returns_bearer_token_for_configured_user(monkeypatch):
+    monkeypatch.setattr("src.api.auth.API_SESSION_SECRET", "test-session-secret")
     monkeypatch.setattr(
         "src.api.auth.API_AUTH_USERS",
         {

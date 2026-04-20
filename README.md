@@ -1,505 +1,170 @@
 # lite-interpreter
 
-`lite-interpreter` is a production-oriented data-intelligence agent platform prototype.
+`lite-interpreter` 是一个面向数据分析任务的、受控且可观测的智能执行运行时原型。它不是一个让 agent 自由发挥的通用自治系统，而是一个把路由、知识检索、动态研究、代码生成、审计、执行、事件回放和技能沉淀都纳入工程控制面的项目。
 
-Its current architecture is:
+## 项目定位
 
-- macro orchestration: deterministic DAG
-- micro orchestration: DeerFlow as a dynamic `Super Node`
-- governance plane: local harness policy + risk decisions inspired by AutoHarness
-- control plane: Blackboard + Event Bus + MCP-style state sync
-- execution boundary: final code execution remains inside `lite-interpreter` sandbox
-- model backend: DashScope models through LiteLLM
-- KAG framework adapter: LlamaIndex
+这个项目要解决的问题，不是“让模型看起来很聪明”，而是让一条真实的数据分析任务链路满足下面几个要求：
 
-The project goal is not to build a free-form autonomous agent first. The goal is to build a controllable, observable, secure agent runtime for enterprise-style data analysis tasks.
+- 能判断任务该走静态链还是动态研究链
+- 能把结构化数据、业务文档、检索证据和治理决策纳入统一状态
+- 能把最终代码执行留在本地受控 sandbox，而不是把执行权交给动态 runtime
+- 能把执行轨迹、产物、tool-call、最终回答统一暴露给 API 和前端
+- 能把成功经验沉淀为可复用 skill，而不是每次重新烧 token
 
-Recent design emphasis:
+一句话总结：
 
-- keep the system explicitly centered on data-analysis tasks
-- classify tasks into dataset / rule / hybrid / dynamic-research analysis modes
-- keep context compression evidence-aware instead of treating history as generic chat text
-- ship deterministic evals that verify routing and evidence preservation
+> 宏观用确定性 DAG 托底，微观用 DeerFlow sidecar 做受控动态研究，最终代码执行留在本地 sandbox，所有状态回写 Blackboard。
 
-## 1. Core design
+## 当前架构
 
-Current high-level design:
+当前项目由五个主面组成：
 
-- deterministic DAG handles stable SOP-like paths
-- DeerFlow dynamic swarm handles complex long-tail exploration
-- Blackboard is the source of truth for task state and execution state
-- dynamic traces are written back to Blackboard and streamed to UI
-- successful dynamic paths can be harvested into reusable skill candidates
+1. **控制面**
+   - `GlobalBlackboard / ExecutionBlackboard / KnowledgeBlackboard / MemoryBlackboard`
+   - `EventBus / EventJournal`
+   - `TaskEnvelope / ExecutionIntent / DecisionRecord / ExecutionRecord`
+   - 负责状态事实源、事件投递、回放和资源投影
 
-Key principles:
+2. **运行面**
+   - `router -> static chain / dynamic_swarm`
+   - `DynamicSupervisor -> DeerflowBridge -> TraceNormalizer`
+   - 当前动态运行时只支持 **DeerFlow sidecar**，不再支持 embedded / auto 模式
 
-- keep main control in `lite-interpreter`
-- use DeerFlow as a high-capability tool, not as the system owner
-- keep code execution under local audit + sandbox
-- route dynamic and sandbox actions through a shared governance layer
-- prefer explicit state, bounded budgets, and reversible flows
+3. **执行面**
+   - `ast_auditor.py`
+   - `docker_executor.py`
+   - `sandbox_exec_tool.py`
+   - 负责输入校验、AST 审计、治理决策、Docker 执行和执行记录标准化
 
-## 2. Model and KAG choices
+4. **知识面**
+   - `KAG Builder / Retriever / Context`
+   - `KnowledgeRepo / Postgres / Qdrant / Neo4j`
+   - `SkillNet / MemoryRepo`
+   - 负责文档解析、知识召回、上下文压缩、技能沉淀和历史复用
 
-### Model provider
+5. **产品面**
+   - `Analysis Workspace` 为主工作台
+   - `Knowledge Assets / Skill Library / Audit Logs` 为辅助页面
+   - API 提供 task/workspace/execution/runtime/diagnostics 等资源
 
-All primary model calls are now designed around:
+## 当前支持的能力边界
 
-- DashScope
-- LiteLLM
+### 动态运行时
 
-Configured aliases:
+当前唯一支持的动态运行时是 **DeerFlow sidecar**。
 
-- `fast_model`
-- `reasoning_model`
-- `coder_model`
-- `embedding_model`
+- 支持：动态研究、工具化检索、轨迹写回、研究结果回流静态链
+- 不支持：把最终代码执行权交给 DeerFlow
+- sidecar 不可用时：返回明确的 `unavailable` 语义，不再悄悄切到 embedded 或 auto 模式
 
-Config file:
+### 结构化数据输入
 
-- `litellm_config.yml`
-- `config/analysis_runtime.yaml`
+当前静态执行链**可靠支持**以下结构化格式：
 
-Environment variable:
+- `.csv`
+- `.tsv`
+- `.json`
 
-- `DASHSCOPE_API_KEY`
+说明：
 
-### KAG framework choice
+- 项目历史上对 `.xlsx / .xls / .parquet` 有过“表面支持”，但静态 codegen 和数据嗅探链路并没有真正完成这些格式的稳定执行闭环。
+- 因此当前版本对这些格式不再宣传为“直接可执行支持”。如果你要做稳定分析，建议先预转换成 `csv/tsv/json` 再上传。
 
-The project keeps the original KAG design philosophy and uses:
+### 认证与访问控制
 
-- Docling for parsing
-- LlamaIndex as the framework adapter layer
-- Postgres as source-of-truth text storage
-- Qdrant for vector recall
-- Neo4j for graph recall
+当前 API 默认采用更保守的安全姿态：
 
-Important:
+- `API_AUTH_REQUIRED` 默认开启
+- 除 `/health` 外，受保护接口按角色校验
+- 不再支持通过 query string 传 `access_token`
+- session login 只有在显式配置 `API_AUTH_USERS_JSON` 和 `API_SESSION_SECRET` 时才可用
+- `viewer / operator / admin` 三层角色仍然保留
 
-- KAG was not rewritten into DeerFlow
-- KAG was not collapsed into generic LangChain chains
-- The original design ideas remain:
-  - layout-aware chunking
-  - parent-child chunking
-  - sentence-splitter fallback
-  - MAGMA-style graph extraction
-  - hybrid recall with rerank and budget control
+### 执行产物暴露
 
-## 3. What is already implemented
+当前版本对 artifact path 做了安全收口：
 
-### Environment and runtime
+- 只允许暴露受控根目录内的本地产物路径（上传目录 / 输出目录）
+- 允许显式的 `http/https` 远端引用
+- 不再把任意绝对路径当作可预览/可下载文件直接交给前端
 
-- new Python 3.12 conda env: `lite_interpreter`
-- DeerFlow installed in that env from local source
-- CPU-only PyTorch installed for compatibility
-- Streamlit installed for UI demo
+## 快速开始
 
-### Dynamic orchestration
+### 1. 准备环境
 
-- `config/analysis_runtime.yaml`
-  - defines lightweight data-analysis runtime policy for routing, compression, and summary purposes
-- `src/dynamic_engine/deerflow_bridge.py`
-  - supports `embedded`
-  - supports `sidecar`
-  - supports `auto`
-- `src/dynamic_engine/supervisor.py`
-  - prepares `TaskEnvelope`, `ExecutionIntent`, governance decision, and dynamic request
-- `src/dynamic_engine/runtime_gateway.py`
-  - isolates runtime execution from DAG-owned planning
-- `src/dynamic_engine/runtime_registry.py`
-  - selects the concrete dynamic runtime backend behind the gateway
-- `src/dynamic_engine/trace_normalizer.py`
-  - normalizes runtime events before state sync and SSE projection
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
-  - coordinates supervisor + gateway + trace normalization
-  - writes request to Blackboard
-  - forwards trace events
-  - writes result back into execution state
-- `src/dynamic_engine/runtime_backends.py`
-  - exposes runtime capability manifest metadata for the active backend
-- `src/api/routers/runtime_router.py`
-  - exposes runtime inventory and capability inspection endpoints
+推荐环境：
 
-### Harness governance
+- conda env: `lite_interpreter`
+- Python: `3.12`
 
-- `config/harness_policy.yaml`
-  - governance mode, profiles, risk thresholds, sandbox deny patterns
-- `src/harness/governor.py`
-  - emits allow/deny decisions for dynamic delegation and sandbox execution
-  - now resolves allowed/requested abilities through the capability registry
-- `src/common/capability_registry.py`
-  - canonical registry for `knowledge_query`, `sandbox_exec`, `state_sync`, `dynamic_trace`, and related aliases
-- `src/blackboard/schema.py`
-  - stores governance mode/profile/decision history per task
-
-### Sandbox execution plane
-
-- `src/sandbox/session_manager.py`
-  - creates lightweight `SandboxSession` handles around each sandbox execution
-- `src/sandbox/docker_executor.py`
-  - records session lifecycle alongside the existing Docker execution flow
-- `src/mcp_gateway/tools/sandbox_exec_tool.py`
-  - normalizes sandbox results into `ExecutionRecord` while preserving session metadata
-
-### SkillNet and capability governance
-
-- `src/skillnet/skill_schema.py`
-  - skill descriptors now carry `required_capabilities`, replay cases, and validation state
-- `src/skillnet/skill_harvester.py`
-  - harvested dynamic skills now derive required capabilities from governance/runtime context
-  - generates replay cases and validator-backed metadata for each candidate
-- `src/skillnet/skill_validator.py`
-  - runs lightweight validation before a candidate can be treated as promotion-ready
-- `src/skillnet/skill_retriever.py`
-  - filters skill candidates by available capabilities and approved promotion state
-- `src/skillnet/skill_promoter.py`
-  - derives promotion state (`harvested` / `approved` / `needs_review` / `rejected`) from validation + authorization
-- `src/mcp_gateway/tools/skill_auth_tool.py`
-  - authorizes a skill against a governance profile using capability metadata
-- `src/dag_engine/nodes/analyst_node.py` / `src/dag_engine/nodes/coder_node.py`
-  - approved skills now appear in planning and code-generation payloads, so promoted skills start affecting execution paths
-  - promotion provenance and skill strategy hints are now carried into execution planning
-- `src/storage/repository/memory_repo.py`
-  - persists approved skills per tenant/workspace so later tasks can reuse historical promoted skills
-  - now supports capability-filtered lookup for router / analyst / coder reuse
-  - records lightweight usage telemetry for matched historical skills
-- `src/skillnet/skill_retriever.py`
-  - now derives match source/reason/score for historical approved skill selection
-- `historical_skill_matches` / `used_historical_skills`
-  - task state and final response now distinguish matched historical skills from those actually used in code generation
-  - codegen-used historical skills now record replay-case ids and capability ids for richer feedback
-- `MemoryRepo.record_skill_outcome(...)`
-  - task completion now feeds success/failure counters back into historical skill usage telemetry
-
-### Blackboard and event flow
-
-- `src/blackboard/schema.py`
-  - dynamic request / summary / trace / artifacts / skill candidate fields
-  - governance mode / profile / decision fields
-  - normalized control-plane fields: `task_envelope`, `execution_intent`, `decision_log`, `execution_record`
-- `src/common/contracts.py`
-  - now also defines `RuntimeCapabilityManifest`, `ExecutionEvent`, and `ToolCallRecord`
-- `src/mcp_gateway/tools/state_sync_tool.py`
-  - partial patch sync
-  - append trace event helper
-- `src/common/event_bus.py`
-  - subscribe / unsubscribe support
-  - mirrors task events into an append-only event journal for replay
-- `src/common/event_journal.py`
-  - task-scoped event replay store used by SSE
-- `src/common/schema.py`
-  - `UI_TASK_TRACE_UPDATE`
-  - `UI_TASK_GOVERNANCE_UPDATE`
-
-### API and streaming
-
-- `src/api/main.py`
-- `src/api/routers/sse_router.py`
-- `src/api/routers/analysis_router.py`
-- `src/api/routers/execution_router.py`
-- `src/api/routers/diagnostics_router.py`
-- `src/api/routers/runtime_router.py`
-- `src/api/schemas.py`
-
-Available routes:
-
-- `GET /health`
-- `GET /api/diagnostics`
-- `GET /api/conformance`
-- `GET /api/runtimes`
-- `GET /api/runtimes/{runtime_id}/capabilities`
-- `GET /api/audit/logs`
-- `POST /api/session/login`
-- `GET /api/session/me`
-- `POST /api/tasks`
-- `GET /api/tasks/{task_id}/executions`
-- `GET /api/tasks/{task_id}/result`
-- `GET /api/tasks/{task_id}/events`
-- `POST /api/dev/tasks/{task_id}/demo-trace`
-- `POST /api/uploads`
-- `GET /api/knowledge/assets`
-- `GET /api/skills`
-- `GET /api/executions/{execution_id}`
-- `GET /api/executions/{execution_id}/artifacts`
-- `GET /api/executions/{execution_id}/tool-calls`
-- `GET /api/executions/{execution_id}/events`
-
-Operational notes:
-
-- task / execution / knowledge / memory / upload / asset / skill APIs now require `tenant_id` + `workspace_id` scope, either from authenticated API token binding or explicit query/form scope
-- set `API_AUTH_TOKENS_JSON` to enable bearer-token auth; when configured, the token scope is authoritative over client-supplied tenant/workspace values
-- token roles are hierarchical: `viewer` for read-only task/runtime access, `operator` for task creation and uploads, `admin` for policy, diagnostics, and demo-trace controls
-- the API now also supports local user-to-session login via `POST /api/session/login`; session tokens carry one or more tenant/workspace grants and reuse the same role model
-- `GET /api/audit/logs` is `admin`-only and returns persistent API audit records scoped to the caller's tenant/workspace
-- `GET/POST /api/policy`, `POST /api/dev/tasks/{task_id}/demo-trace`, and `GET /api/diagnostics` are disabled by default and must be explicitly enabled via env vars
-- set `STRICT_PERSISTENCE=true` to disable silent in-memory fallback for state/memory repositories
-- `/api/diagnostics` now exposes repository status, startup recovery, and detected Postgres driver state when enabled
-- Postgres-backed persistence now expects a SQLAlchemy-compatible driver such as `psycopg` or `psycopg2`; the default dependency set includes `psycopg[binary]`
-
-### Frontend demo
-
-- `src/frontend/app.py`
-- `src/frontend/pages/task_console.py`
-- `src/frontend/pages/knowledge_manager.py`
-- `src/frontend/pages/skill_manager.py`
-- `src/frontend/components/file_uploader.py`
-- `src/frontend/components/status_stream.py`
-
-Capabilities:
-
-- connect to SSE via browser `EventSource`
-- view task status updates
-- view dynamic trace updates
-- view harness governance allow/deny decisions
-- fetch task result, executions, and tool-call resources through API
-- attach execution-level streams after executions are discovered
-- distinguish static-chain synthetic tool calls from dynamic runtime tool calls in the Task Console
-- upload workspace assets directly from the Task Console
-- inspect uploaded knowledge assets and parser/index state
-- inspect approved and preset reusable skills
-- create a minimal real task
-- trigger a fake demo trace
-- optionally authenticate requests from the Task Console with an API token
-
-### Model client and KAG framework adapter
-
-- `src/common/llm_client.py`
-  - unified LiteLLM wrapper
-  - sync + async wrappers for chat / embeddings
-- `src/kag/retriever/query_engine.py`
-  - emits evidence-aware retrieval payloads and normalized hit lists
-  - now also emits `EvidencePacket` for normalized knowledge-plane results
-- `src/mcp_gateway/tools/knowledge_query_tool.py`
-  - returns evidence-aware retrieval payloads instead of a thin hit wrapper
-- `src/kag/framework/llama_index_adapter.py`
-  - LlamaIndex sentence splitter
-  - LiteLLM + DashScope embedding adapter
-- `src/kag/builder/embedding.py`
-  - main embedding path uses DashScope via LiteLLM
-- `src/kag/builder/chunker.py`
-  - sentence fallback uses LlamaIndex splitter
-- `src/kag/builder/parser.py`
-  - returns typed `ParsedDocument`
-  - rebuilds section hierarchy from Docling text items instead of assuming `document.sections`
-- `src/kag/retriever/recall/hybrid_search.py`
-  - query embedding uses the new embedding path
-- `src/dag_engine/nodes/data_inspector.py`
-  - fast LLM fallback now uses `fast_model`
-
-### Token budgeting
-
-- `src/common/utils.py`
-  - `estimate_tokens_fast` for classification / rough heuristics
-  - `count_text_tokens_exact` and `count_message_tokens_exact` for prompt-window enforcement
-  - `fit_items_to_budget` for final prompt assembly
-- `src/kag/retriever/budget.py`
-  - now enforces exact-fit budget against the target context model
-- `src/dag_engine/nodes/context_builder_node.py`
-  - performs final context fit before handing material to downstream nodes
-  - now emits an `analysis_brief` with evidence refs, known gaps, and next-step guidance for data-analysis planning
-
-### Data-analysis runtime and evals
-
-- `src/runtime/analysis_runtime.py`
-  - classifies tasks into `dataset_analysis`, `document_rule_analysis`, `hybrid_analysis`, `dynamic_research_analysis`, and `need_more_inputs`
-  - resolves lightweight runtime decisions per call purpose without turning the project into a generic framework
-- `src/evals/runner.py`
-  - runs deterministic seed evals for route correctness and evidence pinning
-- `src/evals/cases.py`
-  - stores seed data-analysis cases for dataset, rule, hybrid, and dynamic-research tasks
-
-### Demo and utility scripts
-
-- `scripts/run_deerflow_sidecar.py`
-- `scripts/smoke_deerflow_bridge.py`
-- `scripts/smoke_dashscope_litellm.py`
-- `scripts/demo_task_trace.py`
-- `scripts/create_task.py`
-- `scripts/check_hybrid_readiness.py`
-
-### Verification
-
-Use the `lite_interpreter` conda env:
+安装依赖后，先执行：
 
 ```bash
 conda run -n lite_interpreter python -m pytest -q
 ```
 
-Deterministic eval report:
+### 2. 启动 API
 
 ```bash
-conda run -n lite_interpreter python -m src.evals.run
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-Write reports into a specific project directory when needed:
+### 3. 启动 DeerFlow sidecar
 
 ```bash
-conda run -n lite_interpreter python -m src.evals.run --output-dir artifacts/evals
-```
-
-The latest verified test baseline lives in `docs/project_status.md`.
-
-## 4. Current status
-
-The project status source of truth is `docs/project_status.md`. In short:
-
-- the core execution loop is real and regression-tested
-- the repository is strongest today as a controlled runtime prototype, not a finished product platform
-- core/support/experimental boundaries are tracked explicitly instead of being inferred from ad-hoc prose
-
-## 5. Current maturity tiers
-
-### Core
-
-- deterministic DAG + DeerFlow dynamic super node
-- blackboard / event bus / event journal control plane
-- harness governance + local sandbox execution boundary
-- API / SSE main path
-- Task Console
-
-### Support
-
-- KAG retrieval and context assembly
-- SkillNet harvesting, validation, promotion, and historical reuse
-- execution / artifacts / tool-calls / diagnostics / conformance resources
-- deterministic evals and analysis-runtime task classification
-
-### Experimental
-
-- `src/frontend/pages/knowledge_manager.py`
-- `src/frontend/pages/skill_manager.py`
-- heavier product-style management surfaces outside the main runtime loop
-- long-horizon expansion areas that do not change whether the current runtime is valid
-
-## 6. Recommended environment
-
-Use:
-
-```bash
-conda run -n lite_interpreter <command>
-```
-
-Why this env:
-
-- Python 3.12 compatible with DeerFlow harness
-- DeerFlow already installed
-- Streamlit already installed
-- tests already validated there
-- project commands in `Makefile` already default to this env
-
-If you prefer an interactive shell first:
-
-```bash
-conda activate lite_interpreter
-```
-
-## 7. Important environment variables
-
-### DashScope / LiteLLM
-
-- `DASHSCOPE_API_KEY`
-
-### DeerFlow runtime
-
-- `DEERFLOW_RUNTIME_MODE`
-- `DEERFLOW_SIDECAR_URL`
-- `DEERFLOW_SIDECAR_TIMEOUT`
-- `DEERFLOW_CONFIG_PATH`
-- `DEERFLOW_MODEL_NAME`
-- `DEERFLOW_MAX_EVENTS`
-- `DEERFLOW_MAX_STEPS`
-- `DEERFLOW_RECURSION_LIMIT`
-
-## 8. Main commands
-
-From repo root:
-
-```bash
-make run-sidecar
-make run-api
-make run-frontend
-make demo-trace
-make create-task
-make test
-make test-docker
-make test-integration
-make lint
-make fmt-check
-make lint-all
-make fmt-check-all
-make test-stream
-make smoke-models
-```
-
-## 9. Fastest demo path
-
-### Start sidecar
-
-```bash
-export OPENAI_API_KEY=your_real_key
-export DEERFLOW_CONFIG_PATH=/home/linsir365/projects/deer-flow/config.yaml
-make run-sidecar
-```
-
-### Start API
-
-```bash
-export DEERFLOW_RUNTIME_MODE=sidecar
+cd /home/linsir365/projects/lite-interpreter
 export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
-export DEERFLOW_CONFIG_PATH=/home/linsir365/projects/deer-flow/config.yaml
-make run-api
+conda run -n lite_interpreter python scripts/run_deerflow_sidecar.py --host 127.0.0.1 --port 8765
 ```
 
-### Start frontend
+### 4. 启动前端
 
 ```bash
-make run-frontend
+cd /home/linsir365/projects/lite-interpreter
+PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
 ```
 
-### Trigger a fake trace
+### 5. 常用验证命令
 
 ```bash
-make demo-trace
+conda run -n lite_interpreter python -m ruff check src tests scripts config
+conda run -n lite_interpreter python -m pytest -q
+python3 scripts/check_hybrid_readiness.py
 ```
 
-### Trigger a minimal real task
+## 建议阅读顺序
 
-```bash
-make create-task
-```
+第一次读仓库，建议顺序：
 
-## 10. Best files to read first
+1. `docs/project_status.md`
+2. `docs/architecture.md`
+3. `directory.txt`
+4. `docs/development_guide.md`
+5. `docs/deployment.md`
+6. `docs/testing.md`
+7. `项目二.md`
 
-If you want to understand the project quickly:
+## 文档索引
 
-1. `docs/code_tour.md`
-2. `docs/project_status.md`
-3. `docs/deerflow_integration.md`
-4. `docs/runtime_support_matrix.md`
-5. `docs/openharness_adaptation_plan.md`
-6. `config/settings.py`
-7. `litellm_config.yml`
-8. `src/common/llm_client.py`
-9. `src/kag/framework/llama_index_adapter.py`
-10. `src/dynamic_engine/deerflow_bridge.py`
-11. `src/dag_engine/nodes/dynamic_swarm_node.py`
-12. `src/api/routers/sse_router.py`
-13. `src/frontend/pages/task_console.py`
+- `docs/project_status.md`：当前成熟度、测试基线、已知热点、明确非目标
+- `docs/architecture.md`：系统结构、模块边界、主链路说明
+- `docs/development_guide.md`：开发环境、改动原则、常见改动入口
+- `docs/deployment.md`：依赖、环境变量、启动方式、运维要点
+- `docs/testing.md`：测试分层、命令、回归要求
+- `directory.txt`：仓库目录导览
+- `项目二.md`：中文项目综述与下一阶段工程重点
 
-## 11. Current known limitations
+## 当前工程判断
 
-- DeerFlow live task execution still depends on valid external model credentials
-- the frontend is a demo-grade console, not a polished product UI
-- not all DAG business nodes are complete
-- dependency surface is broad because DeerFlow and KAG both bring heavy stacks
-- experimental surfaces remain intentionally de-emphasized relative to the runtime core
-- `make test-docker` is the quickest way to verify the real Docker-backed sandbox path when this session can reach the local Docker daemon
-- `make test-integration` verifies the strongest local integration slice: real Docker sandbox plus DeerFlow sidecar transport bridge and sidecar endpoint contracts
-- `make lint` / `make fmt-check` currently enforce the touched hotspot files; use `make lint-all` / `make fmt-check-all` to inspect the broader repo-wide debt
+这个项目现在已经不是“概念验证玩具”，但也还没到“上线即产品”的程度。
 
-## 12. Supporting docs
+它已经具备：
 
-- `docs/deerflow_integration.md`
-- `docs/code_tour.md`
-- `directory.txt`
-- `项目二.md`
+- 静态链 / 动态链 / sandbox / blackboard 的最小闭环
+- execution / artifacts / tool-calls / diagnostics / conformance 资源层
+- 前端主工作台与 API 读模型的基本联动
+- 历史 skill recall 与 usage/outcome 回写能力
+
+但你仍然应该把它视为一个**正在工程化收口的原型**。最重要的工作，不是继续堆模块，而是继续收紧边界、减少假支持、把控制面和产品面做扎实。

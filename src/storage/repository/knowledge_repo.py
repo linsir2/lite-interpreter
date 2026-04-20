@@ -15,7 +15,7 @@ from typing import Any
 
 import pandas as pd
 from src.common.logger import get_logger
-from src.common.utils import get_utc_now
+from src.common.utils import get_utc_now, scope_identifier_to_db_name
 from src.storage.graph_client import neo4j_client
 from src.storage.postgres_client import pg_client
 from src.storage.schema import DocChunk, KnowledgeTriple, StructuredDatasetMeta
@@ -87,7 +87,7 @@ class KnowledgeRepo:
         try:
             safe_name = file_name.replace(".", "_").replace("-", "_").lower()
             timestamp = get_utc_now().strftime("%Y%m%d_%H%M")
-            db_table_name = f"ws_{workspace_id}_{safe_name}_{timestamp}"
+            db_table_name = f"{scope_identifier_to_db_name(workspace_id, prefix='ws_')}_{safe_name}_{timestamp}"
             pg_client.df_to_sql_table(tenant_id, db_table_name, df)
             expires_at = None if persist else get_utc_now() + timedelta(hours=24)
             catalog_data = {
@@ -178,11 +178,19 @@ class KnowledgeRepo:
 
     @classmethod
     def has_vector_index(cls, tenant_id: str, workspace_id: str) -> bool:
-        return qdrant_client.has_index(tenant_id, workspace_id)
+        try:
+            return qdrant_client.has_index(tenant_id, workspace_id)
+        except Exception as exc:
+            logger.warning(f"[KnowledgeRepo] 向量索引探活失败，降级为无向量检索: {exc}")
+            return False
 
     @classmethod
     def has_graph_index(cls, tenant_id: str, workspace_id: str) -> bool:
-        return neo4j_client.has_graph(tenant_id, workspace_id)
+        try:
+            return neo4j_client.has_graph(tenant_id, workspace_id)
+        except Exception as exc:
+            logger.warning(f"[KnowledgeRepo] 图谱索引探活失败，降级为无图检索: {exc}")
+            return False
 
     @classmethod
     def close_all_connections(cls):

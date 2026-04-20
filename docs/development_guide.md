@@ -2,183 +2,154 @@
 
 ## 1. 开发环境
 
-默认开发环境：
+默认环境：
 
-- conda env: `lite_interpreter`
+- conda env：`lite_interpreter`
+- Python：`3.12`
 
-建议：
+推荐习惯：
 
-- 直接执行命令时用 `conda run -n lite_interpreter ...`
-- 长时间本地调试时可先 `conda activate lite_interpreter`
-- 阅读当前成熟度、测试基线与非目标时，优先看 `docs/project_status.md`
+- 单条命令执行时优先：`conda run -n lite_interpreter ...`
+- 长时间交互调试时可先：`conda activate lite_interpreter`
+- 任何改动前先读：`docs/project_status.md`
 
 ## 2. 开发原则
 
-这个项目的核心原则不是“尽快把 agent 跑起来”，而是：
+这个项目最重要的不是“把功能拼出来”，而是保持控制面、执行面、知识面和动态运行面的边界清楚。
 
-- 让控制面保持可解释
-- 让执行边界保持可控
-- 让状态变化可追踪
-- 让动态 runtime 服从 DAG，而不是反过来
+开发时默认遵守：
 
-具体开发时要优先遵守：
+1. 不绕开 Blackboard 传隐藏状态
+2. 不绕开 Harness 直接做动态执行或 sandbox 执行
+3. 不把 DeerFlow 当系统 owner
+4. 不为了“看起来灵活”引入假支持
+5. 改 bug 先补回归测试，再改实现
 
-- 保持 `TaskEnvelope / ExecutionIntent / DecisionRecord / ExecutionRecord` 的一致性
-- 不绕开 blackboard 直接在节点之间传隐藏状态
-- 不绕开 harness 直接做动态执行或 sandbox 执行
-- 不把 DeerFlow 当系统 owner
+## 3. 常用命令
 
-## 3. 改动时先看哪里
+### 3.1 检查
 
-### 改控制面
+```bash
+conda run -n lite_interpreter python -m ruff check src tests scripts config
+```
 
-看：
-
-- `src/common/contracts.py`
-- `src/blackboard/schema.py`
-- `src/blackboard/global_blackboard.py`
-- `src/common/event_bus.py`
-
-### 改静态链
-
-看：
-
-- `src/dag_engine/nodes/analyst_node.py`
-- `src/dag_engine/nodes/coder_node.py`
-- `src/dag_engine/nodes/static_codegen.py`
-- `src/dag_engine/nodes/executor_node.py`
-- `src/dag_engine/nodes/summarizer_node.py`
-
-### 改动态链
-
-看：
-
-- `src/dynamic_engine/supervisor.py`
-- `src/dynamic_engine/runtime_gateway.py`
-- `src/dynamic_engine/deerflow_bridge.py`
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
-
-### 改执行面
-
-看：
-
-- `src/sandbox/ast_auditor.py`
-- `src/sandbox/docker_executor.py`
-- `src/sandbox/execution_reporting.py`
-- `src/mcp_gateway/tools/sandbox_exec_tool.py`
-
-### 改知识面
-
-看：
-
-- `src/kag/builder/*`
-- `src/kag/retriever/*`
-- `src/kag/context/*`
-- `src/storage/repository/knowledge_repo.py`
-
-## 4. 推荐开发流程
-
-### 4.1 改动前
-
-1. 读 `directory.txt`
-2. 读对应模块的现有实现
-3. 先找已有测试
-4. 明确你的改动属于：
-   - 控制面
-   - 运行面
-   - 执行面
-   - 知识面
-
-### 4.2 改动中
-
-- 优先抽 helper，不要让节点文件无限膨胀
-- 尽量保留 DAG 节点只负责“节点编排”
-- 通用逻辑往 helper / tool / repository / common 合并
-- 外部接口不变时，优先做保守重构
-
-### 4.3 改动后
-
-至少执行：
+### 3.2 全量测试
 
 ```bash
 conda run -n lite_interpreter python -m pytest -q
 ```
 
-如果只是局部改动，也至少执行对应模块测试。
+### 3.3 快速验收脚本
 
-## 5. 测试策略
+```bash
+python3 scripts/check_hybrid_readiness.py
+conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
+```
 
-### 5.1 基础层
+### 3.4 常用运行入口
 
-- `tests/test_blackboard.py`
-- `tests/test_harness.py`
-- `tests/test_llm_client.py`
-- `tests/test_sandbox.py`
+```bash
+make run-api
+make run-sidecar
+make run-frontend
+make test-stream
+```
 
-### 5.2 编排层
+## 4. 改动前先看哪里
 
-- `tests/test_dag_engine.py`
-- `tests/test_dynamic_runtime.py`
-- `tests/test_api_sse.py`
+### 控制面问题
 
-### 5.3 验收层
+先看：
 
-- `tests/test_e2e.py`
+- `src/common/contracts.py`
+- `src/blackboard/schema.py`
+- `src/blackboard/global_blackboard.py`
+- `src/blackboard/execution_blackboard.py`
+- `src/common/event_journal.py`
+- `src/storage/repository/state_repo.py`
 
-## 6. 常见改动建议
+适用问题：
 
-### 新增一个静态链能力
+- 为什么任务状态不一致
+- 为什么冷恢复失败
+- 为什么 SSE 重放不对
+- 为什么 execution 资源查不到
 
-优先看：
+### 静态链问题
 
-- `router_node.py`
-- `analyst_node.py`
-- `coder_node.py`
-- `static_codegen.py`
-- `summarizer_node.py`
+先看：
 
-### 新增一个动态 runtime
+- `src/dag_engine/nodes/data_inspector.py`
+- `src/dag_engine/nodes/kag_retriever.py`
+- `src/dag_engine/nodes/context_builder_node.py`
+- `src/dag_engine/nodes/analyst_node.py`
+- `src/dag_engine/nodes/coder_node.py`
+- `src/dag_engine/nodes/static_codegen.py`
+- `src/dag_engine/nodes/auditor_node.py`
+- `src/dag_engine/nodes/executor_node.py`
+- `src/dag_engine/nodes/summarizer_node.py`
 
-优先看：
+### 动态链问题
 
-- `runtime_backends.py`
-- `runtime_registry.py`
-- `runtime_gateway.py`
-- `dynamic_swarm_node.py`
+先看：
 
-### 新增一个可治理能力
+- `src/dynamic_engine/supervisor.py`
+- `src/dynamic_engine/deerflow_bridge.py`
+- `src/dynamic_engine/runtime_backends.py`
+- `src/dag_engine/nodes/dynamic_swarm_node.py`
 
-优先看：
+### 知识/技能问题
 
-- `common/capability_registry.py`
-- `harness/policy.py`
-- `harness/governor.py`
-- `skill_auth_tool.py`
+先看：
 
-### 新增一个知识检索通道
+- `src/kag/builder/*`
+- `src/kag/retriever/*`
+- `src/skillnet/*`
+- `src/memory/memory_service.py`
+- `src/storage/repository/knowledge_repo.py`
+- `src/storage/repository/memory_repo.py`
 
-优先看：
+### API / 前端问题
 
-- `kag/retriever/query_engine.py`
-- `kag/retriever/recall/*`
-- `knowledge_query_tool.py`
+先看：
 
-## 7. 当前技术债提醒
+- `src/api/main.py`
+- `src/api/auth.py`
+- `src/api/request_scope.py`
+- `src/api/execution_resources.py`
+- `src/api/routers/*`
+- `src/frontend/components/status_stream.py`
+- `src/frontend/pages/task_console.py`
 
-- `docker_executor.py` 仍然偏大
-- 静态链节点仍然偏同步
-- 前端更多是 demo 控制台，不是完整产品 UI
-- 真正依赖 Docker/外部服务的环境 e2e 还可以继续增强
+## 5. 推荐改动流程
 
-## 8. 文档同步要求
+### 5.1 改动前
 
-如果你改了这些内容，最好同步更新文档：
+1. 找到对应模块与现有测试
+2. 明确这是安全问题、一致性问题、产品流问题还是文档漂移问题
+3. 能补回归测试的先补测试
 
-- 目录结构变动：更新 `directory.txt`
-- 阅读顺序变动：更新 `docs/code_tour.md`
-- 架构边界变动：更新 `docs/architecture.md`
-- 启动命令变动：更新 `README.md` 与 `docs/deployment.md`
-- 项目阶段变化：更新 `docs/project_plan.md`
-- 当前测试基线或成熟度判断变化：更新 `docs/project_status.md`
+### 5.2 改动中
 
-这一步非常重要，不然下一次阅读代码的人会被旧文档误导。
+- 优先做局部 helper 拆分，不做大重构
+- 节点保持“编排职责”，复杂拼装逻辑尽量往 helper / service / repository 放
+- 涉及最终用户结果的逻辑，优先保证“不要说错”
+
+### 5.3 改动后
+
+至少执行：
+
+```bash
+conda run -n lite_interpreter python -m ruff check src tests scripts config
+conda run -n lite_interpreter python -m pytest -q
+```
+
+如果只改局部，也要至少跑对应测试文件。
+
+## 6. 当前最值得小心的点
+
+1. `src/sandbox/docker_executor.py` 仍然偏大
+2. `static_codegen.py` 仍然偏模板化
+3. 前端主工作台已经收口，但 artifact 消费仍需继续 API 化
+4. KAG 的真实支持边界要保持诚实，不要再把没闭环的格式宣传成“支持”
+5. docs 与 tests 的 contract 漂移要尽早收掉，不要拖

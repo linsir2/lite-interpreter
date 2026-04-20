@@ -9,6 +9,7 @@ from typing import Any
 from src.blackboard import execution_blackboard
 from src.blackboard.schema import ExecutionData
 from src.common import ToolCallRecord
+from src.common.control_plane import sanitize_artifact_reference
 from src.common.schema import EventTopic
 from src.storage.repository.state_repo import StateRepo
 
@@ -130,9 +131,9 @@ def build_execution_artifacts(execution_data: ExecutionData, execution_id: str) 
     if execution_id == f"runtime:{execution_data.task_id}":
         return [
             {
-                "path": artifact,
+                "path": sanitize_artifact_reference(str(artifact)),
                 "artifact_type": "runtime_artifact",
-                "summary": artifact,
+                "summary": str(artifact),
             }
             for artifact in execution_data.dynamic.artifacts
             if artifact
@@ -301,3 +302,113 @@ def resolve_execution_resource(execution_id: str) -> tuple[dict[str, Any] | None
             if summary["execution_id"] == execution_id:
                 return summary, execution_data
     return None, None
+
+
+def build_task_workspace_payload(
+    *,
+    task: Any,
+    execution_data: ExecutionData | None,
+    memory_data: Any | None,
+    task_lease: dict[str, Any] | None,
+) -> dict[str, Any]:
+    final_response = execution_data.control.final_response if execution_data else None
+    knowledge_snapshot = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json") if execution_data else {}
+    analysis_brief = execution_data.knowledge.analysis_brief.model_dump(mode="json") if execution_data else {}
+    compiled_knowledge = execution_data.knowledge.compiled.model_dump(mode="json") if execution_data else {}
+    executions = build_task_execution_summaries(execution_data)
+    tool_calls: list[dict[str, Any]] = []
+    for execution in executions:
+        execution_id = str(execution.get("execution_id") or "").strip()
+        if not execution_id:
+            continue
+        tool_calls.extend(build_execution_tool_calls(execution_data, execution_id))
+
+    status_payload = {
+        "global_status": getattr(task.global_status, "value", str(task.global_status)),
+        "sub_status": task.sub_status,
+        "failure_type": task.failure_type,
+        "error_message": task.error_message,
+        "task_lease": task_lease or {},
+    }
+    primary_mode = str((final_response or {}).get("mode") or status_payload["global_status"] or "unknown")
+    primary_headline = str(
+        (final_response or {}).get("headline")
+        or (final_response or {}).get("answer")
+        or status_payload.get("sub_status")
+        or "No headline available"
+    )
+    primary_answer = str(
+        (final_response or {}).get("answer")
+        or (final_response or {}).get("headline")
+        or status_payload.get("error_message")
+        or "No answer available"
+    )
+    evidence_refs = list((final_response or {}).get("evidence_refs") or knowledge_snapshot.get("evidence_refs") or [])
+    workspace = {
+        "task": {
+            "task_id": task.task_id,
+            "tenant_id": task.tenant_id,
+            "workspace_id": task.workspace_id,
+            "query": task.input_query,
+        },
+        "inputs": {
+            "structured_datasets": (
+                [item.model_dump(mode="json") for item in list(execution_data.inputs.structured_datasets or [])]
+                if execution_data
+                else []
+            ),
+            "business_documents": (
+                [item.model_dump(mode="json") for item in list(execution_data.inputs.business_documents or [])]
+                if execution_data
+                else []
+            ),
+        },
+        "status": status_payload,
+        "primary": {
+            "mode": primary_mode,
+            "headline": primary_headline,
+            "answer": primary_answer,
+            "next_action": str(analysis_brief.get("recommended_next_step") or ""),
+        },
+        "evidence": {
+            "evidence_refs": evidence_refs,
+            "rewritten_query": knowledge_snapshot.get("rewritten_query", ""),
+            "recall_strategies": list(knowledge_snapshot.get("recall_strategies") or []),
+            "selected_count": dict(knowledge_snapshot.get("metadata") or {}).get("selected_count", 0),
+            "preferred_date_terms": dict(knowledge_snapshot.get("metadata") or {}).get("preferred_date_terms", []),
+            "temporal_constraints": dict(knowledge_snapshot.get("metadata") or {}).get("temporal_constraints", []),
+        },
+        "execution": {
+            "executions": executions,
+            "dynamic": execution_data.dynamic.model_dump(mode="json") if execution_data else {},
+            "static": execution_data.static.model_dump(mode="json") if execution_data else {},
+        },
+        "knowledge": {
+            "analysis_brief": analysis_brief,
+            "knowledge_snapshot": knowledge_snapshot,
+            "compiled_knowledge": compiled_knowledge,
+        },
+        "technical_details": {
+            "control": execution_data.control.model_dump(mode="json") if execution_data else {},
+            "tool_calls": tool_calls,
+            "historical_skill_matches": (
+                [item.model_dump(mode="json") for item in list(memory_data.historical_matches or [])]
+                if memory_data and getattr(memory_data, "historical_matches", None) is not None
+                else []
+            ),
+        },
+    }
+    return {
+        "task_id": task.task_id,
+        "tenant_id": task.tenant_id,
+        "workspace_id": task.workspace_id,
+        "workspace": workspace,
+        "status": status_payload,
+        "response": final_response,
+        "knowledge": {
+            "analysis_brief": analysis_brief,
+            "knowledge_snapshot": knowledge_snapshot,
+        },
+        "executions": executions,
+        "tool_calls": tool_calls,
+    }

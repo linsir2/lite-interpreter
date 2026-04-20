@@ -6,6 +6,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src.api.auth import auth_context_allows_scope, request_auth_context
+from src.common.utils import validate_scope_identifier
 
 
 def request_scope(request: Request) -> tuple[str, str]:
@@ -31,7 +32,13 @@ def request_scope(request: Request) -> tuple[str, str]:
 def require_request_scope(request: Request) -> tuple[str, str] | JSONResponse:
     tenant_id, workspace_id = request_scope(request)
     if tenant_id and workspace_id:
-        return tenant_id, workspace_id
+        try:
+            return (
+                validate_scope_identifier(tenant_id, field_name="tenant_id"),
+                validate_scope_identifier(workspace_id, field_name="workspace_id"),
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse(
         {
             "error": "missing tenant/workspace scope",

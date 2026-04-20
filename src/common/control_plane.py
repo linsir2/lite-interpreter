@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any
+
+from config.settings import OUTPUT_DIR, UPLOAD_DIR
 
 from src.common.contracts import (
     ArtifactRecord,
@@ -116,9 +119,8 @@ def ensure_execution_intent(
     resolved_routing_mode = _normalize_string(routing_mode or payload.get("routing_mode"), "static")
     if not intent:
         if destination_values == ["dynamic_swarm"] or resolved_routing_mode == "dynamic":
-            intent = "dynamic_flow"
-        elif len(destination_values) > 1:
-            intent = "hybrid_flow"
+            next_static_steps = _normalize_string_list((payload.get("metadata") or {}).get("next_static_steps"))
+            intent = "dynamic_then_static_flow" if next_static_steps else "dynamic_only"
         else:
             intent = "static_flow"
     metadata = dict(payload.get("metadata") or {})
@@ -177,9 +179,13 @@ def execution_intent_dynamic_reason(execution_intent: ExecutionIntent | Mapping[
 
 def execution_intent_routing_mode(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> str:
     if isinstance(execution_intent, ExecutionIntent):
-        return "dynamic" if execution_intent.intent == "dynamic_flow" else "static"
+        return "dynamic" if execution_intent.intent in {"dynamic_only", "dynamic_then_static_flow"} else "static"
     if isinstance(execution_intent, Mapping):
-        return "dynamic" if _normalize_string(execution_intent.get("intent")) == "dynamic_flow" else "static"
+        return (
+            "dynamic"
+            if _normalize_string(execution_intent.get("intent")) in {"dynamic_only", "dynamic_then_static_flow"}
+            else "static"
+        )
     return "static"
 
 
@@ -299,8 +305,29 @@ def static_artifacts(execution_record: ExecutionRecord | Mapping[str, Any] | Non
             continue
         if not artifact_path:
             continue
-        artifacts.append({"path": artifact_path, "type": artifact_type})
+        artifacts.append({"path": sanitize_artifact_reference(artifact_path), "type": artifact_type})
     return artifacts
+
+
+def sanitize_artifact_reference(value: str | None) -> str | None:
+    text = _normalize_string(value)
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered.startswith("http://") or lowered.startswith("https://"):
+        return text
+    path = Path(text)
+    if not path.is_absolute():
+        return text
+    try:
+        resolved = path.resolve(strict=False)
+    except Exception:
+        return None
+    allowed_roots = [Path(OUTPUT_DIR).resolve(strict=False), Path(UPLOAD_DIR).resolve(strict=False)]
+    for root in allowed_roots:
+        if resolved == root or str(resolved).startswith(str(root) + "/"):
+            return str(resolved)
+    return None
 
 
 def _merge_list_unique(current: list[Any], incoming: list[Any]) -> list[Any]:

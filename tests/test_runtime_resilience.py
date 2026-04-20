@@ -16,8 +16,8 @@ from src.storage.repository.memory_repo import MemoryRepo
 from src.storage.repository.state_repo import StateRepo
 
 
-def test_state_repo_strict_persistence_raises_without_postgres(monkeypatch):
-    monkeypatch.setattr("src.storage.repository.state_repo.STRICT_PERSISTENCE", True)
+def test_state_repo_raises_without_postgres_outside_test_backend(monkeypatch):
+    monkeypatch.setattr("src.storage.repository.state_repo.StateRepo._allow_test_backend", staticmethod(lambda: False))
     monkeypatch.setattr("src.storage.repository.state_repo.pg_client.engine", None)
     with pytest.raises(RuntimeError):
         StateRepo.save_blackboard_state(
@@ -26,9 +26,7 @@ def test_state_repo_strict_persistence_raises_without_postgres(monkeypatch):
     assert StateRepo._memory_store.get("tenant-strict", {}).get("task-strict") is None
 
 
-def test_state_repo_strict_persistence_raises_on_write_failure(monkeypatch):
-    monkeypatch.setattr("src.storage.repository.state_repo.STRICT_PERSISTENCE", True)
-
+def test_state_repo_raises_on_write_failure(monkeypatch):
     class _BrokenConnection:
         def __enter__(self):
             raise RuntimeError("write failed")
@@ -47,8 +45,8 @@ def test_state_repo_strict_persistence_raises_on_write_failure(monkeypatch):
         )
 
 
-def test_state_repo_strict_persistence_raises_for_task_lease_without_postgres(monkeypatch):
-    monkeypatch.setattr("src.storage.repository.state_repo.STRICT_PERSISTENCE", True)
+def test_state_repo_claim_task_lease_raises_without_postgres_outside_test_backend(monkeypatch):
+    monkeypatch.setattr("src.storage.repository.state_repo.StateRepo._allow_test_backend", staticmethod(lambda: False))
     monkeypatch.setattr("src.storage.repository.state_repo.pg_client.engine", None)
     with pytest.raises(RuntimeError):
         StateRepo.claim_task_lease(
@@ -119,8 +117,8 @@ def test_state_repo_task_lease_status_returns_unknown_on_backend_error(monkeypat
     assert "lease read failed" in status["error"]
 
 
-def test_memory_repo_strict_persistence_raises_without_postgres(monkeypatch):
-    monkeypatch.setattr("src.storage.repository.memory_repo.STRICT_PERSISTENCE", True)
+def test_memory_repo_raises_without_postgres_outside_test_backend(monkeypatch):
+    monkeypatch.setattr("src.storage.repository.memory_repo.MemoryRepo._allow_test_backend", staticmethod(lambda: False))
     monkeypatch.setattr("src.storage.repository.memory_repo.pg_client.engine", None)
     with pytest.raises(RuntimeError):
         MemoryRepo.list_approved_skills("tenant-strict", "ws-strict")

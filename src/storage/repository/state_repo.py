@@ -7,10 +7,12 @@ src/storage/repository/state_repo.py
 """
 
 import json
+import os
+import threading
 from datetime import datetime, timedelta
 from typing import Any
 
-from config.settings import STRICT_PERSISTENCE, TASK_LEASE_TTL_SECONDS
+from config.settings import TASK_LEASE_TTL_SECONDS
 from sqlalchemy import text
 from src.common.logger import get_logger
 from src.common.utils import get_utc_now
@@ -23,17 +25,33 @@ class StateRepo:
     _memory_store: dict[str, dict[str, dict[str, Any]]] = {}
     _memory_task_leases: dict[str, dict[str, Any]] = {}
     _last_error: str | None = None
+    _state_locks: dict[tuple[str, str], threading.RLock] = {}
+    _state_locks_guard = threading.RLock()
+
+    @classmethod
+    def _state_lock(cls, tenant_id: str, task_id: str) -> threading.RLock:
+        key = (tenant_id, task_id)
+        with cls._state_locks_guard:
+            lock = cls._state_locks.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                cls._state_locks[key] = lock
+            return lock
+
+    @staticmethod
+    def _allow_test_backend() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
 
     @classmethod
     def status(cls) -> dict[str, Any]:
         memory_task_count = sum(len(bucket) for bucket in cls._memory_store.values())
         memory_lease_count = len(cls._memory_task_leases)
         return {
-            "backend": "postgres" if pg_client.engine else "memory_fallback",
+            "backend": "postgres" if pg_client.engine else "unavailable",
             "postgres_available": pg_client.engine is not None,
             "postgres_driver": getattr(pg_client, "driver_name", None),
             "postgres_driver_error": getattr(pg_client, "driver_error", None),
-            "strict_persistence": bool(STRICT_PERSISTENCE),
+            "test_in_memory_backend_active": cls._allow_test_backend() and pg_client.engine is None,
             "memory_task_count": memory_task_count,
             "memory_lease_count": memory_lease_count,
             "distributed_claims_supported": pg_client.engine is not None,
@@ -44,9 +62,9 @@ class StateRepo:
     def _require_backend(cls, operation: str) -> None:
         if pg_client.engine is not None:
             return
-        if not STRICT_PERSISTENCE:
+        if cls._allow_test_backend():
             return
-        message = f"StateRepo requires Postgres for `{operation}` when STRICT_PERSISTENCE is enabled"
+        message = f"StateRepo requires Postgres for `{operation}`"
         cls._last_error = message
         raise RuntimeError(message)
 
@@ -54,8 +72,7 @@ class StateRepo:
     def _handle_backend_error(cls, operation: str, exc: Exception) -> None:
         cls._last_error = str(exc)
         logger.error(f"[StateRepo] {operation}失败: {exc}")
-        if STRICT_PERSISTENCE:
-            raise RuntimeError(f"StateRepo {operation} failed under STRICT_PERSISTENCE: {exc}") from exc
+        raise RuntimeError(f"StateRepo {operation} failed: {exc}") from exc
 
     @classmethod
     def _normalize_state(cls, state_dict: dict[str, Any]) -> dict[str, Any]:
@@ -65,6 +82,8 @@ class StateRepo:
     def clear(cls) -> None:
         cls._memory_store.clear()
         cls._memory_task_leases.clear()
+        with cls._state_locks_guard:
+            cls._state_locks.clear()
 
     @classmethod
     def _ensure_state_table(cls):
@@ -127,13 +146,15 @@ class StateRepo:
         expires_at = now + timedelta(seconds=lease_ttl_seconds)
         cls._require_backend("claim_task_lease")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo claim_task_lease requires Postgres")
             current = cls._memory_task_leases.get(task_id)
             if current and current["owner_id"] != owner_id and current["lease_expires_at"] > now:
                 return {
                     "acquired": False,
                     "owner_id": current["owner_id"],
                     "lease_expires_at": current["lease_expires_at"].isoformat(),
-                    "backend": "memory_fallback",
+                    "backend": "test_stub",
                 }
             cls._memory_task_leases[task_id] = {
                 "tenant_id": tenant_id,
@@ -146,7 +167,7 @@ class StateRepo:
                 "acquired": True,
                 "owner_id": owner_id,
                 "lease_expires_at": expires_at.isoformat(),
-                "backend": "memory_fallback",
+                "backend": "test_stub",
             }
 
         cls._ensure_task_lease_table()
@@ -223,6 +244,8 @@ class StateRepo:
         expires_at = now + timedelta(seconds=lease_ttl_seconds)
         cls._require_backend("renew_task_lease")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo renew_task_lease requires Postgres")
             current = cls._memory_task_leases.get(task_id)
             if not current or current["owner_id"] != owner_id:
                 return False
@@ -261,6 +284,8 @@ class StateRepo:
     def release_task_lease(cls, *, task_id: str, owner_id: str) -> None:
         cls._require_backend("release_task_lease")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo release_task_lease requires Postgres")
             current = cls._memory_task_leases.get(task_id)
             if current and current["owner_id"] == owner_id:
                 cls._memory_task_leases.pop(task_id, None)
@@ -281,13 +306,15 @@ class StateRepo:
     def list_task_leases(cls) -> list[dict[str, Any]]:
         cls._require_backend("list_task_leases")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo list_task_leases requires Postgres")
             return [
                 {
                     "task_id": task_id,
                     "owner_id": payload["owner_id"],
                     "workspace_id": payload["workspace_id"],
                     "lease_expires_at": payload["lease_expires_at"].isoformat(),
-                    "backend": "memory_fallback",
+                    "backend": "test_stub",
                 }
                 for task_id, payload in cls._memory_task_leases.items()
             ]
@@ -322,6 +349,8 @@ class StateRepo:
     @classmethod
     def get_task_lease(cls, task_id: str) -> dict[str, Any] | None:
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo get_task_lease requires Postgres")
             payload = cls._memory_task_leases.get(task_id)
             if not payload:
                 return None
@@ -330,7 +359,7 @@ class StateRepo:
                 "owner_id": payload["owner_id"],
                 "workspace_id": payload["workspace_id"],
                 "lease_expires_at": payload["lease_expires_at"].isoformat(),
-                "backend": "memory_fallback",
+                "backend": "test_stub",
             }
 
         cls._ensure_task_lease_table()
@@ -364,6 +393,8 @@ class StateRepo:
     @classmethod
     def task_lease_status(cls, task_id: str, owner_id: str) -> dict[str, Any]:
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo task_lease_status requires Postgres")
             payload = cls._memory_task_leases.get(task_id)
             if not payload:
                 return {"status": "lost", "reason": "task lease missing"}
@@ -378,7 +409,7 @@ class StateRepo:
                     "owner_id": payload["owner_id"],
                     "workspace_id": payload["workspace_id"],
                     "lease_expires_at": payload["lease_expires_at"].isoformat(),
-                    "backend": "memory_fallback",
+                    "backend": "test_stub",
                 },
             }
 
@@ -430,6 +461,8 @@ class StateRepo:
 
         cls._require_backend("save_blackboard_state")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo save_blackboard_state requires Postgres")
             tenant_bucket = cls._memory_store.setdefault(tenant_id, {})
             tenant_bucket[task_id] = normalized_state
             return
@@ -464,11 +497,28 @@ class StateRepo:
             cls._handle_backend_error(f"保存任务 {task_id} 的状态", e)
 
     @classmethod
+    def merge_blackboard_sections(
+        cls,
+        tenant_id: str,
+        task_id: str,
+        workspace_id: str,
+        section_updates: dict[str, Any],
+    ) -> dict[str, Any]:
+        with cls._state_lock(tenant_id, task_id):
+            full_state = cls.load_blackboard_state(tenant_id, task_id) or {}
+            for section_name, payload in dict(section_updates or {}).items():
+                full_state[str(section_name)] = cls._normalize_state(payload)
+            cls.save_blackboard_state(tenant_id, task_id, workspace_id, full_state)
+            return full_state
+
+    @classmethod
     def load_blackboard_state(cls, tenant_id: str, task_id: str) -> dict[str, Any] | None:
         """在进程重启或页面刷新时，从数据库恢复任务状态"""
         cls._require_backend("load_blackboard_state")
         cls._ensure_state_table()
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo load_blackboard_state requires Postgres")
             return cls._memory_store.get(tenant_id, {}).get(task_id)
 
         sql = text("""
@@ -510,7 +560,7 @@ class StateRepo:
             except Exception as e:
                 cls._handle_backend_error("按 task_id 恢复任务状态", e)
 
-        # 这里把进程内 memory fallback 放到最后。
+        # 测试环境允许使用进程内 stub；运行时不允许。
         # 原因是当 Postgres 可用且项目以“租约 + 持久化”方式跨进程协作时，
         # 数据库才是共享真源；如果先返回本进程旧缓存，就会把别的实例
         # 已经写入的新状态遮掉，导致控制面出现“读到旧任务状态”的错觉。
@@ -527,6 +577,8 @@ class StateRepo:
         cls._require_backend("list_blackboard_states")
         cls._ensure_state_table()
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("StateRepo list_blackboard_states requires Postgres")
             return memory_items
 
         sql = text("""

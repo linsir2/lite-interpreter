@@ -67,6 +67,8 @@ class DagGraphState(TypedDict, total=False):
     dynamic_request: dict[str, Any]
     dynamic_status: str
     dynamic_summary: str
+    dynamic_continuation: str
+    dynamic_next_static_steps: list[str]
     dynamic_trace: list[dict[str, Any]]
     dynamic_trace_refs: list[str]
     dynamic_artifacts: list[str]

@@ -105,14 +105,12 @@ class ExecutionBlackboard(BaseSubBlackboard):
         workspace_id = getattr(data, "workspace_id", "default_ws")
 
         try:
-            # 1. 从 DB 中捞出该 task_id 的全局混合状态 (避免覆盖 Knowledge 的数据)
-            full_state = StateRepo.load_blackboard_state(tenant_id, task_id) or {}
-
-            # 2. 局部更新当前子黑板 (execution) 的数据
-            full_state[self.board_name] = data.model_dump()
-
-            # 3. 整体回写给大管家，打入 Postgres
-            StateRepo.save_blackboard_state(tenant_id, task_id, workspace_id, full_state)
+            StateRepo.merge_blackboard_sections(
+                tenant_id,
+                task_id,
+                workspace_id,
+                {self.board_name: data.model_dump()},
+            )
 
             logger.debug(f"执行数据持久化成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
             return True

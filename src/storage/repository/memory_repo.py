@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from typing import Any
 
-from config.settings import STRICT_PERSISTENCE
 from sqlalchemy import text
 from src.common.logger import get_logger
 from src.common.utils import get_utc_now
@@ -22,17 +22,21 @@ class MemoryRepo:
     _lock = threading.RLock()
     _last_error: str | None = None
 
+    @staticmethod
+    def _allow_test_backend() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
     @classmethod
     def status(cls) -> dict[str, Any]:
         memory_record_count = sum(
             len(records) for tenant_bucket in cls._memory_store.values() for records in tenant_bucket.values()
         )
         return {
-            "backend": "postgres" if pg_client.engine else "memory_fallback",
+            "backend": "postgres" if pg_client.engine else "unavailable",
             "postgres_available": pg_client.engine is not None,
             "postgres_driver": getattr(pg_client, "driver_name", None),
             "postgres_driver_error": getattr(pg_client, "driver_error", None),
-            "strict_persistence": bool(STRICT_PERSISTENCE),
+            "test_in_memory_backend_active": cls._allow_test_backend() and pg_client.engine is None,
             "memory_record_count": memory_record_count,
             "last_error": cls._last_error,
         }
@@ -41,9 +45,9 @@ class MemoryRepo:
     def _require_backend(cls, operation: str) -> None:
         if pg_client.engine is not None:
             return
-        if not STRICT_PERSISTENCE:
+        if cls._allow_test_backend():
             return
-        message = f"MemoryRepo requires Postgres for `{operation}` when STRICT_PERSISTENCE is enabled"
+        message = f"MemoryRepo requires Postgres for `{operation}`"
         cls._last_error = message
         raise RuntimeError(message)
 
@@ -51,8 +55,7 @@ class MemoryRepo:
     def _handle_backend_error(cls, operation: str, exc: Exception) -> None:
         cls._last_error = str(exc)
         logger.error(f"[MemoryRepo] {operation}失败: {exc}")
-        if STRICT_PERSISTENCE:
-            raise RuntimeError(f"MemoryRepo {operation} failed under STRICT_PERSISTENCE: {exc}") from exc
+        raise RuntimeError(f"MemoryRepo {operation} failed: {exc}") from exc
 
     @classmethod
     def _ensure_table(cls) -> None:
@@ -128,6 +131,8 @@ class MemoryRepo:
 
         cls._require_backend("upsert_records")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("MemoryRepo upsert_records requires Postgres")
             for key, payload_dict in normalized:
                 cls._set_memory_record(tenant_id, workspace_id, memory_kind, key, payload_dict)
             return True
@@ -198,6 +203,8 @@ class MemoryRepo:
     ) -> list[dict[str, Any]]:
         cls._require_backend(f"list_{memory_kind}")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError(f"MemoryRepo list_{memory_kind} requires Postgres")
             return []
         cls._ensure_table()
         sql = text(
@@ -281,12 +288,7 @@ class MemoryRepo:
                 merged = list(items)
                 seen = {str(item.get("name", "")).strip() for item in items if str(item.get("name", "")).strip()}
                 for name, item in memory_by_name.items():
-                    if name in seen:
-                        merged = [
-                            dict(item) if str(existing.get("name", "")).strip() == name else existing
-                            for existing in merged
-                        ]
-                    else:
+                    if name not in seen:
                         merged.append(dict(item))
                 return merged[:limit]
             return list(memory_by_name.values())[:limit]
@@ -342,15 +344,6 @@ class MemoryRepo:
         workspace_id: str,
         task_id: str,
     ) -> dict[str, Any] | None:
-        items = cls._list_memory_records(
-            tenant_id,
-            workspace_id,
-            memory_kind="task_summary",
-            limit=1000,
-        )
-        for item in items:
-            if str(item.get("task_id", "")).strip() == str(task_id).strip():
-                return item
         postgres_items = cls._load_postgres_records(
             tenant_id,
             workspace_id,
@@ -358,6 +351,15 @@ class MemoryRepo:
             limit=1000,
         )
         for item in postgres_items:
+            if str(item.get("task_id", "")).strip() == str(task_id).strip():
+                return item
+        items = cls._list_memory_records(
+            tenant_id,
+            workspace_id,
+            memory_kind="task_summary",
+            limit=1000,
+        )
+        for item in items:
             if str(item.get("task_id", "")).strip() == str(task_id).strip():
                 return item
         return None

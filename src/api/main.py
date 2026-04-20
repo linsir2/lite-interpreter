@@ -17,9 +17,11 @@ from src.api.routers.audit_router import list_audit_logs
 from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
 from src.api.routers.execution_router import (
     get_execution,
+    get_task_workspace,
     list_execution_artifacts,
     list_execution_tool_calls,
     list_task_executions,
+    poll_execution_events,
     stream_execution_events,
 )
 from src.api.routers.knowledge_router import get_task_knowledge
@@ -27,7 +29,7 @@ from src.api.routers.memory_router import get_task_memory
 from src.api.routers.policy_router import get_harness_policy, update_harness_policy
 from src.api.routers.runtime_router import get_runtime_capabilities, list_runtimes
 from src.api.routers.session_router import get_session_me, login_session
-from src.api.routers.sse_router import stream_task_events, trigger_demo_trace
+from src.api.routers.sse_router import poll_task_events, stream_task_events, trigger_demo_trace
 from src.api.routers.upload_router import list_knowledge_assets, list_workspace_skills, upload_asset
 from src.blackboard import execution_blackboard, global_blackboard, knowledge_blackboard, memory_blackboard
 from src.common import event_bus
@@ -87,8 +89,10 @@ app = Starlette(
         Route("/api/tasks/{task_id}/knowledge", get_task_knowledge, methods=["GET"]),
         Route("/api/tasks/{task_id}/memory", get_task_memory, methods=["GET"]),
         Route("/api/tasks/{task_id}/executions", list_task_executions, methods=["GET"]),
+        Route("/api/tasks/{task_id}/workspace", get_task_workspace, methods=["GET"]),
         Route("/api/tasks/{task_id}/result", get_task_result, methods=["GET"]),
         Route("/api/tasks/{task_id}/events", stream_task_events, methods=["GET"]),
+        Route("/api/tasks/{task_id}/events/poll", poll_task_events, methods=["GET"]),
         Route("/api/dev/tasks/{task_id}/demo-trace", trigger_demo_trace, methods=["POST"]),
         Route("/api/uploads", upload_asset, methods=["POST"]),
         Route("/api/knowledge/assets", list_knowledge_assets, methods=["GET"]),
@@ -97,5 +101,6 @@ app = Starlette(
         Route("/api/executions/{execution_id}/artifacts", list_execution_artifacts, methods=["GET"]),
         Route("/api/executions/{execution_id}/tool-calls", list_execution_tool_calls, methods=["GET"]),
         Route("/api/executions/{execution_id}/events", stream_execution_events, methods=["GET"]),
+        Route("/api/executions/{execution_id}/events/poll", poll_execution_events, methods=["GET"]),
     ],
 )

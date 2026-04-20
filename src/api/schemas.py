@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, model_validator
 
 from src.common.event_bus import Event
+from src.common.utils import validate_scope_identifier
 
 
 class CreateTaskRequest(BaseModel):
@@ -25,14 +26,10 @@ class CreateTaskRequest(BaseModel):
 
     @model_validator(mode="after")
     def _normalize(self) -> CreateTaskRequest:
-        self.tenant_id = self.tenant_id.strip()
-        self.workspace_id = self.workspace_id.strip()
+        self.tenant_id = validate_scope_identifier(self.tenant_id, field_name="tenant_id")
+        self.workspace_id = validate_scope_identifier(self.workspace_id, field_name="workspace_id")
         self.input_query = self.input_query.strip()
         self.governance_profile = self.governance_profile.strip() or "researcher"
-        if not self.tenant_id:
-            raise ValueError("tenant_id must not be empty")
-        if not self.workspace_id:
-            raise ValueError("workspace_id must not be empty")
         if not self.input_query:
             raise ValueError("input_query must not be empty")
         normalized_tools = []

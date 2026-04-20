@@ -1,228 +1,74 @@
 lite-interpreter
-├── README.md                           # 项目总览：定位、当前能力、环境、快速启动、运行命令
-├── AGENTS.md                           # 项目级协作约束，要求关注 directory.txt、模块边界与验证流程
-├── Makefile                            # 标准运行入口，默认通过 conda 的 lite_interpreter 环境启动 API/sidecar/frontend/tests/lint
-├── requirements.txt                    # 运行时依赖清单，覆盖 KAG / DeerFlow / FastAPI / Streamlit / Sandbox
-├── pyproject.toml                      # 工程配置：pytest、ruff、black 入口；要求使用 Python 3.12+
-├── .env.example                        # 环境变量示例：DashScope、Neo4j、Qdrant、Postgres、Sandbox、DeerFlow
-├── docker-compose.yml                  # 外部依赖服务编排样例
-├── litellm_config.yml                  # LiteLLM 模型别名配置：fast_model / reasoning_model / coder_model / embedding_model
-├── directory.txt                       # 当前文件协作说明书：目录职责、阅读顺序、模块边界
-├── scripts                             # 脚本层：验收、演示、sidecar 启动与 smoke 测试
-│   ├── check_hybrid_readiness.py       # 快速检查关键混合编排文件是否到位
-│   ├── create_task.py                  # 通过 API 创建真实任务并触发最小链路
-│   ├── demo_task_trace.py              # 触发 demo trace，验证 SSE / 前端显示链路
-│   ├── run_deerflow_sidecar.py         # 启动 DeerFlow sidecar，本项目通过 HTTP 方式接入动态 runtime
-│   ├── smoke_dashscope_litellm.py      # 验证 LiteLLM + DashScope 聊天/embedding 配置
-│   └── smoke_deerflow_bridge.py        # 验证 DeerFlow bridge 的 embedded client 基本可用性
-├── config                              # 配置层：全局运行参数、安全策略与沙箱约束
-│   ├── __init__.py
-│   ├── harness_policy.yaml             # Harness 治理策略：profile、allowed tools、risk threshold、sandbox deny pattern
-│   ├── sandbox_config.py               # Sandbox 资源限制：镜像、内存、CPU、网络、并发、tmpfs
-│   ├── security_config.py              # AST 审计黑名单、高危 builtin/method、tenant id 规则
-│   └── settings.py                     # 全局基础配置：路径、模型、KAG 参数、DeerFlow 参数、存储连接
-├── src                                 # 核心源码
-│   ├── __init__.py
-│   ├── api                             # API 层：HTTP 入口、SSE、任务创建与结果查询
-│   │   ├── __init__.py
-│   │   ├── main.py                     # Starlette 应用入口，负责 lifespan / route 装配
-│   │   ├── schemas.py                  # API 请求/响应与流式事件序列化模型
-│   │   └── routers
-│   │       ├── __init__.py
-│   │       ├── analysis_router.py      # 创建任务、任务调度、启动恢复、结果查询
-│   │       ├── sse_router.py           # SSE 事件流：状态、治理决策、动态 trace、dev demo trace
-│   │       └── upload_router.py        # 上传、知识资产枚举、工作空间技能查询
-│   ├── blackboard                      # 控制面状态层：任务、执行、知识子黑板
-│   │   ├── __init__.py
-│   │   ├── base_blackboard.py          # 子黑板抽象接口
-│   │   ├── exceptions.py               # Blackboard 异常
-│   │   ├── execution_blackboard.py     # 执行状态：ExecutionData 的读写、persist、restore
-│   │   ├── global_blackboard.py        # 全局任务状态：create/update/archive/list/restore
-│   │   ├── knowledge_blackboard.py     # 文件解析与知识流状态
-│   │   └── schema.py                   # TaskGlobalState / ExecutionData / KnowledgeData / RetrievalPlan
-│   ├── common                          # 公共契约与基础设施
-│   │   ├── __init__.py
-│   │   ├── capability_registry.py      # 统一 capability id 与别名映射，供 harness/skillnet/runtime 共用
-│   │   ├── contracts.py                # TaskEnvelope / ExecutionIntent / DecisionRecord / TraceEvent / ExecutionEvent / ExecutionRecord
-│   │   ├── event_bus.py                # 后台线程 + asyncio 的事件总线，负责实时事件投递
-│   │   ├── event_journal.py            # 事件回放存储，供 SSE backlog 与重放使用
-│   │   ├── exceptions.py               # 全局异常
-│   │   ├── llm_client.py               # LiteLLM 客户端封装，按 alias 调用 DashScope 模型
-│   │   ├── logger.py                   # 统一日志格式
-│   │   ├── schema.py                   # EventTopic 枚举
-│   │   └── utils.py                    # UUID/时间/token 估算/上下文 budget 等工具
-│   ├── dag_engine                      # 宏观编排层：静态 DAG 与节点组合
-│   │   ├── __init__.py
-│   │   ├── dag_exceptions.py           # DAG 执行异常
-│   │   ├── dag_graph.py                # LangGraph 组装：router -> static/dynamic branches
-│   │   ├── graphstate.py               # LangGraph state 结构
-│   │   └── nodes
-│   │       ├── __init__.py
-│   │       ├── analyst_node.py         # 静态链规划节点，生成最小分析计划并融合已批准技能
-│   │       ├── auditor_node.py         # AST 审计节点，控制 debugger/executor 分流
-│   │       ├── coder_node.py           # 静态链代码生成入口，组装 payload、记录历史技能使用、写回 blackboard
-│   │       ├── context_builder_node.py # 检索候选压缩、筛选并格式化成 business_context
-│   │       ├── data_inspector.py       # 结构化文件探查：DuckDB -> Pandas -> LLM 三层降级
-│   │       ├── debugger_node.py        # 静态链 fallback 修复器
-│   │       ├── dynamic_swarm_node.py   # 动态超级节点：supervisor + gateway + trace normalizer + state sync
-│   │       ├── executor_node.py        # 调用 SandboxExecTool 执行代码并回写 execution_record
-│   │       ├── kag_retriever.py        # Builder 入库 + QueryEngine 检索 + knowledge_snapshot 写回
-│   │       ├── router_node.py          # 路由节点：静态/动态决策，融合 approved skills 与历史技能
-│   │       ├── skill_harvester_node.py # 从静态/动态结果中抽取技能候选并做授权/提升
-│   │       ├── static_codegen.py       # coder helper：payload、input mounts、template render
-│   │       └── summarizer_node.py      # 统一 final response 构造，输出 static/dynamic 结果
-│   ├── dynamic_engine                  # 微观编排层：受控动态 runtime 接入
-│   │   ├── __init__.py
-│   │   ├── blackboard_context.py       # 动态链注入上下文：budget、governance、knowledge snapshot、writeback channel
-│   │   ├── deerflow_bridge.py          # DeerFlow adapter：embedded / sidecar / auto 三种运行模式
-│   │   ├── runtime_backends.py         # runtime backend 协议与 DeerFlow backend 默认实现
-│   │   ├── runtime_gateway.py          # 对已批准的动态请求执行具体 runtime
-│   │   ├── runtime_registry.py         # runtime backend 注册中心
-│   │   ├── supervisor.py               # DynamicSupervisor：生成 DynamicRunPlan 和 denied patch
-│   │   └── trace_normalizer.py         # 规范化动态 trace event
-│   ├── frontend                        # Streamlit 前端
-│   │   ├── __init__.py
-│   │   ├── app.py                      # Streamlit 应用入口
-│   │   ├── components
-│   │   │   ├── __init__.py
-│   │   │   ├── file_uploader.py        # 文件上传 UI 组件，直连 /api/uploads
-│   │   │   └── status_stream.py        # 嵌入式 SSE 状态/治理/trace 显示组件
-│   │   └── pages
-│   │       ├── __init__.py
-│   │       ├── knowledge_manager.py    # 知识资产页：上传文件、解析状态、资产路径
-│   │       ├── skill_manager.py        # 技能页：approved/preset skills、capabilities、usage
-│   │       └── task_console.py         # 任务台：任务创建、execution 选择、状态流、trace、governance
-│   ├── harness                         # 治理层：policy 读取与 allow/deny 决策
-│   │   ├── __init__.py
-│   │   ├── governor.py                 # 动态请求 / sandbox 执行的治理决策入口
-│   │   ├── policy.py                   # policy loader 与 profile 解析
-│   │   └── types.py                    # GovernanceDecision typed contract
-│   ├── kag                             # 知识面：解析、入库、检索、上下文拼装
-│   │   ├── __init__.py
-│   │   ├── builder
-│   │   │   ├── __init__.py
-│   │   │   ├── cache.py                # 文档解析缓存
-│   │   │   ├── chunker.py              # layout-aware / parent-child / fallback chunking
-│   │   │   ├── classifier.py           # 文档复杂度分级：small / medium / large
-│   │   │   ├── embedding.py            # DashScope embedding + MRL reduction
-│   │   │   ├── entity_extractor.py     # 实体抽取
-│   │   │   ├── fusion.py               # 知识融合与 schema 对齐
-│   │   │   ├── orchestrator.py         # Builder 总调度：解析 -> chunk -> embed -> graph
-│   │   │   ├── parallel_ingestor.py    # 文档并行解析
-│   │   │   ├── parser.py               # Docling / fallback_text 解析器
-│   │   │   └── relation_extractor.py   # 关系抽取
-│   │   ├── context
-│   │   │   ├── __init__.py
-│   │   │   ├── compressor.py           # query-aware 摘要压缩
-│   │   │   ├── formatter.py            # 转成 rules / metrics / filters 结构
-│   │   │   └── selector.py             # Top-K 选择
-│   │   ├── framework
-│   │   │   ├── __init__.py
-│   │   │   └── llama_index_adapter.py  # LlamaIndex + LiteLLM + DashScope 适配
-│   │   └── retriever
-│   │       ├── __init__.py
-│   │       ├── budget.py               # 最终 prompt budget 收敛
-│   │       ├── cache.py                # 检索缓存
-│   │       ├── dedup.py                # 语义去重
-│   │       ├── query_engine.py         # 检索主入口，返回 EvidencePacket
-│   │       ├── query_understanding.py  # query rewrite / filter / difficulty 分析
-│   │       ├── rerank.py               # 重排
-│   │       └── recall
-│   │           ├── __init__.py
-│   │           ├── bm25_search.py      # 稀疏检索
-│   │           ├── filters.py          # 元数据过滤
-│   │           ├── graph_search.py     # 图检索
-│   │           ├── hybrid_search.py    # 向量召回 + RRF 融合
-│   │           └── splade_search.py    # 稀疏向量检索
-│   ├── mcp_gateway                     # MCP 协议层：跨模块标准工具接口
-│   │   ├── __init__.py
-│   │   ├── mcp_client.py               # DAG/Runtime 调 MCP 的进程内客户端
-│   │   ├── mcp_server.py               # 进程内 MCP tool registry / server
-│   │   └── tools
-│   │       ├── __init__.py
-│   │       ├── knowledge_query_tool.py # KAG 查询工具
-│   │       ├── sandbox_exec_tool.py    # Sandbox 工具封装，输出 ExecutionRecord
-│   │       ├── skill_auth_tool.py      # Skill capability 授权工具
-│   │       └── state_sync_tool.py      # 执行黑板 patch / trace append 工具
-│   ├── privacy                         # 脱敏与隐私保护
-│   │   ├── __init__.py
-│   │   ├── data_masker.py              # 输出脱敏
-│   │   ├── desensitization_rules.py    # 脱敏规则
-│   │   └── pii_scanner.py              # PII 扫描
-│   ├── prompts                         # Prompt 模板
-│   │   ├── __init__.py
-│   │   └── inspector_prompts.py        # Data Inspector 的提示词模板
-│   ├── sandbox                         # 执行面：AST 审计、Docker 执行、session、metrics
-│   │   ├── __init__.py
-│   │   ├── ast_auditor.py              # AST 审计核心
-│   │   ├── container_lifecycle.py      # 容器准备、等待、日志收集、资源清理 helper
-│   │   ├── docker_executor.py          # Docker 执行主入口，含并发控制、容器生命周期、错误处理
-│   │   ├── exceptions.py               # Sandbox 异常
-│   │   ├── execution_reporting.py      # sandbox result、session、task event 的统一投影 helper
-│   │   ├── metrics.py                  # Prometheus metrics
-│   │   ├── runtime_state.py            # Docker client / 租户并发 / 运行容器 / cleaner once 运行态
-│   │   ├── schema.py                   # AuditResult / SandboxResult
-│   │   ├── session_manager.py          # session-oriented sandbox handle 管理器
-│   │   └── utils.py                    # 输入校验、日志组装、tenant 校验
-│   ├── skillnet                        # 技能面：抽取、验证、提升、检索、预置技能
-│   │   ├── __init__.py
-│   │   ├── dynamic_skill_adapter.py    # 从动态 trace 生成 SkillDescriptor 候选
-│   │   ├── preset_skills
-│   │   │   ├── __init__.py
-│   │   │   ├── compliance_skills.py    # 合规类预置技能
-│   │   │   ├── data_clean_skills.py    # 数据清洗类预置技能
-│   │   │   ├── stats_skills.py         # 统计分析类预置技能
-│   │   │   └── visualization_skills.py # 可视化类预置技能
-│   │   ├── skill_harvester.py          # 技能抽取
-│   │   ├── skill_promoter.py           # harvested -> approved / needs_review / rejected
-│   │   ├── skill_retriever.py          # 技能检索、排序、历史技能融合
-│   │   ├── skill_schema.py             # SkillDescriptor 模型
-│   │   ├── skill_validator.py          # 技能有效性校验
-│   │   └── preset_skills               # 冷启动预置技能种子，参与 router/analyst/coder 选择
-│   └── storage                         # 存储层：Postgres / Qdrant / Neo4j 与 repository
-│       ├── __init__.py
-│       ├── graph_client.py             # Neo4j 图谱客户端
-│       ├── postgres_client.py          # Postgres 客户端，管理 chunk 与 catalog 存储
-│       ├── schema.py                   # DocChunk / Triple / ParsedDocument 等存储模型
-│       ├── vector_client.py            # Qdrant 向量客户端
-│       └── repository
-│           ├── knowledge_repo.py       # KAG 持久化入口，协调 postgres/vector/graph
-│           ├── skill_repo.py           # approved skills 的跨任务持久化与 usage telemetry
-│           └── state_repo.py           # blackboard / event journal 的持久化与恢复
-├── tests                               # 测试层：单测、集成测试、e2e
-│   ├── __init__.py
-│   ├── conftest.py                     # 公共 fixture、全局状态清理、StateRepo reset
-│   ├── test_api_sse.py                 # API / SSE / result endpoint / autorun flow 测试
-│   ├── test_ast_auditor.py             # AST 审计测试
-│   ├── test_blackboard.py              # Global/Execution Blackboard 与 Event Bus 测试
-│   ├── test_dag_engine.py              # router/static/dynamic/summary 等 DAG 节点测试
-│   ├── test_deerflow_bridge.py         # DeerFlow bridge sidecar/embedded/degraded 测试
-│   ├── test_docs_consistency.py        # 文档真相源与测试基线引用一致性检查
-│   ├── test_dynamic_runtime.py         # DynamicSupervisor / RuntimeGateway / TraceNormalizer 测试
-│   ├── test_e2e.py                     # static/dynamic 最小端到端测试
-│   ├── test_frontend_stream.py         # Streamlit stream HTML 组件测试
-│   ├── test_frontend_task_console.py   # Task Console 页面逻辑测试
-│   ├── test_harness.py                 # capability registry / governor / skill auth / sandbox deny 测试
-│   ├── test_kag.py                     # KAG builder/retriever/context 测试
-│   ├── test_llm_client.py              # LiteLLM client 测试
-│   ├── test_sandbox.py                 # sandbox 执行测试，部分依赖 Docker
-│   └── test_skillnet.py                # SkillNet 抽取/检索/提升/usage 测试
-├── docs                                # 文档层
-│   ├── architecture.md                 # 当前架构与模块协作说明
-│   ├── code_tour.md                    # 从配置、控制面、运行面、执行面、知识面到前端的阅读导航
-│   ├── deerflow_integration.md         # DeerFlow sidecar / embedded / auto 模式与运行说明
-│   ├── deployment.md                   # 本地部署、依赖准备、运行方式、故障排查
-│   ├── development_guide.md            # 开发规范、提交流程、测试方式、常见改动入口
-│   ├── future_roadmap.md               # 后续演进方向：lease/worker、执行面、长链验收、产品化路线
-│   ├── interview_narrative.md          # 面试/汇报叙事：为什么这样设计、怎么讲模块协作与治理
-│   ├── project_status.md               # 当前成熟度真相源：最新验证基线、核心/支撑/实验分层、已知热点与非目标
-│   └── project_plan.md                 # 项目计划书：现状、问题、改造计划、验收标准
-└── data                                # 本地数据目录（运行时生成，不入 git）
-    ├── uploads                         # 上传文件
-    ├── chroma                          # 本地向量/检索试验目录
-    └── outputs                         # sandbox / 任务产物输出
+├── README.md                     # 中文总览：定位、能力边界、启动方式、文档入口
+├── AGENTS.md                     # 仓库级协作与实现约束（保留，供 agent/自动化遵守）
+├── 项目二.md                     # 中文项目综述、工程判断、下一阶段重点
+├── directory.txt                 # 仓库目录总览
+├── Makefile                      # 常用运行/测试/检查入口
+├── pyproject.toml                # pytest / ruff / black 配置，要求 Python 3.12+
+├── requirements.txt              # 运行依赖
+├── docker-compose.yml            # 外部依赖示例编排
+├── litellm_config.yml            # 模型 alias 配置
+├── config/
+│   ├── settings.py               # 全局配置、路径、模型、API、安全默认值
+│   ├── harness_policy.yaml       # 动态/执行治理策略
+│   ├── sandbox_config.py         # sandbox 资源限制与镜像配置
+│   └── security_config.py        # AST 风险面默认规则
+├── scripts/
+│   ├── check_hybrid_readiness.py # 快速验收关键混合编排文件是否齐全
+│   ├── create_task.py            # 调 API 创建任务
+│   ├── demo_task_trace.py        # 触发 demo trace
+│   ├── run_deerflow_sidecar.py   # 启动 DeerFlow sidecar
+│   ├── smoke_dashscope_litellm.py# 模型配置 smoke test
+│   └── smoke_deerflow_bridge.py  # DeerFlow sidecar/bridge smoke test
+├── src/
+│   ├── api/                      # Starlette API 层
+│   │   ├── main.py               # 应用入口与路由装配
+│   │   ├── auth.py               # 认证、角色、scope 绑定
+│   │   ├── request_scope.py      # 请求 scope 解析与资源 scope 校验
+│   │   ├── execution_resources.py# task/execution 读模型投影
+│   │   └── routers/              # 任务、执行、SSE、上传、诊断、策略等接口
+│   ├── blackboard/               # 控制面状态子域
+│   │   ├── global_blackboard.py  # 任务全局生命周期状态
+│   │   ├── execution_blackboard.py# 执行态主状态
+│   │   ├── knowledge_blackboard.py# 知识态观察状态
+│   │   ├── memory_blackboard.py  # 任务记忆快照
+│   │   ├── task_state_services.py# 执行/知识写入服务层
+│   │   └── schema.py             # 全部核心状态模型
+│   ├── common/                   # 契约、事件、通用工具
+│   │   ├── contracts.py          # TaskEnvelope / ExecutionIntent / ExecutionRecord 等
+│   │   ├── capability_registry.py# capability id 与别名映射
+│   │   ├── event_bus.py          # 实时事件总线
+│   │   ├── event_journal.py      # 事件回放日志
+│   │   └── utils.py              # scope 校验、uuid、token 估算等工具
+│   ├── dag_engine/               # 宏观静态编排
+│   │   ├── dag_graph.py          # 主任务流 orchestrator
+│   │   ├── graphstate.py         # DAG state 字段
+│   │   └── nodes/                # router / analyst / coder / auditor / executor / summarizer 等节点
+│   ├── dynamic_engine/           # 受控动态运行时隔离层
+│   │   ├── deerflow_bridge.py    # DeerFlow sidecar 适配
+│   │   ├── supervisor.py         # 动态请求、治理决策、上下文封装
+│   │   ├── runtime_backends.py   # runtime capability manifest 与 backend 描述
+│   │   └── trace_normalizer.py   # 动态事件标准化
+│   ├── frontend/                 # Streamlit 前端
+│   │   ├── app.py                # 页面入口
+│   │   ├── components/           # uploader / stream / workspace shell 组件
+│   │   └── pages/                # task console / knowledge / skill / audit 页面
+│   ├── harness/                  # 动态/执行治理层
+│   ├── kag/                      # 文档解析、检索、上下文构建
+│   ├── mcp_gateway/              # 进程内 MCP tool registry
+│   ├── memory/                   # 任务记忆与 durable memory 协调
+│   ├── sandbox/                  # AST 审计、Docker 执行、session、metrics
+│   ├── skillnet/                 # 技能抽取、验证、提升、检索
+│   └── storage/                  # Postgres / Qdrant / Neo4j / repository 层
+├── tests/                        # 单测、集成测试、端到端测试
+├── docs/
+│   ├── architecture.md           # 架构与主链路说明
+│   ├── development_guide.md      # 开发与改动指南
+│   ├── deployment.md             # 部署与运行说明
+│   ├── project_status.md         # 成熟度与测试基线真相源
+│   └── testing.md                # 测试分层与执行建议
+├── data/                         # 运行时数据（上传、输出、状态）
+├── artifacts/                    # 测试/评测产物
+└── .omx/                         # 会话规划与状态产物（非产品文档）
 
-说明
-1. `__pycache__`、`.pytest_cache`、`.venv`、日志和中间数据目录不在此清单中展开。
-2. 默认运行环境是 conda 的 `lite_interpreter`，Makefile 已按该环境组织命令。
-3. 阅读顺序建议先看 `README.md`、`docs/code_tour.md`、`docs/architecture.md`，再进入具体模块。
+阅读顺序建议：README.md -> docs/project_status.md -> docs/architecture.md -> directory.txt -> docs/development_guide.md。

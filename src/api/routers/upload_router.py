@@ -25,11 +25,11 @@ from src.blackboard import (
     knowledge_blackboard,
 )
 from src.common.control_plane import parser_reports_from_documents
-from src.common.utils import generate_uuid
+from src.common.utils import generate_uuid, validate_scope_identifier
 from src.skillnet.preset_skills import load_preset_skills
 from src.storage.repository.memory_repo import MemoryRepo
 
-STRUCTURED_EXTENSIONS = {".csv", ".tsv", ".xlsx", ".xls", ".parquet", ".json"}
+STRUCTURED_EXTENSIONS = {".csv", ".tsv", ".json"}
 BUSINESS_DOCUMENT_EXTENSIONS = {".pdf", ".md", ".txt", ".docx", ".doc"}
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 _WORKSPACE_UPLOAD_TASK_PREFIX = "workspace_upload"
@@ -42,9 +42,15 @@ def _safe_name(file_name: str) -> str:
 
 def _infer_asset_kind(file_name: str, requested_kind: str | None = None) -> str:
     requested = str(requested_kind or "").strip().lower()
-    if requested in {"structured_dataset", "business_document"}:
-        return requested
     suffix = Path(file_name).suffix.lower()
+    if requested in {"structured_dataset", "business_document"}:
+        if requested == "structured_dataset" and suffix in BUSINESS_DOCUMENT_EXTENSIONS:
+            raise ValueError("asset_kind_conflicts_with_extension")
+        if requested == "structured_dataset" and suffix not in STRUCTURED_EXTENSIONS:
+            raise ValueError("unsupported_structured_extension")
+        if requested == "business_document" and suffix in STRUCTURED_EXTENSIONS:
+            raise ValueError("asset_kind_conflicts_with_extension")
+        return requested
     if suffix in STRUCTURED_EXTENSIONS:
         return "structured_dataset"
     if suffix in BUSINESS_DOCUMENT_EXTENSIONS:
@@ -288,7 +294,14 @@ async def upload_asset(request: Request) -> JSONResponse:
     requested_tenant_id = str(form.get("tenant_id") or "").strip()
     requested_workspace_id = str(form.get("workspace_id") or "").strip()
     task_id = str(form.get("task_id") or "").strip()
-    asset_kind = _infer_asset_kind(getattr(upload, "filename", "upload.bin"), str(form.get("asset_kind") or ""))
+    try:
+        if requested_tenant_id:
+            requested_tenant_id = validate_scope_identifier(requested_tenant_id, field_name="tenant_id")
+        if requested_workspace_id:
+            requested_workspace_id = validate_scope_identifier(requested_workspace_id, field_name="workspace_id")
+        asset_kind = _infer_asset_kind(getattr(upload, "filename", "upload.bin"), str(form.get("asset_kind") or ""))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     safe_name = _safe_name(getattr(upload, "filename", "upload.bin"))
     deduplicated = False
     payload_size = 0

@@ -11,9 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
+from src.blackboard.task_state_services import ExecutionStateService
 from src.common.contracts import ExecutionIntent
 from src.common.logger import get_logger
 from src.dag_engine.graphstate import DagGraphState
@@ -80,10 +80,19 @@ def _build_execution_intent(
     prepared: PreparedRouting,
     candidate_skills: list[dict[str, Any]],
 ) -> ExecutionIntent:
+    next_static_steps = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in list(getattr(runtime_decision, "next_static_steps", ()) or [])
+            if str(item).strip()
+        )
+    )
     return ExecutionIntent(
         intent=(
-            "dynamic_flow" if runtime_decision.final_mode == "dynamic"
-            else "hybrid_flow" if runtime_decision.final_mode == "hybrid" or len(prepared.destinations) > 1
+            "dynamic_then_static_flow"
+            if runtime_decision.final_mode == "dynamic" and bool(next_static_steps)
+            else "dynamic_only"
+            if runtime_decision.final_mode == "dynamic"
             else "static_flow"
         ),
         destinations=prepared.destinations,
@@ -96,6 +105,7 @@ def _build_execution_intent(
         candidate_skills=candidate_skills,
         metadata={
             **({"dynamic_reason": prepared.dynamic_reason} if prepared.dynamic_reason else {}),
+            **({"next_static_steps": next_static_steps} if next_static_steps else {}),
             **runtime_decision.to_metadata(),
         },
     )
@@ -121,7 +131,7 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
         sub_status="正在评估任务需求与数据状态",
     )
 
-    exec_data = execution_blackboard.read(tenant_id, task_id)
+    exec_data = ExecutionStateService.load(tenant_id, task_id)
     if not exec_data:
         raise ValueError(f"严重错误：找不到任务 {task_id} 的 ExecutionData")
     candidate_skills = _recall_router_candidate_skills(state, exec_data)
@@ -141,10 +151,11 @@ def router_node(state: DagGraphState) -> dict[str, Any]:
         prepared=prepared,
         candidate_skills=candidate_skills,
     )
-    exec_data.control.execution_intent = execution_intent
-
-    execution_blackboard.write(tenant_id, task_id, exec_data)
-    execution_blackboard.persist(tenant_id, task_id)
+    ExecutionStateService.update_control(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        execution_intent=execution_intent,
+    )
 
     return {
         "next_actions": prepared.destinations,

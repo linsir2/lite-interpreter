@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import httpx
+from src.frontend.components.workspace_shell import render_workspace_sidebar
 from src.frontend.pages.task_console import (
     build_output_cards,
     collect_result_sections,
@@ -33,6 +34,54 @@ def test_summarize_result_header_prefers_final_response_fields():
     assert header["answer"] == "这是最终回答。"
 
 
+def test_summarize_result_header_prefers_workspace_primary_fields():
+    payload = {
+        "workspace": {
+            "primary": {
+                "mode": "dynamic_then_static",
+                "headline": "统一工作台标题",
+                "answer": "统一工作台回答",
+            }
+        },
+        "response": {"mode": "static", "headline": "旧标题", "answer": "旧回答"},
+    }
+
+    header = summarize_result_header(payload)
+    assert header["mode"] == "dynamic_then_static"
+    assert header["headline"] == "统一工作台标题"
+    assert header["answer"] == "统一工作台回答"
+
+
+def test_render_workspace_sidebar_returns_updated_fields():
+    class _FakeStreamlit:
+        def caption(self, value):  # noqa: ARG002
+            return None
+
+        def text_input(self, _label, value=""):
+            return value
+
+        def selectbox(self, _label, options, index=0):
+            return options[index]
+
+        def text_area(self, _label, value="", height=120):  # noqa: ARG002
+            return value
+
+    state = render_workspace_sidebar(
+        _FakeStreamlit(),
+        api_base_url="http://127.0.0.1:8000",
+        tenant_id="tenant-a",
+        workspace_id="ws-a",
+        governance_profile="researcher",
+        allowed_tools_text="knowledge_query",
+        default_task="task-a",
+        default_query="分析销售数据",
+    )
+    assert state["tenant_id"] == "tenant-a"
+    assert state["workspace_id"] == "ws-a"
+    assert state["task_id"] == "task-a"
+    assert state["query"] == "分析销售数据"
+
+
 def test_collect_result_sections_extracts_lists():
     payload = {
         "executions": [{"execution_id": "sandbox:session-1", "kind": "sandbox"}],
@@ -41,7 +90,7 @@ def test_collect_result_sections_extracts_lists():
             "task_lease": {
                 "owner_id": "host:pid",
                 "lease_expires_at": "2026-04-05T00:00:00Z",
-                "backend": "memory_fallback",
+                "backend": "test_stub",
             }
         },
         "response": {
@@ -125,6 +174,15 @@ def test_fetch_task_console_bundle_uses_execution_endpoints(monkeypatch):
 
     def fake_get(url, timeout=20.0, headers=None):
         requested_urls.append(url)
+        if "/workspace?" in url:
+            return _FakeResponse(
+                {
+                    "task": {"task_id": "task-1"},
+                    "workspace": {"primary": {"headline": "done", "answer": "done", "mode": "static"}},
+                    "executions": [{"execution_id": "runtime:task-1", "kind": "runtime"}],
+                    "tool_calls": [{"tool_name": "web_search", "phase": "start"}],
+                }
+            )
         if "/result?" in url:
             return _FakeResponse({"task": {"task_id": "task-1"}, "response": {"headline": "done"}})
         if "/executions?" in url:
@@ -143,14 +201,42 @@ def test_fetch_task_console_bundle_uses_execution_endpoints(monkeypatch):
 
     assert payload["executions"][0]["execution_id"] == "runtime:task-1"
     assert payload["tool_calls"][0]["tool_name"] == "web_search"
-    assert any(url.endswith("/api/tasks/task-1/result?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
-    assert any(
-        url.endswith("/api/tasks/task-1/executions?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls
-    )
-    assert any(
-        url.endswith("/api/executions/runtime:task-1/tool-calls?tenant_id=tenant-1&workspace_id=ws-1")
-        for url in requested_urls
-    )
+    assert payload["workspace"]["primary"]["headline"] == "done"
+    assert any(url.endswith("/api/tasks/task-1/workspace?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
+    assert not any(url.endswith("/api/tasks/task-1/result?tenant_id=tenant-1&workspace_id=ws-1") for url in requested_urls)
+
+
+def test_collect_result_sections_preserves_task_lease_backend_value():
+    payload = {
+        "status": {
+            "task_lease": {
+                "owner_id": "host:pid",
+                "lease_expires_at": "2026-04-05T00:00:00Z",
+                "backend": "test_stub",
+            }
+        }
+    }
+    sections = collect_result_sections(payload)
+    assert sections["task_lease"][0]["backend"] == "test_stub"
+
+
+def test_collect_result_sections_prefers_workspace_evidence_and_knowledge():
+    payload = {
+        "workspace": {
+            "evidence": {"evidence_refs": ["chunk-workspace"]},
+            "knowledge": {
+                "analysis_brief": {"question": "workspace q", "analysis_mode": "dynamic"},
+                "knowledge_snapshot": {"rewritten_query": "workspace rq"},
+                "compiled_knowledge": {"rule_specs": [{"source_text": "合同必须上传"}]},
+            },
+        },
+        "response": {"evidence_refs": ["chunk-old"]},
+    }
+    sections = collect_result_sections(payload)
+    assert sections["evidence_refs"] == ["chunk-workspace"]
+    assert sections["analysis_brief"][0]["question"] == "workspace q"
+    assert sections["knowledge_snapshot"][0]["rewritten_query"] == "workspace rq"
+    assert sections["compiled_knowledge"][0]["rule_specs"][0]["source_text"] == "合同必须上传"
 
 
 def test_collect_result_sections_extracts_parser_reports():

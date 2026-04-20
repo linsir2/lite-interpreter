@@ -19,6 +19,7 @@ from config.settings import POSTGRES_URI
 from sqlalchemy import bindparam, create_engine, text
 
 from src.common.logger import get_logger
+from src.common.utils import scope_identifier_to_db_name
 from src.storage.schema import DocChunk
 
 logger = get_logger(__name__)
@@ -247,7 +248,7 @@ class PostgresDBClient:
     def df_to_sql_table(self, tenant_id: str, table_name: str, df: pd.DataFrame):
         if not self.engine:
             raise ConnectionError("Postgres engine not initialized.")
-        schema_name = f"t_{tenant_id}"
+        schema_name = scope_identifier_to_db_name(tenant_id, prefix="t_")
         try:
             with self.engine.begin() as conn:
                 conn.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}"))

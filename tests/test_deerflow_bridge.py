@@ -1,4 +1,4 @@
-"""Unit tests for the DeerFlow bridge using a stub embedded client."""
+"""Unit tests for the DeerFlow sidecar bridge."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import types
 import unittest
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from unittest.mock import patch
 
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
@@ -19,28 +18,6 @@ from src.dynamic_engine.deerflow_bridge import (  # noqa: E402
     DeerflowRuntimeConfig,
     DeerflowTaskRequest,
 )
-
-
-class _FakeEvent:
-    def __init__(self, event_type: str, data: dict):
-        self.type = event_type
-        self.data = data
-
-
-class _FakeDeerFlowClient:
-    def __init__(self, **kwargs):
-        self.kwargs = kwargs
-
-    def stream(self, message: str, **kwargs):
-        yield _FakeEvent(
-            "messages-tuple",
-            {"type": "ai", "content": "dynamic answer", "id": "ai-1"},
-        )
-        yield _FakeEvent(
-            "values",
-            {"artifacts": [{"path": "/tmp/report.md"}]},
-        )
-        yield _FakeEvent("end", {"usage": {"total_tokens": 10}})
 
 
 class _FakeStreamResponse:
@@ -98,61 +75,9 @@ def _run_fake_sidecar(lines: list[str]):
 
 
 class DeerflowBridgeTests(unittest.TestCase):
-    def test_run_returns_degraded_result_when_package_is_missing(self):
-        bridge = DeerflowBridge(
-            runtime_config=DeerflowRuntimeConfig(
-                module_name="missing.deerflow.client",
-            )
-        )
-        result = bridge.run(
-            DeerflowTaskRequest(
-                task_id="task-1",
-                tenant_id="tenant-1",
-                query="analyze something",
-                system_context={"constraints": {}},
-            )
-        )
-        self.assertEqual(result.status, "unavailable")
-        self.assertTrue(result.trace)
-        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "unavailable")
-
-    def test_run_uses_embedded_client_when_import_succeeds(self):
-        bridge = DeerflowBridge(
-            runtime_config=DeerflowRuntimeConfig(
-                module_name="deerflow.client",
-                runtime_mode="embedded",
-                config_path=str(Path(__file__)),
-                max_events=8,
-            )
-        )
-        request = DeerflowTaskRequest(
-            task_id="task-2",
-            tenant_id="tenant-2",
-            query="analyze something",
-            system_context={
-                "constraints": {
-                    "network_boundary": {
-                        "platform_network_access": "tool-mediated-only",
-                        "sandbox_network_access": "disabled",
-                    }
-                }
-            },
-        )
-        fake_module = types.SimpleNamespace(DeerFlowClient=_FakeDeerFlowClient)
-        with patch("importlib.import_module", return_value=fake_module):
-            result = bridge.run(request)
-
-        self.assertEqual(result.status, "completed")
-        self.assertIn("dynamic answer", result.summary)
-        self.assertIn("/tmp/report.md", result.artifacts)
-        self.assertEqual(result.trace_refs, ["deerflow:lite-interpreter-task-2"])
-        self.assertEqual(bridge.build_payload(request)["runtime"]["python_package"], "deerflow.client")
-        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "embedded")
-
     def test_run_uses_sidecar_stream_when_configured(self):
         bridge = DeerflowBridge(
             runtime_config=DeerflowRuntimeConfig(
-                runtime_mode="sidecar",
                 sidecar_url="http://127.0.0.1:8765",
                 config_path="",
                 max_events=8,
@@ -163,6 +88,7 @@ class DeerflowBridgeTests(unittest.TestCase):
             tenant_id="tenant-3",
             query="analyze something",
             system_context={"constraints": {}},
+            metadata={"continuation": "resume_static", "next_static_steps": ["analyst"]},
         )
         sidecar_lines = [
             '{"type":"messages-tuple","data":{"type":"ai","content":"sidecar answer"}}',
@@ -175,6 +101,8 @@ class DeerflowBridgeTests(unittest.TestCase):
             result = bridge.run(request)
 
         self.assertEqual(result.status, "completed")
+        self.assertEqual(result.continuation, "resume_static")
+        self.assertEqual(result.next_static_steps, ["analyst"])
         self.assertIn("sidecar answer", result.summary)
         self.assertIn("/tmp/sidecar.md", result.artifacts)
         self.assertEqual(result.trace_refs, ["deerflow-sidecar:task-3"])
@@ -189,7 +117,6 @@ class DeerflowBridgeTests(unittest.TestCase):
             with _run_fake_sidecar(sidecar_lines) as (sidecar_url, server):
                 bridge = DeerflowBridge(
                     runtime_config=DeerflowRuntimeConfig(
-                        runtime_mode="sidecar",
                         sidecar_url=sidecar_url,
                         config_path="",
                         max_events=8,
@@ -206,6 +133,7 @@ class DeerflowBridgeTests(unittest.TestCase):
             self.skipTest("Local TCP bind unavailable in current environment")
 
         self.assertEqual(result.status, "completed")
+        self.assertEqual(result.continuation, "finish")
         self.assertIn("sidecar transport answer", result.summary)
         self.assertIn("/tmp/transport.md", result.artifacts)
         self.assertEqual(result.trace_refs, ["deerflow-sidecar:task-sidecar-transport"])
@@ -214,35 +142,9 @@ class DeerflowBridgeTests(unittest.TestCase):
         self.assertEqual(payload["thread_id"], "lite-interpreter-task-sidecar-transport")
         self.assertIn("Task:", payload["message"])
 
-    def test_run_records_auto_sidecar_fallback_reason_when_embedded_succeeds(self):
-        bridge = DeerflowBridge(
-            runtime_config=DeerflowRuntimeConfig(
-                module_name="deerflow.client",
-                runtime_mode="auto",
-                sidecar_url="http://127.0.0.1:8765",
-                max_events=8,
-            )
-        )
-        request = DeerflowTaskRequest(
-            task_id="task-4",
-            tenant_id="tenant-4",
-            query="analyze something",
-            system_context={"constraints": {}},
-        )
-        fake_module = types.SimpleNamespace(DeerFlowClient=_FakeDeerFlowClient)
-        with patch("src.dynamic_engine.deerflow_bridge.httpx.stream", side_effect=RuntimeError("sidecar down")):
-            with patch("importlib.import_module", return_value=fake_module):
-                result = bridge.run(request)
-
-        self.assertEqual(result.status, "completed")
-        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "embedded")
-        self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "auto")
-        self.assertIn("sidecar down", result.runtime_metadata["sidecar_fallback_reason"])
-
     def test_run_sidecar_mode_returns_unavailable_result_when_sidecar_fails(self):
         bridge = DeerflowBridge(
             runtime_config=DeerflowRuntimeConfig(
-                runtime_mode="sidecar",
                 sidecar_url="http://127.0.0.1:8765",
                 max_events=8,
             )
@@ -257,38 +159,13 @@ class DeerflowBridgeTests(unittest.TestCase):
             result = bridge.run(request)
 
         self.assertEqual(result.status, "unavailable")
+        self.assertEqual(result.continuation, "finish")
         self.assertIn("Failed to reach DeerFlow sidecar", result.summary)
         self.assertEqual(result.trace_refs, ["dynamic-preview:task-5"])
         self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "sidecar")
         self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "unavailable")
         self.assertIn("sidecar down", result.runtime_metadata["sidecar_fallback_reason"])
         self.assertEqual(result.runtime_metadata["sidecar_url"], "http://127.0.0.1:8765")
-
-    def test_run_auto_mode_reports_both_sidecar_and_embedded_failures(self):
-        bridge = DeerflowBridge(
-            runtime_config=DeerflowRuntimeConfig(
-                module_name="missing.deerflow.client",
-                runtime_mode="auto",
-                sidecar_url="http://127.0.0.1:8765",
-                max_events=8,
-            )
-        )
-        request = DeerflowTaskRequest(
-            task_id="task-6",
-            tenant_id="tenant-6",
-            query="analyze something",
-            system_context={"constraints": {}},
-        )
-        with patch("src.dynamic_engine.deerflow_bridge.httpx.stream", side_effect=RuntimeError("sidecar timeout")):
-            result = bridge.run(request)
-
-        self.assertEqual(result.status, "unavailable")
-        self.assertIn("Failed to use DeerFlow runtime in `auto` mode", result.summary)
-        self.assertEqual(result.trace_refs, ["dynamic-preview:task-6"])
-        self.assertEqual(result.runtime_metadata["requested_runtime_mode"], "auto")
-        self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "unavailable")
-        self.assertIn("sidecar timeout", result.runtime_metadata["sidecar_fallback_reason"])
-        self.assertIn("No module named", result.runtime_metadata["embedded_error"])
 
 
 if __name__ == "__main__":

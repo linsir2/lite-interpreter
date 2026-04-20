@@ -7,10 +7,10 @@ from typing import Any
 
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
+from src.blackboard.task_state_services import ExecutionStateService
 from src.common import get_utc_now
 from src.common.control_plane import task_governance_profile
 from src.mcp_gateway import default_mcp_client
-from src.mcp_gateway.tools.state_sync_tool import StateSyncTool
 from src.memory import MemoryService
 from src.skillnet.skill_harvester import SkillHarvester
 from src.skillnet.skill_promoter import SkillPromoter
@@ -27,18 +27,20 @@ def skill_harvester_node(state: Mapping[str, Any]) -> dict[str, Any]:
         sub_status="正在回收执行路径并沉淀技能候选",
     )
 
-    patch = {
-        "dynamic": {
-            "request": state.get("dynamic_request"),
-            "status": state.get("dynamic_status"),
-            "summary": state.get("dynamic_summary"),
-            "trace": state.get("dynamic_trace"),
-            "trace_refs": state.get("dynamic_trace_refs"),
-            "artifacts": state.get("dynamic_artifacts"),
-            "recommended_static_skill": state.get("recommended_static_skill"),
-        }
-    }
-    execution_data = StateSyncTool.sync_execution_patch(tenant_id, task_id, patch)
+    execution_data = ExecutionStateService.update_dynamic(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        request=state.get("dynamic_request"),
+        status=state.get("dynamic_status"),
+        summary=state.get("dynamic_summary"),
+        continuation=state.get("dynamic_continuation"),
+        next_static_steps=list(state.get("dynamic_next_static_steps") or []),
+        trace_refs=list(state.get("dynamic_trace_refs") or []),
+        artifacts=list(state.get("dynamic_artifacts") or []),
+        recommended_static_skill=(
+            dict(state.get("recommended_static_skill") or {}) if state.get("recommended_static_skill") else None
+        ),
+    )
     harvested_candidates = SkillHarvester.harvest(execution_data)
     if harvested_candidates:
         authorized_candidates = []

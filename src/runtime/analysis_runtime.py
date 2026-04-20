@@ -20,7 +20,7 @@ import yaml
 from config.settings import ANALYSIS_RUNTIME_POLICY_PATH
 
 from src.common.llm_client import LiteLLMClient
-from src.kag.compiler.lexicon import LexiconMatcher
+from src.kag.compiler import KnowledgeCompilerService
 from src.runtime.guidance_runner import run_route_selection
 
 
@@ -42,9 +42,8 @@ class AnalysisTaskProfile:
     requires_static_execution: bool
     requires_external_research: bool
     fine_routing_invoked: bool
-    fallback_mode: str
-    fallback_destinations: tuple[str, ...]
-    fallback_reason: str
+    continuation: str
+    next_static_steps: tuple[str, ...]
     effective_tools: tuple[str, ...]
     known_gaps: tuple[str, ...]
     routing_reasons: tuple[str, ...]
@@ -67,9 +66,8 @@ class AnalysisTaskProfile:
             "requires_static_execution": self.requires_static_execution,
             "requires_external_research": self.requires_external_research,
             "fine_routing_invoked": self.fine_routing_invoked,
-            "fallback_mode": self.fallback_mode,
-            "fallback_destinations": list(self.fallback_destinations),
-            "fallback_reason": self.fallback_reason,
+            "continuation": self.continuation,
+            "next_static_steps": list(self.next_static_steps),
             "effective_tools": list(self.effective_tools),
             "known_gaps": list(self.known_gaps),
             "routing_reasons": list(self.routing_reasons),
@@ -98,9 +96,8 @@ class AnalysisRuntimeDecision:
     requires_static_execution: bool
     requires_external_research: bool
     fine_routing_invoked: bool
-    fallback_mode: str
-    fallback_destinations: tuple[str, ...]
-    fallback_reason: str
+    continuation: str
+    next_static_steps: tuple[str, ...]
     effective_tools: tuple[str, ...]
     known_gaps: tuple[str, ...]
     routing_reasons: tuple[str, ...]
@@ -125,9 +122,8 @@ class AnalysisRuntimeDecision:
             "requires_static_execution": self.requires_static_execution,
             "requires_external_research": self.requires_external_research,
             "fine_routing_invoked": self.fine_routing_invoked,
-            "fallback_mode": self.fallback_mode,
-            "fallback_destinations": list(self.fallback_destinations),
-            "fallback_reason": self.fallback_reason,
+            "continuation": self.continuation,
+            "next_static_steps": list(self.next_static_steps),
             "effective_tools": list(self.effective_tools),
             "known_gaps": list(self.known_gaps),
             "routing_reasons": list(self.routing_reasons),
@@ -458,9 +454,8 @@ def _build_non_dynamic_profile(
         requires_static_execution=requires_static_execution,
         requires_external_research=False,
         fine_routing_invoked=False,
-        fallback_mode=final_mode,
-        fallback_destinations=destinations,
-        fallback_reason="",
+        continuation="finish",
+        next_static_steps=(),
         effective_tools=allowed,
         known_gaps=tuple(dict.fromkeys(known_gaps)),
         routing_reasons=routing_reasons,
@@ -491,7 +486,7 @@ def classify_analysis_task(
     rules, metrics, filters = _business_context(exec_data)
     known_gaps: list[str] = []
     allowed = _normalize_strings(allowed_tools)
-    lexical_signals = LexiconMatcher().classify_query(query)
+    lexical_signals = KnowledgeCompilerService.classify_query(query)
 
     dynamic_hits = list(
         dict.fromkeys([match.canonical for match in lexical_signals.dynamic_hits] or [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query])
@@ -554,11 +549,8 @@ def classify_analysis_task(
         analysis_mode = coarse_analysis_mode if final_mode == "dynamic" else static_analysis_mode
         profile_key = analysis_mode
         destinations = ("dynamic_swarm",) if final_mode == "dynamic" else static_destinations
-        fallback_mode = static_mode
-        fallback_destinations = static_destinations
-        fallback_reason = (
-            "dynamic unavailable or denied -> degrade to precomputed static path" if final_mode != "dynamic" else ""
-        )
+        continuation = "resume_static" if final_mode == "dynamic" and requires_static_execution else "finish"
+        next_static_steps = static_destinations if continuation == "resume_static" else ()
         decision_reason = coarse_reasons[0]
         supporting_reasons: list[str] = list(coarse_reasons[1:])
         if final_mode != "dynamic":
@@ -651,9 +643,8 @@ def classify_analysis_task(
         requires_static_execution=requires_static_execution,
         requires_external_research=bool(dynamic_hits),
         fine_routing_invoked=fine_routing_invoked,
-        fallback_mode=fallback_mode,
-        fallback_destinations=tuple(fallback_destinations),
-        fallback_reason=fallback_reason,
+        continuation=continuation,
+        next_static_steps=tuple(next_static_steps),
         effective_tools=allowed,
         known_gaps=tuple(dict.fromkeys(known_gaps)),
         routing_reasons=tuple(supporting_reasons),
@@ -714,9 +705,8 @@ def resolve_runtime_decision(
         requires_static_execution=profile.requires_static_execution,
         requires_external_research=profile.requires_external_research,
         fine_routing_invoked=profile.fine_routing_invoked,
-        fallback_mode=profile.fallback_mode,
-        fallback_destinations=profile.fallback_destinations,
-        fallback_reason=profile.fallback_reason,
+        continuation=profile.continuation,
+        next_static_steps=profile.next_static_steps,
         effective_tools=profile.effective_tools,
         known_gaps=profile.known_gaps,
         routing_reasons=profile.routing_reasons,

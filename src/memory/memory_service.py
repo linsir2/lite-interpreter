@@ -38,14 +38,18 @@ class MemoryService:
         task_id: str,
         workspace_id: str,
     ) -> MemoryData:
+        try:
+            workspace_preferences = [
+                WorkspacePreferenceState.model_validate(item)
+                for item in MemoryRepo.list_workspace_preferences(tenant_id, workspace_id)
+            ]
+        except Exception:
+            workspace_preferences = []
         return MemoryData(
             task_id=task_id,
             tenant_id=tenant_id,
             workspace_id=workspace_id,
-            workspace_preferences=[
-                WorkspacePreferenceState.model_validate(item)
-                for item in MemoryRepo.list_workspace_preferences(tenant_id, workspace_id)
-            ],
+            workspace_preferences=workspace_preferences,
         )
 
     @classmethod
@@ -110,13 +114,16 @@ class MemoryService:
             workspace_id=workspace_id,
         )
         task_local_skills = [item.model_dump(mode="json") for item in memory_data.approved_skills]
-        historical_repo_skills = MemoryRepo.find_approved_skills(
-            tenant_id,
-            workspace_id,
-            required_capabilities=SkillRetriever.infer_query_capabilities(query),
-            source_task_type=source_task_type,
-            limit=merged_limit,
-        )
+        try:
+            historical_repo_skills = MemoryRepo.find_approved_skills(
+                tenant_id,
+                workspace_id,
+                required_capabilities=SkillRetriever.infer_query_capabilities(query),
+                source_task_type=source_task_type,
+                limit=merged_limit,
+            )
+        except Exception:
+            historical_repo_skills = []
         preset_skills = SkillRetriever.load_preset_skills_for_query(
             query=query,
             available_capabilities=available_capabilities,
@@ -152,19 +159,25 @@ class MemoryService:
             used_capabilities=SkillRetriever.infer_query_capabilities(query),
             match_reason_detail=match_reason_detail,
         )
-        memory_data.workspace_preferences = [
-            WorkspacePreferenceState.model_validate(item)
-            for item in MemoryRepo.list_workspace_preferences(tenant_id, workspace_id)
-        ]
+        try:
+            memory_data.workspace_preferences = [
+                WorkspacePreferenceState.model_validate(item)
+                for item in MemoryRepo.list_workspace_preferences(tenant_id, workspace_id)
+            ]
+        except Exception:
+            memory_data.workspace_preferences = []
         updated_usage_payloads: list[dict[str, Any]] = []
         for match in new_matches:
-            updated_skill = MemoryRepo.record_skill_usage(
-                tenant_id,
-                workspace_id,
-                _skill_name(match),
-                task_id=task_id,
-                stage=stage,
-            )
+            try:
+                updated_skill = MemoryRepo.record_skill_usage(
+                    tenant_id,
+                    workspace_id,
+                    _skill_name(match),
+                    task_id=task_id,
+                    stage=stage,
+                )
+            except Exception:
+                updated_skill = None
             if updated_skill:
                 updated_usage_payloads.append(updated_skill)
         for updated_skill in updated_usage_payloads:
@@ -248,7 +261,10 @@ class MemoryService:
             merged_approved[name] = dict(item)
         memory_data.approved_skills = list(merged_approved.values())
         cls.persist_task_memory(memory_data)
-        MemoryRepo.save_approved_skills(tenant_id, workspace_id, list(merged_approved.values()))
+        try:
+            MemoryRepo.save_approved_skills(tenant_id, workspace_id, list(merged_approved.values()))
+        except Exception:
+            pass
         return memory_data
 
     @staticmethod
@@ -278,15 +294,18 @@ class MemoryService:
         )
         memory_data.task_summary = cls.build_task_summary(final_response)
         cls.persist_task_memory(memory_data)
-        MemoryRepo.save_task_summary(
-            tenant_id,
-            workspace_id,
-            task_id,
-            {
-                "task_id": task_id,
-                "tenant_id": tenant_id,
-                "workspace_id": workspace_id,
-                **memory_data.task_summary.model_dump(mode="json"),
-            },
-        )
+        try:
+            MemoryRepo.save_task_summary(
+                tenant_id,
+                workspace_id,
+                task_id,
+                {
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    **memory_data.task_summary.model_dump(mode="json"),
+                },
+            )
+        except Exception:
+            pass
         return memory_data

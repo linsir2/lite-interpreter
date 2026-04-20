@@ -1,4 +1,4 @@
-"""DAG assembly for the hybrid static + dynamic orchestration path."""
+"""Canonical task orchestrator for lite-interpreter."""
 
 from __future__ import annotations
 
@@ -7,27 +7,13 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
+from src.blackboard.task_state_services import KnowledgeStateService
 from src.common import get_utc_now
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
-from src.dag_engine.graphstate import DagGraphState
+from src.runtime import build_analysis_brief
 
 NodeMap = Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]]
-
-try:  # pragma: no cover - runtime optional during local scaffolding
-    from langgraph.graph import END, START, StateGraph
-except ImportError:  # pragma: no cover
-    END = START = None
-    StateGraph = None
-
-
-def get_route_map() -> dict[str, str]:
-    return {
-        "data_inspector": "data_inspector",
-        "kag_retriever": "kag_retriever",
-        "analyst": "analyst",
-        "dynamic_swarm": "dynamic_swarm",
-    }
 
 
 def _next_actions(state: dict[str, object]) -> list[str]:
@@ -36,40 +22,12 @@ def _next_actions(state: dict[str, object]) -> list[str]:
     return filtered or []
 
 
-def _research_merge_next_actions(state: dict[str, object]) -> list[str]:
-    actions = [str(item) for item in (state.get("next_actions", []) or []) if str(item)]
-    filtered = [item for item in actions if item in {"data_inspector", "kag_retriever", "analyst", "skill_harvester"}]
-    return filtered or ["skill_harvester"]
-
-
-def _execution_intent_metadata(state: Mapping[str, Any]) -> dict[str, Any]:
-    execution_intent = state.get("execution_intent")
-    if isinstance(execution_intent, Mapping):
-        metadata = execution_intent.get("metadata")
-        if isinstance(metadata, Mapping):
-            return dict(metadata)
-    return {}
-
-
-def _fallback_actions(state: Mapping[str, Any]) -> list[str]:
-    metadata = _execution_intent_metadata(state)
-    return list(metadata.get("fallback_destinations") or [])
-
-
 def _normalize_output_patch(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", by_alias=True)
     if not isinstance(value, dict):
         return {}
     return json.loads(json.dumps(value, default=str, ensure_ascii=False))
-
-
-def _normalize_checkpoint(value: Any) -> dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", by_alias=True)
-    if isinstance(value, dict):
-        return dict(value)
-    return {}
 
 
 def _ensure_task_lease(state: Mapping[str, Any]) -> None:
@@ -90,15 +48,14 @@ def _run_checkpointed_node(
     execution_data = execution_blackboard.read(tenant_id, task_id)
 
     if execution_data:
-        checkpoint = _normalize_checkpoint((execution_data.control.node_checkpoints or {}).get(node_name))
+        checkpoint = dict((execution_data.control.node_checkpoints or {}).get(node_name) or {})
         if checkpoint.get("status") == "completed":
-            output_patch = checkpoint.get("output_patch")
-            normalized_patch = _normalize_output_patch(output_patch)
+            normalized_patch = _normalize_output_patch(checkpoint.get("output_patch"))
             if normalized_patch:
                 return normalized_patch
 
         checkpoints = dict(execution_data.control.node_checkpoints or {})
-        previous = _normalize_checkpoint(checkpoints.get(node_name))
+        previous = dict(checkpoints.get(node_name) or {})
         checkpoints[node_name] = {
             **previous,
             "status": "running",
@@ -106,7 +63,6 @@ def _run_checkpointed_node(
             "attempt_count": int(previous.get("attempt_count", 0) or 0) + 1,
         }
         execution_data.control.node_checkpoints = checkpoints
-        _ensure_task_lease(state)
         execution_blackboard.write(tenant_id, task_id, execution_data)
         execution_blackboard.persist(tenant_id, task_id)
 
@@ -116,7 +72,7 @@ def _run_checkpointed_node(
         if execution_data:
             latest = execution_blackboard.read(tenant_id, task_id) or execution_data
             checkpoints = dict(latest.control.node_checkpoints or {})
-            previous = _normalize_checkpoint(checkpoints.get(node_name))
+            previous = dict(checkpoints.get(node_name) or {})
             checkpoints[node_name] = {
                 **previous,
                 "status": "failed",
@@ -124,27 +80,26 @@ def _run_checkpointed_node(
                 "error": str(exc),
             }
             latest.control.node_checkpoints = checkpoints
-            _ensure_task_lease(state)
             execution_blackboard.write(tenant_id, task_id, latest)
             execution_blackboard.persist(tenant_id, task_id)
         raise
 
+    normalized_output_patch = _normalize_output_patch(output_patch)
     if execution_data:
         latest = execution_blackboard.read(tenant_id, task_id) or execution_data
         checkpoints = dict(latest.control.node_checkpoints or {})
-        previous = _normalize_checkpoint(checkpoints.get(node_name))
+        previous = dict(checkpoints.get(node_name) or {})
         checkpoints[node_name] = {
             **previous,
             "status": "completed",
             "completed_at": get_utc_now().isoformat(),
             "error": None,
-            "output_patch": _normalize_output_patch(output_patch),
+            "output_patch": normalized_output_patch,
         }
         latest.control.node_checkpoints = checkpoints
-        _ensure_task_lease(state)
         execution_blackboard.write(tenant_id, task_id, latest)
         execution_blackboard.persist(tenant_id, task_id)
-    return output_patch
+    return normalized_output_patch
 
 
 def _execute_static_flow(
@@ -263,72 +218,144 @@ def _execute_static_flow(
     }
 
 
-def build_dag_graph():
-    """Build the static+dynamic graph when LangGraph is available."""
-    if StateGraph is None:
-        return None
+def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = str(state.get("tenant_id", ""))
+    task_id = str(state.get("task_id", ""))
+    query = str(state.get("input_query", ""))
+    try:
+        execution_data = KnowledgeStateService.load(tenant_id, task_id)
+    except ValueError:
+        next_actions = [
+            str(item).strip()
+            for item in list(
+                state.get("dynamic_next_static_steps")
+                or ((state.get("execution_intent") or {}).get("metadata") or {}).get("next_static_steps")
+                or []
+            )
+            if str(item).strip()
+        ] or ["analyst"]
+        refined_context = "\n".join(
+            f"- 研究发现: {str(item).strip()}"
+            for item in list(state.get("dynamic_research_findings") or [])[:5]
+            if str(item).strip()
+        ).strip()
+        return {
+            "knowledge_snapshot": {},
+            "analysis_brief": {
+                "question": query,
+                "analysis_mode": "dynamic_research_analysis",
+                "dataset_summaries": [],
+                "business_rules": [],
+                "business_metrics": [],
+                "business_filters": [],
+                "evidence_refs": list(state.get("dynamic_evidence_refs") or []),
+                "known_gaps": list(state.get("dynamic_open_questions") or []),
+                "recommended_next_step": (
+                    list(state.get("dynamic_suggested_static_actions") or []) or ["生成静态分析计划"]
+                )[0],
+            },
+            "refined_context": refined_context,
+            "next_actions": next_actions,
+        }
 
-    from src.dag_engine.nodes.analyst_node import analyst_node
-    from src.dag_engine.nodes.auditor_node import auditor_node
-    from src.dag_engine.nodes.coder_node import coder_node
-    from src.dag_engine.nodes.context_builder_node import context_builder_node
-    from src.dag_engine.nodes.data_inspector import data_inspector_node
-    from src.dag_engine.nodes.debugger_node import debugger_node
-    from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
-    from src.dag_engine.nodes.executor_node import executor_node
-    from src.dag_engine.nodes.kag_retriever import kag_retriever_node
-    from src.dag_engine.nodes.research_merge_node import research_merge_node
-    from src.dag_engine.nodes.router_node import route_condition, router_node
-    from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
-    from src.dag_engine.nodes.summarizer_node import summarizer_node
+    dynamic_summary = str(state.get("dynamic_summary") or execution_data.dynamic.summary or "").strip()
+    research_findings = [
+        str(item).strip()
+        for item in list(state.get("dynamic_research_findings") or execution_data.dynamic.research_findings or [])
+        if str(item).strip()
+    ]
+    if dynamic_summary and dynamic_summary not in research_findings:
+        research_findings.insert(0, dynamic_summary)
+    evidence_refs = [
+        str(item).strip()
+        for item in list(state.get("dynamic_evidence_refs") or execution_data.dynamic.evidence_refs or [])
+        if str(item).strip()
+    ]
+    artifact_refs = [
+        str(item).strip()
+        for item in list(state.get("dynamic_artifacts") or execution_data.dynamic.artifacts or [])
+        if str(item).strip()
+    ]
+    open_questions = [
+        str(item).strip()
+        for item in list(state.get("dynamic_open_questions") or execution_data.dynamic.open_questions or [])
+        if str(item).strip()
+    ]
+    suggested_static_actions = [
+        str(item).strip()
+        for item in list(state.get("dynamic_suggested_static_actions") or execution_data.dynamic.suggested_static_actions or [])
+        if str(item).strip()
+    ]
+    next_actions = [
+        str(item).strip()
+        for item in list(
+            state.get("dynamic_next_static_steps")
+            or ((state.get("execution_intent") or {}).get("metadata") or {}).get("next_static_steps")
+            or []
+        )
+        if str(item).strip()
+    ] or ["analyst"]
 
-    graph = StateGraph(DagGraphState)
-    graph.add_node("router", router_node)
-    graph.add_node("data_inspector", data_inspector_node)
-    graph.add_node("kag_retriever", kag_retriever_node)
-    graph.add_node("context_builder", context_builder_node)
-    graph.add_node("analyst", analyst_node)
-    graph.add_node("coder", coder_node)
-    graph.add_node("auditor", auditor_node)
-    graph.add_node("debugger", debugger_node)
-    graph.add_node("executor", executor_node)
-    graph.add_node("dynamic_swarm", dynamic_swarm_node)
-    graph.add_node("research_merge", research_merge_node)
-    graph.add_node("skill_harvester", skill_harvester_node)
-    graph.add_node("summarizer", summarizer_node)
-
-    graph.add_edge(START, "router")
-    graph.add_conditional_edges("router", route_condition, get_route_map())
-    graph.add_edge("data_inspector", "analyst")
-    graph.add_edge("kag_retriever", "context_builder")
-    graph.add_edge("context_builder", "analyst")
-    graph.add_edge("analyst", "coder")
-    graph.add_edge("coder", "auditor")
-    graph.add_conditional_edges(
-        "auditor",
-        _next_actions,
+    knowledge_snapshot_payload = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json")
+    existing_hits = list(knowledge_snapshot_payload.get("hits") or [])
+    dynamic_hits = [
         {
-            "executor": "executor",
-            "debugger": "debugger",
-            "skill_harvester": "skill_harvester",
-        },
+            "chunk_id": f"dynamic:{task_id}:{index}",
+            "text": finding,
+            "score": 1.0,
+            "source": "dynamic_swarm",
+            "retrieval_type": "dynamic_research",
+        }
+        for index, finding in enumerate(research_findings, start=1)
+    ]
+    knowledge_snapshot_payload["hits"] = [*existing_hits, *dynamic_hits]
+    combined_evidence = []
+    for value in list(knowledge_snapshot_payload.get("evidence_refs") or []) + evidence_refs + artifact_refs:
+        text = str(value).strip()
+        if text and text not in combined_evidence:
+            combined_evidence.append(text)
+    knowledge_snapshot_payload["evidence_refs"] = combined_evidence
+    metadata = dict(knowledge_snapshot_payload.get("metadata") or {})
+    metadata["dynamic_research"] = {
+        "finding_count": len(research_findings),
+        "open_question_count": len(open_questions),
+        "artifact_count": len(artifact_refs),
+    }
+    knowledge_snapshot_payload["metadata"] = metadata
+
+    recommended_next_step = (
+        suggested_static_actions[0]
+        if suggested_static_actions
+        else "基于动态研究结果生成静态分析计划并准备模板化执行代码"
     )
-    graph.add_edge("debugger", "auditor")
-    graph.add_edge("executor", "skill_harvester")
-    graph.add_edge("dynamic_swarm", "research_merge")
-    graph.add_conditional_edges(
-        "research_merge",
-        _research_merge_next_actions,
-        {
-            "data_inspector": "data_inspector",
-            "kag_retriever": "kag_retriever",
-            "analyst": "analyst",
-            "skill_harvester": "skill_harvester",
-        },
+    brief = build_analysis_brief(
+        query=query,
+        exec_data=execution_data,
+        knowledge_snapshot=knowledge_snapshot_payload,
+        business_context=execution_data.knowledge.business_context.model_dump(mode="json"),
+        analysis_mode="dynamic_research_analysis",
+        known_gaps=open_questions,
+        recommended_next_step=recommended_next_step,
     )
-    graph.add_edge("skill_harvester", "summarizer")
-    graph.add_edge("summarizer", END)
-    return graph.compile()
+    brief_payload = brief.to_payload()
+    KnowledgeStateService.update_snapshot_and_brief(
+        tenant_id=tenant_id,
+        task_id=task_id,
+        knowledge_snapshot=knowledge_snapshot_payload,
+        analysis_brief=brief_payload,
+    )
+    refined_context = "\n".join(
+        [
+            *(f"- 研究发现: {item}" for item in research_findings[:5]),
+            *(f"- 证据引用: {item}" for item in combined_evidence[:5]),
+        ]
+    ).strip()
+    return {
+        "knowledge_snapshot": knowledge_snapshot_payload,
+        "analysis_brief": brief_payload,
+        "refined_context": refined_context,
+        "next_actions": next_actions,
+    }
 
 
 def execute_task_flow(
@@ -336,11 +363,7 @@ def execute_task_flow(
     *,
     nodes: NodeMap,
 ) -> dict[str, Any]:
-    """Run the task orchestration through the existing static/dynamic design.
-
-    The deterministic routing remains unchanged; this function only centralizes
-    the orchestration so API routes stop carrying a second copy of the flow.
-    """
+    """Run the canonical static/dynamic task flow."""
 
     try:
         route_result = _run_checkpointed_node(node_name="router", node_fn=nodes["router"], state=state)
@@ -352,61 +375,41 @@ def execute_task_flow(
                 state={**state, **route_result},
             )
             dynamic_status = str(dynamic_state.get("dynamic_status") or "")
+            continuation = str(dynamic_state.get("dynamic_continuation") or "finish")
             if dynamic_status == "completed":
-                merged_state = _run_checkpointed_node(
-                    node_name="research_merge",
-                    node_fn=nodes["research_merge"],
-                    state={**state, **route_result, **dynamic_state},
-                )
-                merge_actions = list(merged_state.get("next_actions") or [])
-                if merge_actions == ["skill_harvester"]:
-                    harvested_state = _run_checkpointed_node(
-                        node_name="skill_harvester",
-                        node_fn=nodes["skill_harvester"],
-                        state={**dynamic_state, **merged_state, **state},
+                if continuation == "resume_static":
+                    merged_state = _merge_dynamic_research_into_static_state(
+                        {**state, **route_result, **dynamic_state}
                     )
-                    summary_state = _run_checkpointed_node(
-                        node_name="summarizer",
-                        node_fn=nodes["summarizer"],
-                        state={**dynamic_state, **merged_state, **harvested_state, **state},
+                    static_result = _execute_static_flow(
+                        state={**state, **route_result, **dynamic_state, **merged_state},
+                        next_actions=list(merged_state.get("next_actions") or []),
+                        nodes=nodes,
+                        success_sub_status="动态研究回流后静态链执行完成",
                     )
-                    return {
-                        **route_result,
-                        **dynamic_state,
-                        **merged_state,
-                        **harvested_state,
-                        **summary_state,
-                        "terminal_status": "success",
-                        "terminal_sub_status": "动态任务链路执行完成",
-                    }
-                static_result = _execute_static_flow(
-                    state={**state, **route_result, **dynamic_state, **merged_state},
-                    next_actions=merge_actions,
-                    nodes=nodes,
-                    success_sub_status="动态研究回流后静态链执行完成",
+                    if static_result.get("terminal_status") == "success":
+                        static_result["dynamic_status"] = dynamic_status
+                        static_result["dynamic_summary"] = dynamic_state.get("dynamic_summary")
+                    return static_result
+
+                harvested_state = _run_checkpointed_node(
+                    node_name="skill_harvester",
+                    node_fn=nodes["skill_harvester"],
+                    state={**dynamic_state, **route_result, **state},
                 )
-                if static_result.get("terminal_status") == "success":
-                    static_result["dynamic_status"] = dynamic_status
-                    static_result["dynamic_summary"] = dynamic_state.get("dynamic_summary")
-                return static_result
-            fallback_actions = _fallback_actions(route_result)
-            if fallback_actions:
-                degraded_state = {
-                    **state,
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer",
+                    node_fn=nodes["summarizer"],
+                    state={**dynamic_state, **harvested_state, **route_result, **state},
+                )
+                return {
                     **route_result,
                     **dynamic_state,
-                    "next_actions": fallback_actions,
-                    "routing_degraded": True,
-                    "degrade_reason": _execution_intent_metadata(route_result).get("fallback_reason")
-                    or dynamic_state.get("dynamic_summary")
-                    or "dynamic route degraded to static path",
+                    **harvested_state,
+                    **summary_state,
+                    "terminal_status": "success",
+                    "terminal_sub_status": "动态任务链路执行完成",
                 }
-                return _execute_static_flow(
-                    state=degraded_state,
-                    next_actions=fallback_actions,
-                    nodes=nodes,
-                    success_sub_status="动态任务降级后静态链执行完成",
-                )
             if dynamic_status == "denied":
                 summary_state = nodes["summarizer"]({**dynamic_state, **state})
                 return {

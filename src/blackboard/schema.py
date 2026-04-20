@@ -428,6 +428,8 @@ class NodeOutputPatchState(StrictStateModel):
     runtime_backend: str | None = None
     dynamic_status: str | None = None
     dynamic_summary: str | None = None
+    dynamic_continuation: str | None = None
+    dynamic_next_static_steps: list[str] = Field(default_factory=list)
     dynamic_runtime_metadata: RuntimeMetadataState | None = None
     dynamic_trace: list[DynamicTraceEventState] = Field(default_factory=list)
     dynamic_trace_refs: list[str] = Field(default_factory=list)
@@ -649,6 +651,8 @@ class ExecutionDynamicState(StrictStateModel):
     runtime_backend: str | None = None
     status: str | None = None
     summary: str | None = None
+    continuation: str | None = None
+    next_static_steps: list[str] = Field(default_factory=list)
     runtime_metadata: RuntimeMetadataState = Field(default_factory=RuntimeMetadataState)
     trace: list[DynamicTraceEventState] = Field(default_factory=list)
     trace_refs: list[str] = Field(default_factory=list)

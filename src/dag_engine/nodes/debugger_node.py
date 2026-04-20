@@ -40,7 +40,10 @@ def debugger_node(state: DagGraphState) -> dict[str, Any]:
         ensure_ascii=False,
     )
     exec_data.static.generated_code = (
-        f"import json\npayload = json.loads({payload!r})\nprint(json.dumps(payload, ensure_ascii=False))\n"
+        "import json\n"
+        f"payload = json.loads({payload!r})\n"
+        "print(json.dumps(payload, ensure_ascii=False))\n"
+        "raise RuntimeError(payload['error'])\n"
     )
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)

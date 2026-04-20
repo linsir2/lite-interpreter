@@ -79,7 +79,6 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 PROMETHEUS_PORT = _env_int("PROMETHEUS_PORT", 8000)
 DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%S.%fZ"
 LOG_MAX_LENGTH: Final[int] = 10 * 1024 * 1024  # 日志最大长度10MB
-STRICT_PERSISTENCE: Final[bool] = _env_bool("STRICT_PERSISTENCE", False)
 TASK_LEASE_TTL_SECONDS: Final[int] = _env_int("TASK_LEASE_TTL_SECONDS", 60)
 TASK_LEASE_HEARTBEAT_SECONDS: Final[int] = _env_int("TASK_LEASE_HEARTBEAT_SECONDS", 20)
 TASK_SCHEDULER_INSTANCE_ID: Final[str] = _env_str(
@@ -97,10 +96,10 @@ API_ALLOW_ORIGINS: Final[list[str]] = _env_csv(
 API_ENABLE_POLICY_API: Final[bool] = _env_bool("API_ENABLE_POLICY_API", False)
 API_ENABLE_DEMO_TRACE: Final[bool] = _env_bool("API_ENABLE_DEMO_TRACE", False)
 API_ENABLE_DIAGNOSTICS: Final[bool] = _env_bool("API_ENABLE_DIAGNOSTICS", False)
-API_AUTH_REQUIRED: Final[bool] = _env_bool("API_AUTH_REQUIRED", False)
+API_AUTH_REQUIRED: Final[bool] = _env_bool("API_AUTH_REQUIRED", True)
 API_AUTH_TOKENS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_TOKENS_JSON")
 API_AUTH_USERS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_USERS_JSON")
-API_SESSION_SECRET: Final[str] = _env_str("API_SESSION_SECRET", "lite-interpreter-dev-session-secret")
+API_SESSION_SECRET: Final[str] = _env_str("API_SESSION_SECRET", "")
 API_SESSION_TTL_SECONDS: Final[int] = _env_int("API_SESSION_TTL_SECONDS", 43200)
 
 # 数据与模型缓存目录 (本地沙箱执行时使用)
@@ -113,7 +112,7 @@ OUTPUT_DIR = DATA_DIR / "outputs"
 # the `deerflow` package built from DeerFlow's official harness source, not
 # vendored into this repository.
 DEERFLOW_CLIENT_MODULE = os.getenv("DEERFLOW_CLIENT_MODULE", "deerflow.client").strip()
-DEERFLOW_RUNTIME_MODE = _env_str("DEERFLOW_RUNTIME_MODE", "auto")
+DEERFLOW_RUNTIME_MODE = _env_str("DEERFLOW_RUNTIME_MODE", "sidecar")
 DEERFLOW_SIDECAR_URL = _env_str("DEERFLOW_SIDECAR_URL", "")
 DEERFLOW_SIDECAR_TIMEOUT = _env_int("DEERFLOW_SIDECAR_TIMEOUT", 300)
 DEERFLOW_CONFIG_PATH = _env_str("DEERFLOW_CONFIG_PATH", "")

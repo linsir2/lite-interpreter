@@ -18,8 +18,8 @@ def test_project_status_is_the_only_hardcoded_test_baseline_source():
     checked_paths = [
         "README.md",
         "docs/project_status.md",
-        "docs/project_plan.md",
-        "docs/future_roadmap.md",
+        "docs/development_guide.md",
+        "docs/testing.md",
     ]
 
     for relative_path in checked_paths:
@@ -35,10 +35,11 @@ def test_project_status_is_the_only_hardcoded_test_baseline_source():
 def test_primary_docs_reference_project_status_truth_source():
     primary_docs = [
         "README.md",
-        "docs/project_plan.md",
-        "docs/future_roadmap.md",
+        "docs/architecture.md",
         "docs/development_guide.md",
-        "docs/code_tour.md",
+        "docs/deployment.md",
+        "docs/testing.md",
+        "项目二.md",
     ]
 
     for relative_path in primary_docs:

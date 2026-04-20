@@ -7,14 +7,14 @@ from starlette.responses import JSONResponse
 
 from src.api.audit_logging import record_api_audit
 from src.api.auth import require_request_role
-from src.dynamic_engine.runtime_registry import runtime_registry
+from src.dynamic_engine.runtime_backends import get_runtime_manifest, list_runtime_manifests
 
 
 async def list_runtimes(_request: Request) -> JSONResponse:
     role_error = require_request_role(_request, "viewer")
     if role_error is not None:
         return role_error
-    manifests = runtime_registry.list_manifests()
+    manifests = list_runtime_manifests()
     payload = {
         "runtimes": [
             {
@@ -53,7 +53,7 @@ async def get_runtime_capabilities(request: Request) -> JSONResponse:
         return role_error
     runtime_id = request.path_params["runtime_id"]
     try:
-        manifest = runtime_registry.get_manifest(runtime_id)
+        manifest = get_runtime_manifest(runtime_id)
     except KeyError:
         return JSONResponse({"error": "runtime not found", "runtime_id": runtime_id}, status_code=404)
     payload = manifest.model_dump(mode="json")

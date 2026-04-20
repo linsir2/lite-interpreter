@@ -62,14 +62,19 @@ class EventJournal:
 
     def _persist(self, tenant_id: str, task_id: str, workspace_id: str) -> None:
         try:
-            state = StateRepo.load_blackboard_state(tenant_id, task_id) or {}
             with self._lock:
                 events = list(self._storage.get(tenant_id, {}).get(task_id, []))
-            state["event_journal"] = {
-                "workspace_id": workspace_id,
-                "events": events,
-            }
-            StateRepo.save_blackboard_state(tenant_id, task_id, workspace_id, state)
+            StateRepo.merge_blackboard_sections(
+                tenant_id,
+                task_id,
+                workspace_id,
+                {
+                    "event_journal": {
+                        "workspace_id": workspace_id,
+                        "events": events,
+                    }
+                },
+            )
         except Exception as exc:  # pragma: no cover - best-effort persistence
             logger.warning(f"event journal persist failed for {task_id}: {exc}", extra={"trace_id": task_id})
 

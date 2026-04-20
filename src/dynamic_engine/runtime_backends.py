@@ -1,30 +1,13 @@
-"""Pluggable runtime backend definitions for dynamic execution."""
+"""Runtime capability manifests for dynamic execution."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from src.common import CapabilityDomainManifest, CapabilityOperation, RuntimeCapabilityManifest
 from src.dynamic_engine.deerflow_bridge import DeerflowBridge, DeerflowRuntimeConfig
 from src.dynamic_engine.supervisor import DynamicRunPlan
-
-
-@runtime_checkable
-class DynamicRuntimeBackend(Protocol):
-    """Backend contract for dynamic runtime execution."""
-
-    name: str
-
-    def capability_manifest(self) -> RuntimeCapabilityManifest: ...
-
-    def build_payload(self, plan: DynamicRunPlan) -> dict[str, Any]: ...
-
-    def run(
-        self,
-        plan: DynamicRunPlan,
-        on_event: Callable[[dict[str, Any]], None] | None = None,
-    ): ...
 
 
 class DeerflowRuntimeBackend:
@@ -61,7 +44,7 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
         runtime_id="deerflow",
         display_name="DeerFlow Runtime",
         description="Bounded dynamic research runtime used behind lite-interpreter's dynamic super node.",
-        runtime_modes=["embedded", "sidecar", "auto"],
+        runtime_modes=["sidecar"],
         domains=[
             CapabilityDomainManifest(
                 domain_id="planning",
@@ -162,6 +145,7 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
         limitations=[
             f"Dynamic runs are bounded by max_steps={max_steps}.",
             "Final code execution must remain inside lite-interpreter sandbox.",
+            "The only supported runtime mode is an out-of-process DeerFlow sidecar.",
             "Execution streams are projected from lite-interpreter control-plane journals, not attached directly to DeerFlow transport.",
         ],
         metadata={
@@ -173,3 +157,14 @@ def build_deerflow_runtime_manifest(*, max_steps: int = 6) -> RuntimeCapabilityM
             "supports_tool_call_resources": True,
         },
     )
+
+
+def list_runtime_manifests() -> list[RuntimeCapabilityManifest]:
+    return [build_deerflow_runtime_manifest(max_steps=6)]
+
+
+def get_runtime_manifest(runtime_id: str) -> RuntimeCapabilityManifest:
+    normalized = str(runtime_id or "").strip().lower()
+    if normalized != "deerflow":
+        raise KeyError(f"Unknown dynamic runtime backend: {runtime_id}")
+    return build_deerflow_runtime_manifest(max_steps=6)

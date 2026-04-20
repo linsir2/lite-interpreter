@@ -54,4 +54,7 @@ def record_api_audit(
         trace_id=trace_id,
         metadata=dict(metadata or {}),
     )
-    return AuditRepo.append_record(record)
+    try:
+        return AuditRepo.append_record(record)
+    except Exception:
+        return False

@@ -71,7 +71,7 @@ from src.sandbox.runtime_state import (
     get_docker_client as _get_docker_client,
 )
 from src.sandbox.session_manager import sandbox_session_manager
-from src.sandbox.utils import build_log_data, validate_code_basic, validate_tenant_id
+from src.sandbox.utils import build_log_data, validate_code_basic, validate_tenant_id, validate_workspace_id
 
 load_dotenv()
 logger = get_logger(__name__)
@@ -439,6 +439,7 @@ def _execute_code_in_docker(
 
         validate_code_basic(code, trace_id)
         validate_tenant_id(tenant_id, trace_id)
+        validate_workspace_id(workspace_id, trace_id)
         _reserve_tenant_slot(tenant_id, trace_id)
         concurrency_incremented = True
         container, artifacts_dir, code_file_path = _start_sandbox_container(
@@ -612,6 +613,7 @@ def execute_in_sandbox_with_audit(
         logger.info("开始代码输入合法性校验", extra=log_extra)
         validate_code(code, trace_id)
         validate_tenant_id(tenant_id, trace_id)
+        validate_workspace_id(workspace_id, trace_id)
 
         # 2. AST安全审计
         logger.info("开始AST代码安全审计", extra=log_extra)

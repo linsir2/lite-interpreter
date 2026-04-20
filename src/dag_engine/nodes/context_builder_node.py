@@ -14,7 +14,7 @@ from src.common.control_plane import knowledge_evidence_refs
 from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
 from src.kag.builder.fusion import KnowledgeFusion
-from src.kag.compiler import GraphCompilationSummaryState, GraphCompiler, LexiconMatcher, SpecCompiler
+from src.kag.compiler import GraphCompilationSummaryState, GraphCompiler, KnowledgeCompilerService
 from src.kag.context.compressor import ContextCompressor
 from src.kag.context.formatter import ContextFormatter
 from src.kag.context.selector import ContextSelector
@@ -85,12 +85,12 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
     business_context, refined_context = ContextFormatter.format(compressed)
     business_context_state = BusinessContextState.model_validate(business_context)
     exec_data.knowledge.business_context = business_context_state
-    spec_result = SpecCompiler().compile_business_context(
+    spec_result = KnowledgeCompilerService.compile_business_context(
         rules=business_context_state.rules,
         metrics=business_context_state.metrics,
         filters=business_context_state.filters,
     )
-    exec_data.knowledge.compiled.query_signals = LexiconMatcher().classify_query(query)
+    exec_data.knowledge.compiled.query_signals = KnowledgeCompilerService.classify_query(query)
     exec_data.knowledge.compiled.rule_specs = list(spec_result.rules)
     exec_data.knowledge.compiled.metric_specs = list(spec_result.metrics)
     exec_data.knowledge.compiled.filter_specs = list(spec_result.filters)

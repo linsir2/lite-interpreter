@@ -866,7 +866,7 @@ def test_get_task_result_serializes_typed_blackboard_models():
                     "metadata": {"selected_count": 1},
                 }
             },
-            dynamic={"runtime_metadata": {"effective_runtime_mode": "embedded"}},
+            dynamic={"runtime_metadata": {"effective_runtime_mode": "sidecar"}},
         ),
     )
     memory_blackboard.write(
@@ -900,7 +900,7 @@ def test_get_task_result_serializes_typed_blackboard_models():
     body = json.loads(response.body.decode())
 
     assert response.status_code == 200
-    assert body["dynamic"]["runtime_metadata"]["effective_runtime_mode"] == "embedded"
+    assert body["dynamic"]["runtime_metadata"]["effective_runtime_mode"] == "sidecar"
     assert body["knowledge"]["knowledge_snapshot"]["evidence_refs"] == ["chunk-typed"]
     assert "analysis_brief" in body["knowledge"]
     assert body["skills"]["approved"][0]["name"] == "typed-skill"

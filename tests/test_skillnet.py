@@ -41,7 +41,7 @@ def test_skill_harvester_derives_required_capabilities_from_governance():
                 "governance_profile": "researcher",
             },
             "execution_intent": {
-                "intent": "dynamic_flow",
+                "intent": "dynamic_only",
                 "destinations": ["dynamic_swarm"],
                 "reason": "dynamic",
             },
@@ -112,7 +112,7 @@ def test_skill_retriever_filters_by_available_capabilities():
             SkillDescriptor(name="skill_a", required_capabilities=["knowledge_query"]),
             SkillDescriptor(name="skill_b", required_capabilities=["sandbox_exec"]),
         ],
-        available_capabilities=["retrieval_query", "state_sync"],
+        available_capabilities=["retrieval_query", "dynamic_trace"],
     )
     assert [skill.name for skill in matches] == ["skill_a"]
 
@@ -378,21 +378,18 @@ def test_memory_repo_does_not_publish_in_memory_new_value_when_postgres_write_fa
     monkeypatch.setattr("src.storage.repository.memory_repo.pg_client.engine", _Engine())
     monkeypatch.setattr("src.storage.repository.memory_repo.MemoryRepo._ensure_table", classmethod(lambda cls: None))
 
-    saved = MemoryRepo.save_approved_skills(
-        "tenant_repo_fail",
-        "ws_repo_fail",
-        [{"name": "new-skill", "promotion": {"status": "approved"}}],
-    )
-    listed = MemoryRepo.list_approved_skills("tenant_repo_fail", "ws_repo_fail")
+    with pytest.raises(RuntimeError):
+        MemoryRepo.save_approved_skills(
+            "tenant_repo_fail",
+            "ws_repo_fail",
+            [{"name": "new-skill", "promotion": {"status": "approved"}}],
+        )
 
-    assert saved is False
-    assert [skill["name"] for skill in listed] == ["old-skill"]
     assert MemoryRepo._list_memory_records("tenant_repo_fail", "ws_repo_fail", memory_kind="approved_skill") == []
 
 
 def test_memory_repo_strict_persistence_raises_on_write_failure(monkeypatch):
     MemoryRepo.clear()
-    monkeypatch.setattr("src.storage.repository.memory_repo.STRICT_PERSISTENCE", True)
 
     class _BrokenBeginConnection:
         def __enter__(self):

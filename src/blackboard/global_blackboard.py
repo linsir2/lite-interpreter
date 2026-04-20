@@ -42,13 +42,11 @@ class GlobalBlackboard:
         logger.info("全局黑板初始化完成", extra={"trace_id": "system"})
 
     def _persist_task_state(self, task_state: TaskGlobalState) -> None:
-        full_state = StateRepo.load_blackboard_state(task_state.tenant_id, task_state.task_id) or {}
-        full_state["global"] = task_state.model_dump(mode="json")
-        StateRepo.save_blackboard_state(
+        StateRepo.merge_blackboard_sections(
             task_state.tenant_id,
             task_state.task_id,
             task_state.workspace_id,
-            full_state,
+            {"global": task_state.model_dump(mode="json")},
         )
 
     @staticmethod
@@ -58,7 +56,11 @@ class GlobalBlackboard:
         return candidate.updated_at > current.updated_at
 
     def _load_persisted_task_state(self, task_id: str) -> TaskGlobalState | None:
-        full_state = StateRepo.load_blackboard_state_by_task(task_id)
+        try:
+            full_state = StateRepo.load_blackboard_state_by_task(task_id)
+        except Exception as exc:
+            logger.warning(f"加载持久化任务状态失败 task_id={task_id}: {exc}", extra={"trace_id": task_id})
+            return None
         if not full_state or "global" not in full_state:
             return None
         try:
@@ -91,7 +93,12 @@ class GlobalBlackboard:
 
     def _iter_known_global_states_locked(self) -> list[TaskGlobalState]:
         known_tasks = {task.task_id: task for task in self._task_states.values()}
-        for state in StateRepo.list_blackboard_states():
+        try:
+            persisted_states = StateRepo.list_blackboard_states()
+        except Exception as exc:
+            logger.warning(f"列出持久化任务状态失败: {exc}", extra={"trace_id": "system"})
+            return list(known_tasks.values())
+        for state in persisted_states:
             payload = state.get("global")
             if not isinstance(payload, dict):
                 continue

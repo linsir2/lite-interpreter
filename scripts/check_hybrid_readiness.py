@@ -15,8 +15,8 @@ REQUIRED_FILES = [
     Path("src/dynamic_engine/__init__.py"),
     Path("src/dynamic_engine/deerflow_bridge.py"),
     Path("src/dynamic_engine/blackboard_context.py"),
-    Path("src/mcp_gateway/tools/dynamic_trace_tool.py"),
-    Path("src/mcp_gateway/tools/state_sync_tool.py"),
+    Path("src/mcp_gateway/mcp_server.py"),
+    Path("src/mcp_gateway/tools/memory_sync_tool.py"),
     Path("src/skillnet/skill_harvester.py"),
     Path("src/skillnet/dynamic_skill_adapter.py"),
 ]

@@ -200,8 +200,7 @@ def test_execution_data_coerces_typed_dynamic_request():
                 "query": "继续调研",
                 "sandbox_backend": "docker",
                 "runtime": {
-                    "runtime_mode": "auto",
-                    "python_package": "deerflow.client",
+                    "runtime_mode": "sidecar",
                     "max_steps": 6,
                     "recursion_limit": 32,
                     "subagent_enabled": True,
@@ -214,7 +213,7 @@ def test_execution_data_coerces_typed_dynamic_request():
     )
     assert isinstance(execution.dynamic.request, DynamicRequestState)
     assert isinstance(execution.dynamic.request.runtime, DynamicRequestRuntimeState)
-    assert execution.dynamic.request.runtime.runtime_mode == "auto"
+    assert execution.dynamic.request.runtime.runtime_mode == "sidecar"
     assert execution.dynamic.request.sandbox_backend == "docker"
 
 

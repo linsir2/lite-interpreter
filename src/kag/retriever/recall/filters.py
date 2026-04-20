@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-TEMPORAL_FILTER_KEYS = {"preferred_date_terms", "temporal_constraints"}
+TEMPORAL_FILTER_KEYS = ("preferred_date_terms", "temporal_constraints")
 
 
 def normalize_filters(filters: dict[str, Any]) -> dict[str, Any]:

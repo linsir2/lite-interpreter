@@ -1,24 +1,20 @@
-"""Isolation layer for DeerFlow-backed dynamic swarms."""
+"""Isolation layer for DeerFlow sidecar-backed dynamic runs."""
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from config.settings import (
-    DEERFLOW_CLIENT_MODULE,
     DEERFLOW_CONFIG_PATH,
     DEERFLOW_MAX_EVENTS,
     DEERFLOW_MAX_STEPS,
     DEERFLOW_MODEL_NAME,
     DEERFLOW_RECURSION_LIMIT,
-    DEERFLOW_RUNTIME_MODE,
     DEERFLOW_SIDECAR_TIMEOUT,
     DEERFLOW_SIDECAR_URL,
 )
@@ -45,6 +41,8 @@ class DeerflowTaskResult:
 
     status: str
     summary: str
+    continuation: Literal["finish", "resume_static"] = "finish"
+    next_static_steps: list[str] = field(default_factory=list)
     trace_refs: list[str] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     research_findings: list[str] = field(default_factory=list)
@@ -61,6 +59,8 @@ class DeerflowTaskResult:
         return {
             "dynamic_status": self.status,
             "dynamic_summary": self.summary,
+            "dynamic_continuation": self.continuation,
+            "dynamic_next_static_steps": list(self.next_static_steps),
             "dynamic_runtime_metadata": dict(self.runtime_metadata),
             "dynamic_trace": [
                 TraceNormalizer.normalize_runtime_event(
@@ -81,10 +81,8 @@ class DeerflowTaskResult:
 
 @dataclass(frozen=True)
 class DeerflowRuntimeConfig:
-    """Runtime settings for the dynamic DeerFlow adapter."""
+    """Runtime settings for the DeerFlow sidecar adapter."""
 
-    module_name: str = DEERFLOW_CLIENT_MODULE
-    runtime_mode: str = DEERFLOW_RUNTIME_MODE
     sidecar_url: str = DEERFLOW_SIDECAR_URL
     sidecar_timeout: int = DEERFLOW_SIDECAR_TIMEOUT
     config_path: str = DEERFLOW_CONFIG_PATH
@@ -100,10 +98,7 @@ class DeerflowRuntimeConfig:
 class DeerflowBridge:
     """Adapter entrypoint used by the dynamic super-node.
 
-    Supported runtime modes:
-    - `embedded`: import `deerflow.client` directly in-process
-    - `sidecar`: call an out-of-process local DeerFlow sidecar over HTTP
-    - `auto`: prefer sidecar when configured, otherwise fall back to embedded
+    The only supported runtime boundary is a DeerFlow sidecar over HTTP.
     """
 
     def __init__(
@@ -118,8 +113,7 @@ class DeerflowBridge:
         payload = asdict(request)
         payload["sandbox_backend"] = self.sandbox_backend
         payload["runtime"] = {
-            "runtime_mode": self.runtime_config.runtime_mode,
-            "python_package": self.runtime_config.module_name,
+            "runtime_mode": "sidecar",
             "sidecar_url": self.runtime_config.sidecar_url or None,
             "config_path": self.runtime_config.config_path or None,
             "model_name": self.runtime_config.model_name or None,
@@ -129,10 +123,6 @@ class DeerflowBridge:
             "plan_mode": self.runtime_config.plan_mode,
         }
         return payload
-
-    def _load_client_class(self):
-        module = importlib.import_module(self.runtime_config.module_name)
-        return module.DeerFlowClient
 
     def _resolved_config_path(self) -> str | None:
         raw_path = self.runtime_config.config_path.strip()
@@ -175,39 +165,6 @@ class DeerflowBridge:
         )
 
     @staticmethod
-    def _python_version_hint() -> str:
-        current = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-        return (
-            f"Current interpreter is Python {current}. DeerFlow harness metadata requires Python >= 3.12, "
-            "so environments below 3.12 cannot host the embedded client."
-        )
-
-    @staticmethod
-    def _normalize_trace_event(index: int, event: Any) -> dict[str, Any]:
-        event_type = getattr(event, "type", "unknown")
-        payload = getattr(event, "data", {}) or {}
-        step_name = payload.get("name") or payload.get("type") or f"event_{index}"
-        trace_event = TraceEvent(
-            event_id=generate_uuid(),
-            topic="runtime.deerflow.trace",
-            tenant_id="",
-            task_id="",
-            workspace_id="",
-            trace_id=f"deerflow-trace-{index}",
-            timestamp=get_utc_now(),
-            payload={
-                "agent_name": "deerflow",
-                "step_name": str(step_name),
-                "event_type": str(event_type),
-                "payload": payload,
-            },
-            source="deerflow-embedded",
-        )
-        payload = dict(trace_event.payload)
-        payload["source"] = trace_event.source
-        return payload
-
-    @staticmethod
     def _normalize_sidecar_event(index: int, event: dict[str, Any]) -> dict[str, Any]:
         event_type = str(event.get("type", "unknown"))
         payload = event.get("data", {}) or {}
@@ -231,6 +188,18 @@ class DeerflowBridge:
         payload = dict(trace_event.payload)
         payload["source"] = trace_event.source
         return payload
+
+    @staticmethod
+    def _continuation_payload(request: DeerflowTaskRequest) -> tuple[Literal["finish", "resume_static"], list[str]]:
+        continuation = str(request.metadata.get("continuation") or "finish").strip().lower()
+        next_static_steps = [
+            str(item).strip()
+            for item in list(request.metadata.get("next_static_steps") or [])
+            if str(item).strip()
+        ]
+        if continuation == "resume_static" and next_static_steps:
+            return "resume_static", next_static_steps
+        return "finish", []
 
     @staticmethod
     def _extract_artifacts(trace: list[dict[str, Any]]) -> list[str]:
@@ -260,30 +229,29 @@ class DeerflowBridge:
                 "payload": {
                     "trace_id": trace_id,
                     "routing_mode": metadata.get("routing_mode", "dynamic"),
-                    "runtime_mode": self.runtime_config.runtime_mode,
-                    "python_package": self.runtime_config.module_name,
+                    "runtime_mode": "sidecar",
                     "sidecar_url": self.runtime_config.sidecar_url or None,
                     "network_boundary": request.system_context.get("constraints", {}).get("network_boundary", {}),
                 },
             }
         ]
         return DeerflowTaskResult(
-            status="planned",
-            summary="Dynamic swarm request prepared; install/configure DeerFlow before live execution.",
+            status="unavailable",
+            summary="Dynamic runtime sidecar is unavailable; no fallback runtime exists.",
             trace_refs=[trace_id],
             artifacts=[],
             research_findings=[],
             evidence_refs=[],
             open_questions=["DeerFlow runtime not available yet"],
-            suggested_static_actions=["在静态链中说明当前仅完成动态研究准备，尚未执行真实外部检索"],
+            suggested_static_actions=[],
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": metadata.get("confidence", "pending"),
             },
             trace=trace,
             runtime_metadata={
-                "requested_runtime_mode": self.runtime_config.runtime_mode,
-                "effective_runtime_mode": "preview",
+                "requested_runtime_mode": "sidecar",
+                "effective_runtime_mode": "unavailable",
             },
         )
 
@@ -295,73 +263,6 @@ class DeerflowBridge:
             "open_questions": list(result.open_questions),
             "suggested_static_actions": list(result.suggested_static_actions),
         }
-
-    def _run_via_embedded(
-        self,
-        request: DeerflowTaskRequest,
-        on_event: Callable[[dict[str, Any]], None] | None = None,
-    ) -> DeerflowTaskResult:
-        deerflow_client_cls = self._load_client_class()
-        client = deerflow_client_cls(**self._build_client_kwargs())
-
-        trace: list[dict[str, Any]] = []
-        summary_chunks: list[str] = []
-        thread_id = f"lite-interpreter-{request.task_id}"
-        for index, event in enumerate(
-            client.stream(
-                self._build_message(request),
-                thread_id=thread_id,
-                subagent_enabled=self.runtime_config.subagent_enabled,
-                plan_mode=self.runtime_config.plan_mode,
-                thinking_enabled=self.runtime_config.thinking_enabled,
-                recursion_limit=self.runtime_config.recursion_limit,
-            )
-        ):
-            if index >= self.runtime_config.max_events:
-                truncated_event = {
-                    "agent_name": "deerflow",
-                    "step_name": "event_limit",
-                    "event_type": "truncated",
-                    "payload": {"max_events": self.runtime_config.max_events},
-                }
-                trace.append(truncated_event)
-                if on_event:
-                    on_event(truncated_event)
-                break
-
-            normalized = self._normalize_trace_event(index, event)
-            trace.append(normalized)
-            if on_event:
-                on_event(normalized)
-            payload = normalized.get("payload", {})
-            if normalized["event_type"] == "messages-tuple" and payload.get("type") == "ai":
-                content = payload.get("content")
-                if content:
-                    summary_chunks.append(str(content))
-
-        artifacts = self._extract_artifacts(trace)
-        summary = "\n".join(summary_chunks).strip() or "DeerFlow completed without emitting AI text."
-        return DeerflowTaskResult(
-            status="completed",
-            summary=summary,
-            trace_refs=[f"deerflow:{thread_id}"],
-            artifacts=artifacts,
-            research_findings=[summary] if summary else [],
-            evidence_refs=[f"deerflow:{thread_id}", *artifacts],
-            open_questions=[],
-            suggested_static_actions=["将动态研究结论转为静态分析计划并生成可审计代码"],
-            recommended_skill={
-                "source": "dynamic_swarm",
-                "confidence": "medium",
-                "source_task_type": request.metadata.get("dynamic_reason") or "dynamic_task",
-            },
-            trace=trace,
-            runtime_metadata={
-                "requested_runtime_mode": self.runtime_config.runtime_mode,
-                "effective_runtime_mode": "embedded",
-                "thread_id": thread_id,
-            },
-        )
 
     def _run_via_sidecar(
         self,
@@ -408,15 +309,20 @@ class DeerflowBridge:
 
         artifacts = self._extract_artifacts(trace)
         summary = "\n".join(summary_chunks).strip() or "DeerFlow sidecar completed without emitting AI text."
+        continuation, next_static_steps = self._continuation_payload(request)
         return DeerflowTaskResult(
             status="completed",
             summary=summary,
+            continuation=continuation,
+            next_static_steps=next_static_steps,
             trace_refs=[f"deerflow-sidecar:{request.task_id}"],
             artifacts=artifacts,
             research_findings=[summary] if summary else [],
             evidence_refs=[f"deerflow-sidecar:{request.task_id}", *artifacts],
             open_questions=[],
-            suggested_static_actions=["将动态研究结论转为静态分析计划并生成可审计代码"],
+            suggested_static_actions=(
+                ["将动态研究结论转为静态分析计划并生成可审计代码"] if continuation == "resume_static" else []
+            ),
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": "medium",
@@ -424,7 +330,7 @@ class DeerflowBridge:
             },
             trace=trace,
             runtime_metadata={
-                "requested_runtime_mode": self.runtime_config.runtime_mode,
+                "requested_runtime_mode": "sidecar",
                 "effective_runtime_mode": "sidecar",
                 "sidecar_url": self.runtime_config.sidecar_url or None,
             },
@@ -435,70 +341,16 @@ class DeerflowBridge:
         request: DeerflowTaskRequest,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> DeerflowTaskResult:
-        """Execute the request through sidecar or embedded mode."""
-        runtime_mode = self.runtime_config.runtime_mode or "auto"
-
-        if runtime_mode == "sidecar":
-            try:
-                return self._run_via_sidecar(request, on_event=on_event)
-            except TaskLeaseLostError:
-                raise
-            except Exception as exc:
-                preview = self.preview(request)
-                return DeerflowTaskResult(
-                    status="unavailable",
-                    summary=f"Failed to reach DeerFlow sidecar `{self.runtime_config.sidecar_url}`: {exc}",
-                    trace_refs=preview.trace_refs,
-                    artifacts=preview.artifacts,
-                    **self._copy_research_payload(preview),
-                    recommended_skill=preview.recommended_skill,
-                    trace=preview.trace,
-                    runtime_metadata={
-                        **preview.runtime_metadata,
-                        "requested_runtime_mode": "sidecar",
-                        "effective_runtime_mode": "unavailable",
-                        "sidecar_fallback_reason": str(exc),
-                        "sidecar_url": self.runtime_config.sidecar_url or None,
-                    },
-                )
-
-        auto_sidecar_error: str | None = None
-        if runtime_mode == "auto" and self.runtime_config.sidecar_url:
-            try:
-                return self._run_via_sidecar(request, on_event=on_event)
-            except TaskLeaseLostError:
-                raise
-            except Exception as exc:
-                auto_sidecar_error = str(exc)
-
+        """Execute the request through the DeerFlow sidecar boundary."""
         try:
-            result = self._run_via_embedded(request, on_event=on_event)
-            if auto_sidecar_error:
-                return DeerflowTaskResult(
-                    status=result.status,
-                    summary=result.summary,
-                    trace_refs=result.trace_refs,
-                    artifacts=result.artifacts,
-                    **self._copy_research_payload(result),
-                    recommended_skill=result.recommended_skill,
-                    trace=result.trace,
-                    runtime_metadata={
-                        **result.runtime_metadata,
-                        "requested_runtime_mode": "auto",
-                        "sidecar_fallback_reason": auto_sidecar_error,
-                        "sidecar_url": self.runtime_config.sidecar_url or None,
-                    },
-                )
-            return result
+            return self._run_via_sidecar(request, on_event=on_event)
         except TaskLeaseLostError:
             raise
         except Exception as exc:
             preview = self.preview(request)
             return DeerflowTaskResult(
                 status="unavailable",
-                summary=(
-                    f"Failed to use DeerFlow runtime in `{runtime_mode}` mode: {exc}. {self._python_version_hint()}"
-                ),
+                summary=f"Failed to reach DeerFlow sidecar `{self.runtime_config.sidecar_url}`: {exc}",
                 trace_refs=preview.trace_refs,
                 artifacts=preview.artifacts,
                 **self._copy_research_payload(preview),
@@ -506,9 +358,9 @@ class DeerflowBridge:
                 trace=preview.trace,
                 runtime_metadata={
                     **preview.runtime_metadata,
-                    "requested_runtime_mode": runtime_mode,
+                    "requested_runtime_mode": "sidecar",
                     "effective_runtime_mode": "unavailable",
-                    "embedded_error": str(exc),
-                    "sidecar_fallback_reason": auto_sidecar_error,
+                    "sidecar_fallback_reason": str(exc),
+                    "sidecar_url": self.runtime_config.sidecar_url or None,
                 },
             )

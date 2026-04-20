@@ -16,16 +16,16 @@ def main() -> None:
 
     page = st.sidebar.selectbox(
         "Page",
-        options=["Task Console", "Knowledge Manager", "Skill Manager", "Audit Manager"],
+        options=["Analysis Workspace", "Knowledge Assets", "Skill Library", "Audit Logs"],
         index=0,
     )
-    if page == "Knowledge Manager":
+    if page == "Knowledge Assets":
         render_knowledge_manager()
         return
-    if page == "Skill Manager":
+    if page == "Skill Library":
         render_skill_manager()
         return
-    if page == "Audit Manager":
+    if page == "Audit Logs":
         render_audit_manager()
         return
     render_task_console()

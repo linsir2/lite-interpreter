@@ -2,11 +2,10 @@
 
 from unittest.mock import patch
 
-import pytest
 from src.blackboard import ExecutionData, MemoryData, execution_blackboard, global_blackboard, memory_blackboard
 from src.common import ExecutionRecord
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
-from src.dag_engine.dag_graph import build_dag_graph, execute_task_flow, get_route_map
+from src.dag_engine.dag_graph import execute_task_flow
 from src.dag_engine.nodes.analyst_node import analyst_node
 from src.dag_engine.nodes.auditor_node import auditor_node
 from src.dag_engine.nodes.coder_node import coder_node
@@ -14,7 +13,6 @@ from src.dag_engine.nodes.data_inspector import data_inspector_node
 from src.dag_engine.nodes.debugger_node import debugger_node
 from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
 from src.dag_engine.nodes.executor_node import executor_node
-from src.dag_engine.nodes.research_merge_node import research_merge_node
 from src.dag_engine.nodes.router_node import _has_business_context, router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
 from src.dag_engine.nodes.static_codegen import build_dataset_aware_code
@@ -22,11 +20,6 @@ from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
 from src.storage.repository.memory_repo import MemoryRepo
-
-
-def test_route_map_exposes_dynamic_swarm():
-    route_map = get_route_map()
-    assert route_map["dynamic_swarm"] == "dynamic_swarm"
 
 
 def test_router_business_context_check_handles_default_empty_dict():
@@ -135,69 +128,6 @@ def test_router_can_load_preset_skills_without_repo_state():
     assert any(skill["name"] == "policy_clause_audit" for skill in result["execution_intent"]["candidate_skills"])
 
 
-def test_build_dag_graph_compiles_or_gracefully_skips():
-    graph = build_dag_graph()
-    assert graph is None or hasattr(graph, "invoke")
-
-
-def test_build_dag_graph_reenters_static_flow_after_dynamic_success(monkeypatch):
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.router_node.router_node",
-        lambda state: {
-            "next_actions": ["dynamic_swarm"],
-            "execution_intent": {
-                "intent": "dynamic_flow",
-                "destinations": ["dynamic_swarm"],
-                "metadata": {"requires_static_execution": True, "fallback_destinations": ["analyst"]},
-            },
-        },
-    )
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.dynamic_swarm_node.dynamic_swarm_node",
-        lambda state: {"dynamic_status": "completed", "dynamic_summary": "researched", "dynamic_research_findings": ["f1"]},
-    )
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.research_merge_node.research_merge_node",
-        lambda state: {"analysis_brief": {"question": state["input_query"]}, "next_actions": ["analyst"]},
-    )
-    monkeypatch.setattr("src.dag_engine.nodes.analyst_node.analyst_node", lambda state: {"analysis_plan": "plan"})
-    monkeypatch.setattr("src.dag_engine.nodes.coder_node.coder_node", lambda state: {"generated_code": "print('ok')"})
-    monkeypatch.setattr("src.dag_engine.nodes.auditor_node.auditor_node", lambda state: {"next_actions": ["executor"]})
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.executor_node.executor_node",
-        lambda state: {
-            "execution_record": ExecutionRecord(
-                session_id="session-graph-phase3",
-                tenant_id="tenant-graph-phase3",
-                workspace_id="ws-graph-phase3",
-                task_id="task-graph-phase3",
-                success=True,
-                trace_id="trace-graph-phase3",
-                duration_seconds=0.1,
-                output="ok",
-            ).model_dump(mode="json")
-        },
-    )
-    monkeypatch.setattr("src.dag_engine.nodes.skill_harvester_node.skill_harvester_node", lambda state: {})
-    monkeypatch.setattr("src.dag_engine.nodes.summarizer_node.summarizer_node", lambda state: {"final_response": {"mode": "static"}})
-
-    graph = build_dag_graph()
-    if graph is None:
-        pytest.skip("LangGraph unavailable in current environment")
-
-    result = graph.invoke(
-        {
-            "tenant_id": "tenant-graph-phase3",
-            "task_id": "task-graph-phase3",
-            "workspace_id": "ws-graph-phase3",
-            "input_query": "帮我自己找数据并写代码验证",
-        }
-    )
-
-    assert result["final_response"]["mode"] == "static"
-    assert result["generated_code"] == "print('ok')"
-
-
 def test_router_routes_complex_task_to_dynamic_swarm():
     tenant_id = "tenant_dynamic"
     task_id = global_blackboard.create_task(tenant_id, "ws_dynamic", "placeholder")
@@ -220,7 +150,7 @@ def test_router_routes_complex_task_to_dynamic_swarm():
         }
     )
 
-    assert result["execution_intent"]["intent"] == "dynamic_flow"
+    assert result["execution_intent"]["intent"] == "dynamic_then_static_flow"
     assert result["next_actions"] == ["dynamic_swarm"]
     assert result["execution_intent"]["complexity_score"] >= 0.7
     assert result["execution_intent"]["metadata"]["analysis_mode"] == "dynamic_research_analysis"
@@ -228,7 +158,7 @@ def test_router_routes_complex_task_to_dynamic_swarm():
     expected_alias = "reasoning_model" if routing_stage in {"fine", "fallback"} else "fast_model"
     assert result["execution_intent"]["metadata"]["effective_model_alias"] == expected_alias
     assert result["execution_intent"]["metadata"]["final_mode"] == "dynamic"
-    assert result["execution_intent"]["metadata"]["fallback_destinations"]
+    assert result["execution_intent"]["metadata"]["next_static_steps"]
     assert result["execution_intent"]["metadata"]["routing_stage"] in {"coarse", "fine", "fallback"}
 
 
@@ -297,9 +227,8 @@ def test_router_uses_runtime_decision_as_single_semantic_source():
             "requires_static_execution": True,
             "requires_external_research": False,
             "fine_routing_invoked": False,
-            "fallback_mode": "static",
-            "fallback_destinations": ("analyst",),
-            "fallback_reason": "",
+            "continuation": "finish",
+            "next_static_steps": (),
             "effective_tools": (),
             "known_gaps": (),
             "routing_reasons": ("runtime selected analyst path",),
@@ -322,9 +251,8 @@ def test_router_uses_runtime_decision_as_single_semantic_source():
                 "requires_static_execution": True,
                 "requires_external_research": False,
                 "fine_routing_invoked": False,
-                "fallback_mode": "static",
-                "fallback_destinations": ["analyst"],
-                "fallback_reason": "",
+                "continuation": "finish",
+                "next_static_steps": [],
                 "effective_tools": [],
                 "known_gaps": [],
                 "routing_reasons": ["runtime selected analyst path"],
@@ -376,7 +304,7 @@ def test_dynamic_swarm_and_harvester_form_minimal_closed_loop():
             }
         ],
     )
-    with patch("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", return_value=fake_result):
+    with patch("src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", return_value=fake_result):
         dynamic_state = dynamic_swarm_node(
             {
                 "tenant_id": tenant_id,
@@ -406,6 +334,7 @@ def test_dynamic_swarm_and_harvester_form_minimal_closed_loop():
     assert persisted_execution.control.execution_intent is not None
     assert persisted_execution.control.decision_log
     assert persisted_execution.dynamic.runtime_backend == "deerflow"
+    assert persisted_execution.dynamic.continuation == "finish"
     assert persisted_memory.harvested_candidates
     assert persisted_memory.harvested_candidates[0].required_capabilities
     assert persisted_memory.harvested_candidates[0].authorization.allowed is True
@@ -448,70 +377,6 @@ def test_dynamic_swarm_denies_unknown_tool_requests():
     assert persisted.control.decision_log
 
 
-def test_research_merge_node_materializes_dynamic_findings_into_analysis_context():
-    tenant_id = "tenant_research_merge"
-    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge", "placeholder")
-    execution_blackboard.write(
-        tenant_id,
-        task_id,
-        ExecutionData(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            workspace_id="ws_research_merge",
-        ),
-    )
-
-    result = research_merge_node(
-        {
-            "tenant_id": tenant_id,
-            "task_id": task_id,
-            "workspace_id": "ws_research_merge",
-            "input_query": "基于动态研究结果生成执行代码",
-            "execution_intent": {"metadata": {"requires_static_execution": True}},
-            "dynamic_summary": "研究表明行业均值高于内部数据",
-            "dynamic_research_findings": ["行业均值高于内部数据", "需要重点核对合同缺失样本"],
-            "dynamic_evidence_refs": ["trace-1"],
-            "dynamic_artifacts": ["/tmp/report.md"],
-            "dynamic_open_questions": ["缺少地区维度公开样本"],
-            "dynamic_suggested_static_actions": ["先生成静态分析计划再输出代码"],
-        }
-    )
-
-    persisted = execution_blackboard.read(tenant_id, task_id)
-    assert persisted is not None
-    assert persisted.knowledge.analysis_brief.question == "基于动态研究结果生成执行代码"
-    assert "trace-1" in persisted.knowledge.knowledge_snapshot.evidence_refs
-    assert result["next_actions"] == ["analyst"]
-    assert "研究发现" in result["refined_context"]
-
-
-def test_research_merge_node_skips_reentry_when_static_execution_not_required():
-    tenant_id = "tenant_research_merge_dynamic_only"
-    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge_dynamic_only", "placeholder")
-    execution_blackboard.write(
-        tenant_id,
-        task_id,
-        ExecutionData(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            workspace_id="ws_research_merge_dynamic_only",
-        ),
-    )
-
-    result = research_merge_node(
-        {
-            "tenant_id": tenant_id,
-            "task_id": task_id,
-            "workspace_id": "ws_research_merge_dynamic_only",
-            "input_query": "只做动态调研",
-            "execution_intent": {"metadata": {"requires_static_execution": False}},
-            "dynamic_summary": "research only",
-        }
-    )
-
-    assert result["next_actions"] == ["skill_harvester"]
-
-
 def test_execute_task_flow_reenters_static_path_after_dynamic_success_when_required():
     result = execute_task_flow(
         {
@@ -523,15 +388,16 @@ def test_execute_task_flow_reenters_static_path_after_dynamic_success_when_requi
         nodes={
             "router": lambda state: {
                 "next_actions": ["dynamic_swarm"],
-                "execution_intent": {"metadata": {"requires_static_execution": True}},
+                "execution_intent": {"metadata": {"next_static_steps": ["analyst"]}},
             },
             "dynamic_swarm": lambda state: {
                 "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_next_static_steps": ["analyst"],
                 "dynamic_summary": "researched",
                 "dynamic_research_findings": ["f1"],
                 "dynamic_evidence_refs": ["trace-1"],
             },
-            "research_merge": lambda state: {"analysis_brief": {"question": "research then code"}, "next_actions": ["analyst"]},
             "skill_harvester": lambda state: {},
             "summarizer": lambda state: {"final_response": {"mode": "static"}},
             "data_inspector": lambda state: {},
@@ -562,6 +428,8 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
     fake_result = DeerflowTaskResult(
         status="completed",
         summary="外部研究结论：行业均值高于内部数据",
+        continuation="resume_static",
+        next_static_steps=["analyst"],
         trace_refs=["deerflow:test-thread"],
         artifacts=["/tmp/report.md"],
         research_findings=["行业均值高于内部数据", "建议先生成静态校验代码"],
@@ -570,7 +438,7 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
         recommended_skill={"source": "dynamic_swarm", "source_task_type": "dynamic_task"},
         trace=[],
     )
-    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", lambda self, plan, on_event=None: fake_result)
+    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", lambda self, request, on_event=None: fake_result)
 
     result = execute_task_flow(
         {
@@ -583,13 +451,12 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
             "router": lambda state: {
                 "next_actions": ["dynamic_swarm"],
                 "execution_intent": {
-                    "intent": "dynamic_flow",
+                    "intent": "dynamic_then_static_flow",
                     "destinations": ["dynamic_swarm"],
-                    "metadata": {"requires_static_execution": True, "fallback_destinations": ["analyst"]},
+                    "metadata": {"next_static_steps": ["analyst"]},
                 },
             },
             "dynamic_swarm": dynamic_swarm_node,
-            "research_merge": research_merge_node,
             "skill_harvester": lambda state: {},
             "summarizer": lambda state: {"final_response": {"mode": "static"}},
             "data_inspector": lambda state: {},
@@ -619,30 +486,6 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
     assert "deerflow:test-thread" in persisted.knowledge.knowledge_snapshot.evidence_refs
     assert persisted.knowledge.analysis_brief.recommended_next_step == "将研究发现转成静态分析计划"
     assert result["terminal_status"] == "success"
-
-
-def test_research_merge_reuses_router_static_prep_plan_when_present():
-    tenant_id = "tenant_research_merge_fallback_plan"
-    task_id = global_blackboard.create_task(tenant_id, "ws_research_merge_fallback_plan", "placeholder")
-    execution_blackboard.write(
-        tenant_id,
-        task_id,
-        ExecutionData(tenant_id=tenant_id, task_id=task_id, workspace_id="ws_research_merge_fallback_plan"),
-    )
-
-    result = research_merge_node(
-        {
-            "tenant_id": tenant_id,
-            "task_id": task_id,
-            "workspace_id": "ws_research_merge_fallback_plan",
-            "input_query": "帮我自己找数据并写代码验证",
-            "execution_intent": {"metadata": {"requires_static_execution": True, "fallback_destinations": ["data_inspector", "kag_retriever"]}},
-            "dynamic_summary": "需要补齐数据和规则上下文",
-            "dynamic_research_findings": ["需要补齐数据和规则上下文"],
-        }
-    )
-
-    assert result["next_actions"] == ["data_inspector", "kag_retriever"]
 
 
 def test_dynamic_swarm_does_not_duplicate_trace_when_runtime_event_has_source():
@@ -676,7 +519,7 @@ def test_dynamic_swarm_does_not_duplicate_trace_when_runtime_event_has_source():
         ],
     )
 
-    with patch("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", return_value=fake_result):
+    with patch("src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", return_value=fake_result):
         dynamic_swarm_node(
             {
                 "tenant_id": tenant_id,
@@ -736,10 +579,7 @@ def test_dynamic_swarm_node_aborts_when_lease_is_lost_mid_event(monkeypatch):
         return fake_result
 
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.ensure_task_lease_owned", fake_lease_guard)
-    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.RuntimeGateway.run", fake_run)
-    monkeypatch.setattr(
-        "src.dag_engine.nodes.dynamic_swarm_node.default_mcp_client.call_tool", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", fake_run)
     monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.event_bus.publish", lambda **kwargs: "evt-1")
 
     try:
@@ -915,12 +755,7 @@ def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_denied():
         nodes={
             "router": lambda state: {
                 "next_actions": ["dynamic_swarm"],
-                "execution_intent": {
-                    "metadata": {
-                        "fallback_destinations": ["analyst"],
-                        "fallback_reason": "dynamic denied -> static fallback",
-                    }
-                },
+                "execution_intent": {"metadata": {}},
             },
             "dynamic_swarm": lambda state: {"dynamic_status": "denied", "dynamic_summary": "policy denied"},
             "skill_harvester": lambda state: {},
@@ -936,10 +771,9 @@ def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_denied():
         },
     )
 
-    assert result["terminal_status"] == "success"
-    assert result["terminal_sub_status"] == "动态任务降级后静态链执行完成"
-    assert result["routing_degraded"] is True
-    assert result["degrade_reason"] == "dynamic denied -> static fallback"
+    assert result["terminal_status"] == "waiting_for_human"
+    assert result["failure_type"] == "dynamic_governance"
+    assert result["error_message"] == "policy denied"
 
 
 def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_unavailable():
@@ -953,12 +787,7 @@ def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_unavailable()
         nodes={
             "router": lambda state: {
                 "next_actions": ["dynamic_swarm"],
-                "execution_intent": {
-                    "metadata": {
-                        "fallback_destinations": ["data_inspector", "kag_retriever"],
-                        "fallback_reason": "dynamic unavailable -> static fallback",
-                    }
-                },
+                "execution_intent": {"metadata": {}},
             },
             "dynamic_swarm": lambda state: {"dynamic_status": "unavailable", "dynamic_summary": "runtime unavailable"},
             "skill_harvester": lambda state: {},
@@ -974,10 +803,9 @@ def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_unavailable()
         },
     )
 
-    assert result["terminal_status"] == "success"
-    assert result["terminal_sub_status"] == "动态任务降级后静态链执行完成"
-    assert result["routing_degraded"] is True
-    assert result["degrade_reason"] == "dynamic unavailable -> static fallback"
+    assert result["terminal_status"] == "failed"
+    assert result["failure_type"] == "dynamic_runtime"
+    assert result["error_message"] == "runtime unavailable"
 
 
 def test_executor_node_passes_task_context_to_sandbox(monkeypatch):
@@ -1609,5 +1437,6 @@ def test_summarizer_node_builds_dynamic_final_response():
     assert result["final_response"]["headline"] == "dynamic done"
     assert result["final_response"]["answer"].startswith("已完成动态探索")
     assert result["final_response"]["details"]["analysis_brief"]["question"] == ""
-    assert result["final_response"]["outputs"][0]["path"] == "/tmp/a.md"
+    assert result["final_response"]["outputs"][0]["path"] is None
+    assert result["final_response"]["outputs"][0]["summary"] == "/tmp/a.md"
     assert result["final_response"]["key_findings"]

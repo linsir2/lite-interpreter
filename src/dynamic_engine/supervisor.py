@@ -41,6 +41,8 @@ class DynamicRunPlan:
             {
                 "dynamic_status": "denied",
                 "dynamic_summary": "Dynamic swarm request denied by harness governance policy.",
+                "dynamic_continuation": "finish",
+                "dynamic_next_static_steps": [],
                 "dynamic_trace_refs": [f"governance:dynamic:{self.task_envelope.task_id}"],
                 "task_envelope": self.task_envelope,
                 "execution_intent": self.execution_intent,
@@ -194,6 +196,12 @@ class DynamicSupervisor:
             query=task_envelope.input_query,
             system_context=context_envelope.to_system_context(),
             metadata={
+                "continuation": (
+                    "resume_static"
+                    if execution_intent.intent == "dynamic_then_static_flow"
+                    else "finish"
+                ),
+                "next_static_steps": list((execution_intent.metadata or {}).get("next_static_steps") or []),
                 "routing_mode": task_envelope.metadata.get("routing_mode", "dynamic"),
                 "complexity_score": execution_intent.complexity_score,
                 "dynamic_reason": execution_intent_dynamic_reason(execution_intent),

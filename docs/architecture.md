@@ -2,148 +2,114 @@
 
 ## 1. 总体目标
 
-`lite-interpreter` 不是一个“让 agent 自由发挥”的系统，而是一个把任务执行、治理、知识检索、动态探索都纳入控制面的数据智能运行时。
+`lite-interpreter` 的目标，是把一个真实的数据分析任务拆成可治理、可观测、可回放的工程闭环，而不是把所有事情都塞进一个 prompt。
 
-核心目标：
+当前成熟度、测试基线与已知热点统一以 `docs/project_status.md` 为准，这份文档只描述结构与边界。
 
-- 让稳定流程走确定性 DAG
-- 让复杂长尾问题走受控动态节点
-- 让代码执行始终留在本地 sandbox
-- 让治理决策、状态变化、轨迹和结果都能回放与审计
+系统当前最关键的设计原则有四条：
 
-## 2. 四层架构
+1. **DAG 仍是 owner**
+   静态主链负责可预测、可审计、可回放的主流程。
+
+2. **动态能力按需触发**
+   只有在复杂、长尾、需要外部研究的任务上，才进入 DeerFlow sidecar。
+
+3. **最终代码执行留在本地 sandbox**
+   不把最终执行权交给动态 runtime。
+
+4. **Blackboard 是事实源**
+   所有任务状态、执行状态、知识状态和记忆状态都要回到控制面，不允许侧写隐状态。
+
+## 2. 五个主面
 
 ### 2.1 控制面
 
-控制面负责“知道系统当前在干什么”。
-
-关键模块：
+核心模块：
 
 - `src/blackboard/global_blackboard.py`
 - `src/blackboard/execution_blackboard.py`
 - `src/blackboard/knowledge_blackboard.py`
+- `src/blackboard/memory_blackboard.py`
 - `src/common/contracts.py`
 - `src/common/event_bus.py`
 - `src/common/event_journal.py`
 
-核心对象：
+核心职责：
+
+- 维护任务生命周期状态
+- 维护执行态主状态
+- 维护知识态与记忆态快照
+- 发布实时事件
+- 提供 backlog 回放
+- 支撑 API 读模型与前端工作台
+
+关键共享对象：
 
 - `TaskEnvelope`
-  任务信封，包含 task/tenant/workspace/query/governance/budget
 - `ExecutionIntent`
-  Router 的执行决策，决定 static/dynamic/hybrid
 - `DecisionRecord`
-  Harness 的治理决策记录
-- `TraceEvent`
-  统一事件结构，用于 SSE 和重放
-- `ExecutionEvent`
- 统一流式执行事件结构，补充 `text / thinking / progress / artifact / tool-call / done` 语义层
 - `ExecutionRecord`
-  Sandbox/Runtime 的标准化执行记录
-- `RuntimeCapabilityManifest`
-  runtime 的能力自描述，用于 capability inspection / conformance / support matrix
+- `TraceEvent`
 - `ToolCallRecord`
-  从 execution trace 派生出的正式 tool-call 资源
+- `RuntimeCapabilityManifest`
 
-控制面职责：
+### 2.2 路由与编排面
 
-- 保存任务状态
-- 保存执行状态
-- 投递事件
-- 提供重放 backlog
-- 让 API 和前端能看到统一的任务视图
-- 提供 runtime capability / diagnostics / conformance / execution resource 查询
-
-#### 黑板边界与分工
-
-当前控制面里的三类黑板，不应该再混着理解：
-
-| 黑板 | 主要职责 | 应该放什么 | 不应该放什么 |
-| --- | --- | --- | --- |
-| `GlobalBlackboard` | 任务全局生命周期与用户可见总状态 | `global_status`、`sub_status`、失败信息、重试计数 | 代码、检索快照、执行结果细节 |
-| `ExecutionBlackboard` | 执行编排主状态 | `TaskEnvelope`、`ExecutionIntent`、`ExecutionRecord`、`business_context`、`final_response` | 长期知识资产、纯知识观察态 |
-| `KnowledgeBlackboard` | 知识子域观察态 | `business_documents` 解析状态、`latest_retrieval_snapshot` | 最终回复、执行意图、沙箱执行结果 |
-
-更直白地说：
-
-- `ExecutionBlackboard` 回答的是“任务现在怎么跑”
-- `KnowledgeBlackboard` 回答的是“这批文档和本次检索现在是什么状态”
-- `GlobalBlackboard` 回答的是“用户看到这个任务到了哪一步”
-
-#### 为什么不把所有东西都塞回一个黑板
-
-如果全部放回 `ExecutionBlackboard`，短期看起来省事，长期会出现三个问题：
-
-1. 知识资产页、解析状态页、检索诊断页都要从执行态里反查
-2. 知识态和执行态更新频率不同，容易互相污染
-3. 后续如果知识链路要独立恢复、独立审计，就没有天然边界
-
-因此当前的策略不是“黑板越少越好”，而是“每个黑板负责一个稳定子域”。
-
-#### 新增子黑板的判断标准
-
-后面如果你继续扩展 blackboard，建议满足下面三个条件再拆新子黑板：
-
-1. 这类状态有独立的观察视角。
-   例如前端、运维、审计会单独看它，而不是总和执行态一起看。
-
-2. 这类状态的生命周期与执行编排不同。
-   例如知识资产、数据资产、评测资产，往往比某一次代码执行更稳定。
-
-3. 它不是另一个黑板里字段的纯镜像集合。
-   如果只是为了省几次取值而复制一份字段，就不要新开。
-
-当前已经满足拆分条件的，是 `KnowledgeBlackboard`。
-当前还不建议立刻拆出的，是 `structured_datasets`：
-
-- 它仍然紧耦合 `DataInspector`
-- 紧耦合 sandbox input mounts
-- 紧耦合 static codegen 的输入装配
-
-所以结构化数据目前仍留在 `ExecutionBlackboard`，这是有意为之，不是遗漏。
-
-### 2.2 运行面
-
-运行面负责“任务如何被编排”。
-
-关键模块：
+核心模块：
 
 - `src/dag_engine/dag_graph.py`
+- `src/dag_engine/graphstate.py`
 - `src/dag_engine/nodes/router_node.py`
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
+- `src/dag_engine/nodes/analyst_node.py`
+- `src/dag_engine/nodes/coder_node.py`
+- `src/dag_engine/nodes/auditor_node.py`
+- `src/dag_engine/nodes/executor_node.py`
+- `src/dag_engine/nodes/summarizer_node.py`
+
+当前主判断：
+
+- **静态链优先**
+- **动态链按需触发**
+- **动态研究后可回流静态链**
+- **最终摘要必须反映真实终态**
+
+当前主链顺序：
+
+1. Router
+2. 静态链或动态链
+3. Skill Harvester
+4. Summarizer
+5. Analysis Workspace / execution resources
+
+### 2.3 动态运行面
+
+核心模块：
+
 - `src/dynamic_engine/supervisor.py`
-- `src/dynamic_engine/runtime_gateway.py`
-- `src/dynamic_engine/runtime_registry.py`
 - `src/dynamic_engine/deerflow_bridge.py`
+- `src/dynamic_engine/runtime_backends.py`
+- `src/dynamic_engine/trace_normalizer.py`
+- `src/dag_engine/nodes/dynamic_swarm_node.py`
 
-设计要点：
+当前只支持：
 
-- DAG 是 owner
-- Router 先决定静态链还是动态链
-- 动态链是一个超级节点，不是满系统散落的 agent
-- DeerFlow 是 runtime backend，不是系统 owner
+- **DeerFlow sidecar**
 
-当前动态链分层：
+不再支持：
 
-1. `DynamicSupervisor`
-   生成 `DynamicRunPlan`，封装 task envelope、execution intent、governance decision
-2. `RuntimeGateway`
-   根据 registry 选择 runtime backend
-3. `DeerflowBridge`
-   执行 embedded / sidecar / auto 模式
-4. `TraceNormalizer`
-   把 runtime 事件统一成系统可消费的 trace
+- embedded Python client 模式
+- auto runtime mode
 
-运行面新增的能力自描述接口：
+动态链职责边界：
 
-- `runtime_registry` 不再只负责 `create(backend)`，现在也能输出 runtime capability manifest
-- API 已可通过 `/api/runtimes` 和 `/api/runtimes/{id}/capabilities` 查询 runtime 支持情况
+- 处理复杂研究任务
+- 发起受控外部检索/工具调用
+- 产出研究摘要、trace、artifact refs、候选静态 skill
+- 不直接拥有最终 Python 执行边界
 
-### 2.3 执行面
+### 2.4 执行面
 
-执行面负责“代码怎样被安全执行”。
-
-关键模块：
+核心模块：
 
 - `src/sandbox/ast_auditor.py`
 - `src/sandbox/docker_executor.py`
@@ -151,216 +117,120 @@
 - `src/sandbox/execution_reporting.py`
 - `src/mcp_gateway/tools/sandbox_exec_tool.py`
 
-执行面流程：
+当前执行流程：
 
-1. 代码输入校验
-2. AST 安全审计
-3. Harness sandbox policy 判断
-4. Docker 容器执行
-5. 生成 `SandboxResult`
-6. 标准化成 `ExecutionRecord`
-7. 写回黑板并向前端投递事件
-8. 通过 execution resource layer 暴露 execution / artifacts / tool-calls
+1. 输入校验
+2. AST 审计
+3. harness governance 预判
+4. Docker sandbox 执行
+5. `ExecutionRecord` 标准化
+6. task/execution 事件投影
 
-当前关键边界：
+当前安全边界：
 
-- 代码执行只发生在本地 sandbox
-- 动态链可以探索，但不能绕过本地 sandbox 执行代码
-- 输入挂载显式、只读
-- artifact 有明确输出目录
-- tool-call 资源从 trace 派生，不另起第二套执行状态存储
+- `tenant_id/workspace_id` 不再允许任意字符进入路径与 DB 标识符
+- artifact path 只允许受控根目录或显式 URL
+- session secret 不再允许默认固定值
+- API 不再支持 query-string token
 
-### 2.4 知识面
+### 2.5 知识与技能面
 
-知识面负责“系统知道什么，以及怎么检索”。
-
-关键模块：
+核心模块：
 
 - `src/kag/builder/*`
 - `src/kag/retriever/*`
 - `src/kag/context/*`
-- `src/mcp_gateway/tools/knowledge_query_tool.py`
 - `src/skillnet/*`
+- `src/memory/memory_service.py`
+- `src/storage/repository/knowledge_repo.py`
+- `src/storage/repository/memory_repo.py`
 
-知识面包含两种资产：
+KAG 当前职责：
 
-1. 文档与图谱资产
-   由 KAG builder 解析、分块、向量化、图谱抽取、入库
-2. 技能资产
-   由 SkillNet 从动态/静态成功路径中抽取、验证、提升并复用
+- 文档解析
+- chunk / embedding / graph
+- 证据召回
+- context 构建
 
-KAG 设计原则：
+SkillNet 当前职责：
 
-- 保留 layout-aware / parent-child / fallback chunking
-- 保留 hybrid recall
-- 保留 graph recall
-- 不把 KAG 简化成普通 hit list
+- 动态或静态成功路径的 skill harvest
+- validation / authorization / promotion
+- 历史 skill recall 与 usage/outcome 回写
 
-SkillNet 设计原则：
+当前真实约束：
 
-- 候选技能必须带 `required_capabilities`
-- 必须经过 validation 与 authorization
-- 历史技能复用要能解释来源、原因、得分
-- 任务完成后要把 success/failure 回写到 usage telemetry
+- 结构化静态执行可靠格式限定为 `csv/tsv/json`
+- business document 与 structured dataset 不能再随意互相伪装
+- durable memory 不可用时主链降级继续，不再直接卡死 router
 
-## 2.5 观测与资源层
-
-除了四层主架构，当前系统已经新增了一层“资源化观测面”，用于把已有 blackboard 状态转成正式资源：
-
-- runtime capability manifest
-- diagnostics
-- conformance
-- executions
-- artifacts
-- tool-calls
-- execution streams
-
-关键模块：
-
-- `src/api/routers/runtime_router.py`
-- `src/api/routers/diagnostics_router.py`
-- `src/api/routers/execution_router.py`
-- `src/api/execution_resources.py`
-- `src/api/diagnostics_resources.py`
-
-这层的设计原则是：
-
-- 不另起新的状态源
-- 直接从 blackboard / state repo / runtime registry 派生
-- 先提供稳定只读资源，再决定是否演进成独立生命周期对象
-
-## 3. 主链路
+## 3. 两条主链
 
 ### 3.1 静态链
 
-静态链适合 SOP、已有业务知识、已上传数据、低复杂度任务。
+```text
+router
+  -> data_inspector
+  -> kag_retriever
+  -> context_builder
+  -> analyst
+  -> coder
+  -> auditor
+  -> executor
+  -> skill_harvester
+  -> summarizer
+```
 
-链路如下：
+适用场景：
 
-1. `router_node`
-2. `data_inspector`（如有结构化数据且未探查）
-3. `kag_retriever`（如需企业知识）
-4. `context_builder`
-5. `analyst_node`
-6. `coder_node`
-7. `auditor_node`
-8. `executor_node`
-9. `skill_harvester_node`
-10. `summarizer_node`
+- 结构比较稳定的分析任务
+- 已知 SOP 或可模板化执行的问题
+- 不需要大量外部研究与多步探索的问题
 
 ### 3.2 动态链
 
-动态链适合复杂、未知、多步、需要探索和验证闭环的任务。
+```text
+router
+  -> dynamic_swarm
+  -> (必要时回流 analyst/coder/executor)
+  -> skill_harvester
+  -> summarizer
+```
 
-链路如下：
+适用场景：
 
-1. `router_node`
-2. `dynamic_swarm_node`
-3. `skill_harvester_node`
-4. `summarizer_node`
+- 需要自己找资料
+- 需要跨多步探索
+- 需要动态研究后再收束成静态验证的问题
 
-## 4. 模块协作关系
+## 4. 前端和 API 的关系
 
-### 4.1 Router 与 Blackboard
+前端不再自己拼多份真相，而是优先读取 server-built workspace payload。
 
-- Router 从 `ExecutionBlackboard` 读取上下文
-- Router 把 `execution_intent` 写回
-- 后续节点不需要重复推断执行意图
+关键接口：
 
-### 4.2 Dynamic Runtime 与 Harness
+- `GET /api/tasks/{task_id}/workspace`
+- `GET /api/tasks/{task_id}/result`
+- `GET /api/tasks/{task_id}/executions`
+- `GET /api/tasks/{task_id}/events/poll`
+- `GET /api/executions/{execution_id}`
+- `GET /api/executions/{execution_id}/events/poll`
+- `GET /api/executions/{execution_id}/artifacts`
+- `GET /api/executions/{execution_id}/tool-calls`
 
-- `DynamicSupervisor` 在 runtime 执行前调用 `HarnessGovernor`
-- deny 会直接生成 denied patch，不继续执行 DeerFlow
-- allow 才进入 runtime gateway
+当前前端主面：
 
-### 4.3 Sandbox 与 Harness
+- `Analysis Workspace`
+- `Knowledge Assets`
+- `Skill Library`
+- `Audit Logs`
 
-- `docker_executor` 在容器启动前做 governance 判断
-- deny 结果也会像正常执行结果一样落 session、落事件、落 blackboard
+其中真正的主产品面仍是 `Analysis Workspace`。
 
-### 4.4 SSE 与 Event Journal
+## 5. 当前最重要的工程结论
 
-- `event_bus` 负责实时投递
-- `event_journal` 负责 backlog 保存
-- `sse_router` 先发 connected，再回放 backlog，再继续实时订阅
-- `TraceNormalizer` 已把 runtime trace 统一收口成 canonical `ExecutionEvent`
-
-### 4.5 Execution Resource Layer
-
-- `ExecutionData` 仍然是唯一事实来源
-- `execution_resources.py` 从 `ExecutionData` 派生：
-  - execution summary
-  - artifact list
-  - tool-call list
-  - execution stream
-- `event_journal` + `execution_resources.py` 共同派生 execution stream
-- static-chain 当前也会派生 synthetic tool calls：
-  - `knowledge_query`
-  - `sandbox_exec`
-- 前端 `task_console` 已开始主动调用：
-  - `/api/tasks/{task_id}/executions`
-  - `/api/executions/{execution_id}/tool-calls`
-  - `/api/executions/{execution_id}/events`
-
-### 4.6 KnowledgeBlackboard 与 ExecutionBlackboard 的协作
-
-当前协作方式是“执行链写入，知识子域同步投影”：
-
-1. 上传业务文档时
-   先写 `ExecutionBlackboard.business_documents`
-   再同步 `KnowledgeBlackboard.business_documents`
-
-2. KAG 解析文档后
-   更新文档的 `status / parse_mode / parser_diagnostics`
-   同步到 `KnowledgeBlackboard`
-
-3. QueryEngine / ContextBuilder 产生知识快照后
-   更新 `ExecutionBlackboard.knowledge_snapshot`
-   同步到 `KnowledgeBlackboard.latest_retrieval_snapshot`
-
-当前已经收口为：
-
-- 执行节点只更新 `ExecutionBlackboard`
-- 知识节点显式更新 `KnowledgeBlackboard`
-- 业务代码不依赖 execution->knowledge 的隐式同步
-
-这样做的好处是：
-
-- 执行链不会失去当前任务必需的上下文
-- 知识链路又能拥有自己的稳定观察视图
-- 执行面与知识面各自拥有清晰、独立的真源边界
-
-## 5. 当前架构收益
-
-- 宏观编排和微观探索分层明确
-- Sandbox 边界清晰
-- Harness 已真正进入关键路径
-- 控制面契约统一
-- SkillNet 不再只是“存描述”，而是开始具备复用闭环
-- runtime 能力边界开始可自描述
-- execution / artifacts / tool-calls 已成为正式 API 资源
-- diagnostics / conformance 已有最小实现
-- execution attach/resume stream 已有最小实现
-- 前端已能区分 execution stream 与 task stream，并展示静态/动态 tool-call 资源
-
-## 6. 当前架构风险
-
-- `docker_executor.py` 仍然偏大
-- 静态链后半段仍然是串行同步执行，后续可继续做更细粒度收敛
-- 真实外部依赖环境下的 e2e 还不够多
-- 目前更适合“受控原型/架构演示”，离生产级仍有工程化距离
-
-## 7. 读代码建议
-
-建议顺序：
-
-1. `README.md`
-2. `directory.txt`
-3. `docs/code_tour.md`
-4. `src/common/contracts.py`
-5. `src/blackboard/schema.py`
-6. `src/dag_engine/nodes/router_node.py`
-7. `src/dynamic_engine/*`
-8. `src/sandbox/*`
-9. `src/kag/*`
-10. `src/api/*`
+1. **系统核心不是“更多模块”，而是边界更清楚**
+2. **动态能力不是越多越好，而是越可控越好**
+3. **文档、测试、运行时 contract 必须保持一致**
+4. **假支持比不支持更危险**
+5. **所有最终用户可见结果，必须反映真实终态，而不是漂亮的假象**

@@ -27,6 +27,6 @@ def test_status_stream_html_supports_execution_stream():
         api_token="secret-token",
     )
 
-    assert "/api/executions/runtime:task-1/events" in html
-    assert "access_token=secret-token" in html
-    assert "Execution Stream" in html
+    assert "/api/executions/runtime:task-1/events/poll" in html
+    assert "Authorization" in html
+    assert "Execution Detail Stream" in html

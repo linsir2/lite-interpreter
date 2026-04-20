@@ -9,7 +9,6 @@ import pytest
 from src.api.routers.analysis_router import _run_task_flow, create_task, get_task_result
 from src.api.routers.execution_router import get_execution, list_task_executions
 from src.blackboard import MemoryData, execution_blackboard, memory_blackboard
-from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
 from src.sandbox.docker_executor import get_docker_client
 from starlette.requests import Request
@@ -259,22 +258,6 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
     body = json.loads(response.body.decode())
     task_id = body["task_id"]
 
-    fake_result = DeerflowTaskResult(
-        status="completed",
-        summary="dynamic e2e answer",
-        trace_refs=[f"deerflow:{task_id}"],
-        artifacts=["/tmp/e2e-report.md"],
-        recommended_skill={"source": "dynamic_swarm", "source_task_type": "dynamic_task"},
-        trace=[
-            {
-                "agent_name": "deerflow",
-                "step_name": "research",
-                "event_type": "completed",
-                "payload": {"artifacts": [{"path": "/tmp/e2e-report.md"}]},
-            }
-        ],
-    )
-
     def fake_execute_task_flow(state, *, nodes):  # noqa: ARG001
         approved_skills = [{"name": "dynamic_skill_demo"}]
         memory_blackboard.write(
@@ -295,9 +278,9 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
         execution.dynamic.trace_refs = [f"deerflow:{task_id}"]
         execution.dynamic.artifacts = ["/tmp/e2e-report.md"]
         execution.control.execution_intent = {
-            "intent": "dynamic_flow",
+            "intent": "dynamic_then_static_flow",
             "destinations": ["dynamic_swarm"],
-            "metadata": {"requires_static_execution": True},
+            "metadata": {"next_static_steps": ["analyst"]},
         }
         execution.control.final_response = {
             "mode": "static",
@@ -344,4 +327,4 @@ def test_dynamic_task_flow_e2e_via_api(monkeypatch):
     assert result_body["response"]["mode"] == "static"
     assert result_body["dynamic"]["summary"] == "dynamic e2e answer"
     assert result_body["skills"]["approved"]
-    assert result_body["control"]["execution_intent"]["intent"] == "dynamic_flow"
+    assert result_body["control"]["execution_intent"]["intent"] == "dynamic_then_static_flow"

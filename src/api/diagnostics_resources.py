@@ -14,7 +14,7 @@ from src.api.auth import auth_enabled
 from src.api.routers.analysis_router import get_startup_recovery_status
 from src.blackboard import build_strict_state_report
 from src.common.llm_client import LiteLLMClient
-from src.dynamic_engine.runtime_registry import runtime_registry
+from src.dynamic_engine.runtime_backends import list_runtime_manifests
 from src.kag.compiler.lexicon import LexiconCompiler
 from src.mcp_gateway import default_mcp_server
 from src.runtime.guidance_runner import probe_guidance_runtime
@@ -94,7 +94,8 @@ def build_diagnostics_report() -> dict[str, Any]:
         "environment": {
             "conda_prefix": current_prefix or None,
             "lite_interpreter_env_active": conda_env_ok,
-            "runtime_mode": DEERFLOW_RUNTIME_MODE,
+            "runtime_mode": "sidecar",
+            "configured_runtime_mode": DEERFLOW_RUNTIME_MODE,
             "sidecar_url": DEERFLOW_SIDECAR_URL or None,
             "api_auth_enabled": auth_enabled(),
         },
@@ -131,7 +132,7 @@ def build_diagnostics_report() -> dict[str, Any]:
 
 
 def build_conformance_report() -> dict[str, Any]:
-    manifests = runtime_registry.list_manifests()
+    manifests = list_runtime_manifests()
     runtime_summaries = []
 
     for manifest in manifests:

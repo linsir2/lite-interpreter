@@ -52,7 +52,7 @@ class EvidencePacket(BaseModel):
 class ExecutionIntent(BaseModel):
     """Routing decision for the current task run."""
 
-    intent: Literal["static_flow", "dynamic_flow", "hybrid_flow"]
+    intent: Literal["static_flow", "dynamic_only", "dynamic_then_static_flow"]
     destinations: list[str] = Field(default_factory=list)
     reason: str = ""
     complexity_score: float = 0.0

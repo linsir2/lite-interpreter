@@ -1,12 +1,10 @@
 """沙箱专属工具函数"""
 
-import re
 from typing import Any
 
 from config.sandbox_config import CODE_SNIPPET_MAX_LENGTH, MAX_CODE_LENGTH, MAX_TENANT_ID_LENGTH
-from config.security_config import TENANT_ID_PATTERN
 
-from src.common import format_utc_datetime, get_utc_now, truncate_string
+from src.common import format_utc_datetime, get_utc_now, truncate_string, validate_scope_identifier
 from src.sandbox.exceptions import InputValidationError
 
 
@@ -30,14 +28,32 @@ def validate_code(code: str, trace_id: str) -> None:
 
 def validate_tenant_id(tenant_id: str, trace_id: str) -> None:
     """校验租户ID合法性"""
-    if not tenant_id or not tenant_id.strip():
-        raise InputValidationError("租户ID不能为空", trace_id)
-    if len(tenant_id) > MAX_TENANT_ID_LENGTH:
+    try:
+        normalized = validate_scope_identifier(tenant_id, field_name="tenant_id")
+    except ValueError as exc:
+        message = str(exc)
+        if "must contain only letters" in message:
+            message = "租户ID仅支持字母、数字、下划线、横杠"
+        elif "must not be empty" in message:
+            message = "租户ID不能为空"
+        raise InputValidationError(message, trace_id) from exc
+    if len(normalized) > MAX_TENANT_ID_LENGTH:
         raise InputValidationError(
-            f"租户ID长度超过限制，最大支持{MAX_TENANT_ID_LENGTH}字符（当前：{len(tenant_id)}字符）", trace_id
+            f"租户ID长度超过限制，最大支持{MAX_TENANT_ID_LENGTH}字符（当前：{len(normalized)}字符）", trace_id
         )
-    if not re.match(TENANT_ID_PATTERN, tenant_id):
-        raise InputValidationError("租户ID仅支持字母、数字、下划线、横杠", trace_id)
+
+
+def validate_workspace_id(workspace_id: str, trace_id: str) -> None:
+    """校验工作空间ID合法性"""
+    try:
+        validate_scope_identifier(workspace_id, field_name="workspace_id")
+    except ValueError as exc:
+        message = str(exc)
+        if "must contain only letters" in message:
+            message = "工作空间ID仅支持字母、数字、下划线、横杠"
+        elif "must not be empty" in message:
+            message = "工作空间ID不能为空"
+        raise InputValidationError(message, trace_id) from exc
 
 
 def build_log_data(tenant_id: str, event_type: str, code: str, trace_id: str) -> dict[str, Any]:

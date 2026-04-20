@@ -131,10 +131,12 @@ def _normalize_user_store() -> dict[str, dict[str, Any]]:
 
 
 def session_auth_enabled() -> bool:
-    return bool(_normalize_user_store())
+    return bool(str(API_SESSION_SECRET or "").strip()) and bool(_normalize_user_store())
 
 
 def _session_secret_bytes() -> bytes:
+    if not str(API_SESSION_SECRET or "").strip():
+        raise RuntimeError("API session secret is not configured")
     return API_SESSION_SECRET.encode("utf-8")
 
 
@@ -175,6 +177,8 @@ def _decode_session_token(token: str) -> dict[str, Any] | None:
 
 
 def _auth_context_from_session(token: str) -> AuthContext | None:
+    if not str(API_SESSION_SECRET or "").strip():
+        return None
     payload = _decode_session_token(token)
     if payload is None:
         return None
@@ -234,7 +238,7 @@ def request_bearer_token(request: Request) -> str:
     header_token = str(request.headers.get("x-api-key") or "").strip()
     if header_token:
         return header_token
-    return str(request.query_params.get("access_token") or "").strip()
+    return ""
 
 
 def authenticate_request(request: Request) -> AuthContext | JSONResponse | None:
@@ -269,9 +273,12 @@ def role_allows(current_role: str, minimum_role: str) -> bool:
 
 
 def require_request_role(request: Request, minimum_role: str) -> JSONResponse | None:
+    state = getattr(request, "state", None)
     auth_context = request_auth_context(request)
-    if auth_context is None:
+    if auth_context is None and (state is None or not getattr(state, "auth_checked", False)):
         return None
+    if auth_context is None:
+        return JSONResponse({"error": "authentication required"}, status_code=401)
     if role_allows(auth_context.role, minimum_role):
         return None
     return JSONResponse(
@@ -298,9 +305,11 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path == "/health":
             request.state.auth_context = None
+            request.state.auth_checked = True
             return await call_next(request)
         authenticated = authenticate_request(request)
         if isinstance(authenticated, JSONResponse):
             return authenticated
         request.state.auth_context = authenticated
+        request.state.auth_checked = True
         return await call_next(request)

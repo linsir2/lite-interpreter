@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime
 from typing import Any
 
-from config.settings import STRICT_PERSISTENCE
 from sqlalchemy import text
 from src.common.contracts import AuditRecord
 from src.common.logger import get_logger
@@ -21,17 +21,21 @@ class AuditRepo:
     _lock = threading.RLock()
     _last_error: str | None = None
 
+    @staticmethod
+    def _allow_test_backend() -> bool:
+        return bool(os.getenv("PYTEST_CURRENT_TEST"))
+
     @classmethod
     def status(cls) -> dict[str, Any]:
         memory_record_count = sum(
             len(records) for tenant_bucket in cls._memory_store.values() for records in tenant_bucket.values()
         )
         return {
-            "backend": "postgres" if pg_client.engine else "memory_fallback",
+            "backend": "postgres" if pg_client.engine else "unavailable",
             "postgres_available": pg_client.engine is not None,
             "postgres_driver": getattr(pg_client, "driver_name", None),
             "postgres_driver_error": getattr(pg_client, "driver_error", None),
-            "strict_persistence": bool(STRICT_PERSISTENCE),
+            "test_in_memory_backend_active": cls._allow_test_backend() and pg_client.engine is None,
             "memory_record_count": memory_record_count,
             "last_error": cls._last_error,
         }
@@ -45,9 +49,9 @@ class AuditRepo:
     def _require_backend(cls, operation: str) -> None:
         if pg_client.engine is not None:
             return
-        if not STRICT_PERSISTENCE:
+        if cls._allow_test_backend():
             return
-        message = f"AuditRepo requires Postgres for `{operation}` when STRICT_PERSISTENCE is enabled"
+        message = f"AuditRepo requires Postgres for `{operation}`"
         cls._last_error = message
         raise RuntimeError(message)
 
@@ -55,8 +59,7 @@ class AuditRepo:
     def _handle_backend_error(cls, operation: str, exc: Exception) -> None:
         cls._last_error = str(exc)
         logger.error(f"[AuditRepo] {operation}失败: {exc}")
-        if STRICT_PERSISTENCE:
-            raise RuntimeError(f"AuditRepo {operation} failed under STRICT_PERSISTENCE: {exc}") from exc
+        raise RuntimeError(f"AuditRepo {operation} failed: {exc}") from exc
 
     @classmethod
     def _ensure_table(cls) -> None:
@@ -101,6 +104,8 @@ class AuditRepo:
 
         cls._require_backend("append_record")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("AuditRepo append_record requires Postgres")
             return True
 
         cls._ensure_table()
@@ -219,6 +224,8 @@ class AuditRepo:
 
         cls._require_backend("list_records")
         if not pg_client.engine:
+            if not cls._allow_test_backend():
+                raise RuntimeError("AuditRepo list_records requires Postgres")
             return filtered_memory[:limit]
 
         cls._ensure_table()

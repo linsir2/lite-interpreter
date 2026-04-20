@@ -8,7 +8,7 @@ from config.settings import COMPRESSION_RATIO, CONTEXT_MAX_TOKENS, CONTEXT_MODEL
 
 from src.common import count_text_tokens_exact
 from src.common.llm_client import LiteLLMClient
-from src.kag.compiler import LexiconMatcher
+from src.kag.compiler import KnowledgeCompilerService
 
 
 class ContextCompressor:
@@ -22,8 +22,7 @@ class ContextCompressor:
     ) -> list[dict[str, object]]:
         if not candidates:
             return []
-        matcher = LexiconMatcher()
-        lexical_terms = {match.canonical.lower() for match in matcher.match_text(query) if match.canonical}
+        lexical_terms = {match.canonical.lower() for match in KnowledgeCompilerService.match_text(query) if match.canonical}
         keywords = lexical_terms or {token for token in re.split(r"\W+", query.lower()) if token}
         budget = max_tokens
         compressed: list[dict[str, object]] = []

@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from src.api.routers.execution_router import (
     get_execution,
+    get_task_workspace,
     list_execution_artifacts,
     list_execution_tool_calls,
     list_task_executions,
@@ -215,7 +216,7 @@ def test_get_execution_returns_runtime_execution_and_artifacts():
                 "runtime_backend": "deerflow",
                 "status": "completed",
                 "summary": "done",
-                "runtime_metadata": {"effective_runtime_mode": "embedded", "sidecar_fallback_reason": "sidecar down"},
+                "runtime_metadata": {"effective_runtime_mode": "sidecar"},
                 "trace_refs": ["trace-runtime"],
                 "artifacts": ["/tmp/runtime-report.md"],
                 "trace": [
@@ -257,9 +258,69 @@ def test_get_execution_returns_runtime_execution_and_artifacts():
     assert response.status_code == 200
     assert body["execution_id"] == execution_id
     assert body["backend"] == "deerflow"
-    assert body["runtime_metadata"]["effective_runtime_mode"] == "embedded"
-    assert body["artifacts"][0]["path"] == "/tmp/runtime-report.md"
+    assert body["runtime_metadata"]["effective_runtime_mode"] == "sidecar"
+    assert body["artifacts"][0]["path"] is None
+    assert body["artifacts"][0]["summary"] == "/tmp/runtime-report.md"
     assert body["tool_calls"][0]["tool_name"] == "web_search"
+
+
+def test_get_task_workspace_returns_server_built_workspace_payload():
+    tenant_id = "tenant-task-workspace-api"
+    task_id = global_blackboard.create_task(tenant_id, "ws-task-workspace-api", "dynamic")
+    global_blackboard.update_global_status(task_id, global_blackboard.get_task_state(task_id).global_status, sub_status="running")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id="ws-task-workspace-api",
+            control={
+                "final_response": {
+                    "mode": "dynamic",
+                    "headline": "workspace done",
+                    "answer": "workspace done",
+                    "evidence_refs": ["chunk-1"],
+                }
+            },
+            knowledge={
+                "analysis_brief": {
+                    "question": "dynamic",
+                    "analysis_mode": "dynamic_research_analysis",
+                    "recommended_next_step": "Inspect evidence",
+                },
+                "knowledge_snapshot": {
+                    "rewritten_query": "dynamic",
+                    "evidence_refs": ["chunk-1"],
+                    "metadata": {"selected_count": 1},
+                },
+            },
+            dynamic={
+                "runtime_backend": "deerflow",
+                "status": "completed",
+                "summary": "done",
+                "runtime_metadata": {"effective_runtime_mode": "sidecar"},
+                "trace_refs": ["trace-runtime"],
+            },
+        ),
+    )
+
+    response = asyncio.run(
+        get_task_workspace(
+            _make_request(
+                f"/api/tasks/{task_id}/workspace",
+                task_id=task_id,
+                tenant_id=tenant_id,
+                workspace_id="ws-task-workspace-api",
+            )
+        )
+    )
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert body["workspace"]["primary"]["headline"] == "workspace done"
+    assert body["workspace"]["primary"]["next_action"] == "Inspect evidence"
+    assert body["workspace"]["evidence"]["evidence_refs"] == ["chunk-1"]
 
 
 def test_list_execution_tool_calls_returns_runtime_tool_calls():

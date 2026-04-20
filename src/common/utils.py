@@ -8,11 +8,14 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Sequence
+from hashlib import sha256
 from typing import Any
 
 from config.settings import DATETIME_FORMAT, LOG_MAX_LENGTH
 
 _WORD_PATTERN = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]|[^\s]")
+_SCOPE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+_MAX_SCOPE_ID_LENGTH = 64
 
 
 def generate_uuid() -> str:
@@ -48,6 +51,26 @@ def build_tenant_key(board_name: str, tenant_id: str, key: str) -> str:
     规则：lite_interpreter:{board_name}:tenant:{tenant_id}:{key}
     """
     return f"lite_interpreter:{board_name}:tenant:{tenant_id}:{key}"
+
+
+def validate_scope_identifier(value: str, *, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    if len(normalized) > _MAX_SCOPE_ID_LENGTH:
+        raise ValueError(f"{field_name} must be <= {_MAX_SCOPE_ID_LENGTH} characters")
+    if not _SCOPE_ID_PATTERN.fullmatch(normalized):
+        raise ValueError(f"{field_name} must contain only letters, digits, `_`, or `-`")
+    return normalized
+
+
+def scope_identifier_to_db_name(value: str, *, prefix: str = "") -> str:
+    normalized = validate_scope_identifier(value, field_name="scope identifier")
+    hashed = sha256(normalized.encode("utf-8")).hexdigest()[:8]
+    base = normalized.lower().replace("-", "_")
+    if prefix:
+        return f"{prefix}{base}_{hashed}"
+    return f"{base}_{hashed}"
 
 
 def estimate_tokens_fast(content: str) -> int:

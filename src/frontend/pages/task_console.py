@@ -11,17 +11,33 @@ import httpx
 from src.frontend.auth_client import api_auth_headers, render_auth_panel
 from src.frontend.components.file_uploader import render_file_uploader
 from src.frontend.components.status_stream import render_status_stream
+from src.frontend.components.workspace_shell import (
+    render_technical_details_shell,
+    render_workspace_sidebar,
+    render_workspace_summary,
+)
 
 
 def summarize_result_header(task_result: dict[str, Any]) -> dict[str, str]:
+    workspace = dict(task_result.get("workspace") or {})
+    primary = dict(workspace.get("primary") or {})
     final_response = task_result.get("response") or task_result.get("final_response") or {}
     status = dict(task_result.get("status") or {})
     return {
         "mode": str(
-            final_response.get("mode") or status.get("global_status") or task_result.get("global_status") or "unknown"
+            primary.get("mode")
+            or final_response.get("mode")
+            or status.get("global_status")
+            or task_result.get("global_status")
+            or "unknown"
         ),
-        "headline": str(final_response.get("headline") or "No headline available"),
-        "answer": str(final_response.get("answer") or final_response.get("headline") or "No answer available"),
+        "headline": str(primary.get("headline") or final_response.get("headline") or "No headline available"),
+        "answer": str(
+            primary.get("answer")
+            or final_response.get("answer")
+            or final_response.get("headline")
+            or "No answer available"
+        ),
     }
 
 
@@ -73,42 +89,50 @@ def fetch_task_console_bundle(
     api_token: str = "",
 ) -> dict[str, Any]:
     base_url = api_base_url.rstrip("/")
-    result_payload = fetch_json_payload(
-        _scoped_url(base_url, f"/api/tasks/{task_id}/result", tenant_id=tenant_id, workspace_id=workspace_id),
-        timeout=timeout,
-        api_token=api_token,
-    )
-
-    executions: list[dict[str, Any]] = []
-    tool_calls: list[dict[str, Any]] = []
     try:
-        executions_payload = fetch_json_payload(
-            _scoped_url(base_url, f"/api/tasks/{task_id}/executions", tenant_id=tenant_id, workspace_id=workspace_id),
+        result_payload = fetch_json_payload(
+            _scoped_url(base_url, f"/api/tasks/{task_id}/workspace", tenant_id=tenant_id, workspace_id=workspace_id),
             timeout=timeout,
             api_token=api_token,
         )
-        executions = list(executions_payload.get("executions") or [])
     except Exception:
-        executions = list(result_payload.get("executions") or [])
+        result_payload = fetch_json_payload(
+            _scoped_url(base_url, f"/api/tasks/{task_id}/result", tenant_id=tenant_id, workspace_id=workspace_id),
+            timeout=timeout,
+            api_token=api_token,
+        )
 
-    for execution in executions:
-        execution_id = str(execution.get("execution_id", "")).strip()
-        if not execution_id:
-            continue
+    executions: list[dict[str, Any]] = list(result_payload.get("executions") or [])
+    tool_calls: list[dict[str, Any]] = list(result_payload.get("tool_calls") or [])
+    if not executions:
         try:
-            tool_calls_payload = fetch_json_payload(
-                _scoped_url(
-                    base_url,
-                    f"/api/executions/{execution_id}/tool-calls",
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
-                ),
+            executions_payload = fetch_json_payload(
+                _scoped_url(base_url, f"/api/tasks/{task_id}/executions", tenant_id=tenant_id, workspace_id=workspace_id),
                 timeout=timeout,
                 api_token=api_token,
             )
+            executions = list(executions_payload.get("executions") or [])
         except Exception:
-            continue
-        tool_calls.extend(list(tool_calls_payload.get("tool_calls") or []))
+            executions = []
+    if not tool_calls:
+        for execution in executions:
+            execution_id = str(execution.get("execution_id", "")).strip()
+            if not execution_id:
+                continue
+            try:
+                tool_calls_payload = fetch_json_payload(
+                    _scoped_url(
+                        base_url,
+                        f"/api/executions/{execution_id}/tool-calls",
+                        tenant_id=tenant_id,
+                        workspace_id=workspace_id,
+                    ),
+                    timeout=timeout,
+                    api_token=api_token,
+                )
+            except Exception:
+                continue
+            tool_calls.extend(list(tool_calls_payload.get("tool_calls") or []))
 
     enriched = dict(result_payload)
     enriched["executions"] = executions
@@ -117,27 +141,40 @@ def fetch_task_console_bundle(
 
 
 def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]:
+    workspace = dict(task_result.get("workspace") or {})
     final_response = task_result.get("response") or task_result.get("final_response") or {}
     knowledge = dict(task_result.get("knowledge") or {})
     skills = dict(task_result.get("skills") or {})
     status = dict(task_result.get("status") or {})
     analysis_brief = dict(
-        (final_response.get("details") or {}).get("analysis_brief") or knowledge.get("analysis_brief") or {}
+        workspace.get("knowledge", {}).get("analysis_brief")
+        or (final_response.get("details") or {}).get("analysis_brief")
+        or knowledge.get("analysis_brief")
+        or {}
     )
     knowledge_snapshot = dict(
-        (final_response.get("details") or {}).get("knowledge_snapshot")
+        workspace.get("knowledge", {}).get("knowledge_snapshot")
+        or (final_response.get("details") or {}).get("knowledge_snapshot")
         or knowledge.get("knowledge_snapshot")
         or task_result.get("knowledge_snapshot")
         or {}
     )
-    compiled_knowledge = dict((final_response.get("details") or {}).get("compiled_knowledge") or {})
+    compiled_knowledge = dict(
+        workspace.get("knowledge", {}).get("compiled_knowledge")
+        or (final_response.get("details") or {}).get("compiled_knowledge")
+        or {}
+    )
     return {
         "findings": list(final_response.get("key_findings") or []),
         "outputs": list(final_response.get("outputs") or []),
         "caveats": list(final_response.get("caveats") or []),
-        "evidence_refs": list(final_response.get("evidence_refs") or []),
+        "evidence_refs": list(
+            (workspace.get("evidence") or {}).get("evidence_refs") or final_response.get("evidence_refs") or []
+        ),
         "executions": list(task_result.get("executions") or []),
         "tool_calls": list(task_result.get("tool_calls") or []),
+        "structured_inputs": list((workspace.get("inputs") or {}).get("structured_datasets") or []),
+        "document_inputs": list((workspace.get("inputs") or {}).get("business_documents") or []),
         "parser_reports": list((final_response.get("details") or {}).get("parser_reports") or []),
         "rule_checks": list((final_response.get("details") or {}).get("rule_checks") or []),
         "metric_checks": list((final_response.get("details") or {}).get("metric_checks") or []),
@@ -216,15 +253,311 @@ def list_directory_entries(path_value: str, max_items: int = 12) -> list[dict[st
     return entries
 
 
+def _render_analysis_summary(st: Any, *, header: dict[str, str], primary: dict[str, Any], sections: dict[str, list[Any]], evidence: dict[str, Any]) -> None:
+    render_workspace_summary(
+        st,
+        header=header,
+        next_action=str(primary.get("next_action") or ""),
+        evidence_ref_count=len(evidence.get("evidence_refs") or sections["evidence_refs"]),
+        execution_count=len(sections["executions"]),
+        output_count=len(sections["outputs"]),
+    )
+
+
+def _render_analysis_body(st: Any, *, sections: dict[str, list[Any]]) -> None:
+    info_col1, info_col2 = st.columns(2)
+    with info_col1:
+        st.markdown("#### Analysis Question")
+        analysis_brief = sections["analysis_brief"][0] if sections["analysis_brief"] else {}
+        if analysis_brief.get("question"):
+            st.write(str(analysis_brief.get("question")))
+        else:
+            st.caption("No explicit analysis question recorded.")
+
+        st.markdown("#### Key Findings")
+        if sections["findings"]:
+            for item in sections["findings"]:
+                st.markdown(f"- {item}")
+        else:
+            st.caption("No key findings recorded.")
+
+        st.markdown("#### Evidence")
+        if sections["evidence_refs"]:
+            for ref in sections["evidence_refs"]:
+                st.code(ref, language=None)
+        else:
+            st.caption("No evidence refs recorded.")
+
+        st.markdown("#### Data And Rules")
+        if analysis_brief:
+            if analysis_brief.get("analysis_mode"):
+                st.caption(f"mode={analysis_brief.get('analysis_mode')}")
+            dataset_summaries = analysis_brief.get("dataset_summaries", []) or []
+            if dataset_summaries:
+                st.markdown("**Datasets**")
+                for item in dataset_summaries:
+                    st.caption(str(item))
+            business_rules = analysis_brief.get("business_rules", []) or []
+            business_metrics = analysis_brief.get("business_metrics", []) or []
+            business_filters = analysis_brief.get("business_filters", []) or []
+            if business_rules or business_metrics or business_filters:
+                st.markdown("**Business Context**")
+                for item in business_rules[:3]:
+                    st.caption(f"rule: {item}")
+                for item in business_metrics[:3]:
+                    st.caption(f"metric: {item}")
+                for item in business_filters[:3]:
+                    st.caption(f"filter: {item}")
+            known_gaps = analysis_brief.get("known_gaps", []) or []
+            if known_gaps:
+                st.markdown("**Known Gaps**")
+                for item in known_gaps:
+                    st.caption(str(item))
+            if analysis_brief.get("recommended_next_step"):
+                st.caption(f"next={analysis_brief.get('recommended_next_step')}")
+        else:
+            st.caption("No analysis brief recorded.")
+
+        st.markdown("#### Knowledge Snapshot")
+        knowledge_snapshot = sections["knowledge_snapshot"][0] if sections["knowledge_snapshot"] else {}
+        if knowledge_snapshot:
+            rewritten_query = knowledge_snapshot.get("rewritten_query")
+            if rewritten_query:
+                st.caption(f"rewritten_query={rewritten_query}")
+            recall_strategies = knowledge_snapshot.get("recall_strategies", []) or []
+            if recall_strategies:
+                st.caption(f"recall={', '.join(str(item) for item in recall_strategies)}")
+            filters = knowledge_snapshot.get("filters", {}) or {}
+            if filters:
+                st.caption(f"filters={filters}")
+            metadata = knowledge_snapshot.get("metadata", {}) or {}
+            if metadata:
+                st.caption(str(metadata))
+        else:
+            st.caption("No knowledge snapshot recorded.")
+
+        st.markdown("#### Compiled Knowledge")
+        compiled_knowledge = sections["compiled_knowledge"][0] if sections["compiled_knowledge"] else {}
+        if compiled_knowledge:
+            rule_specs = compiled_knowledge.get("rule_specs", []) or []
+            metric_specs = compiled_knowledge.get("metric_specs", []) or []
+            filter_specs = compiled_knowledge.get("filter_specs", []) or []
+            parse_errors = compiled_knowledge.get("spec_parse_errors", []) or []
+            graph_summary = compiled_knowledge.get("graph_compilation_summary", {}) or {}
+            st.caption(
+                "rules="
+                f"{len(rule_specs)} metrics={len(metric_specs)} filters={len(filter_specs)} "
+                f"parse_errors={len(parse_errors)}"
+            )
+            if graph_summary:
+                st.caption(
+                    "graph "
+                    f"candidates={graph_summary.get('candidate_count', 0)} "
+                    f"accepted={graph_summary.get('accepted_count', 0)} "
+                    f"rejected={graph_summary.get('rejected_count', 0)}"
+                )
+                reject_reasons = graph_summary.get("reject_reasons", {}) or {}
+                if reject_reasons:
+                    st.caption(f"reject_reasons={reject_reasons}")
+            for item in rule_specs[:3]:
+                st.caption(f"rule_spec: {item.get('source_text') or item.get('normalized_text')}")
+            for item in metric_specs[:3]:
+                st.caption(f"metric_spec: {item.get('metric_name') or item.get('source_text')}")
+            for item in filter_specs[:3]:
+                st.caption(f"filter_spec: {item.get('field')} {item.get('operator')} {item.get('value')}")
+            for item in parse_errors[:3]:
+                st.caption(f"parse_error: {item.get('spec_kind')}::{item.get('error_code')}")
+        else:
+            st.caption("No compiled knowledge recorded.")
+
+        st.markdown("#### Rule Checks")
+        if sections["rule_checks"]:
+            for check in sections["rule_checks"]:
+                st.markdown(
+                    f"- **Rule**: {check.get('rule', 'unknown')}  \n  Issues: `{check.get('issue_count', 0)}`"
+                )
+                matched_datasets = check.get("matched_datasets", []) or []
+                matched_documents = check.get("matched_documents", []) or []
+                if matched_datasets:
+                    st.caption(f"datasets: {', '.join(str(item) for item in matched_datasets)}")
+                if matched_documents:
+                    st.caption(f"documents: {', '.join(str(item) for item in matched_documents)}")
+                warnings = check.get("warnings", []) or []
+                for warning in warnings[:3]:
+                    st.caption(f"warning: {warning}")
+        else:
+            st.caption("No rule checks recorded.")
+
+        st.markdown("#### Metric Checks")
+        if sections["metric_checks"]:
+            for check in sections["metric_checks"]:
+                st.markdown(
+                    f"- **Metric**: {check.get('metric', 'unknown')}  \n"
+                    f"  Matched columns: `{len(check.get('matched_columns', []) or [])}`"
+                )
+                matched_datasets = check.get("matched_datasets", []) or []
+                if matched_datasets:
+                    st.caption(f"datasets: {', '.join(str(item) for item in matched_datasets)}")
+                highlights = check.get("highlights", []) or []
+                for highlight in highlights[:3]:
+                    st.caption(f"highlight: {highlight}")
+        else:
+            st.caption("No metric checks recorded.")
+
+        st.markdown("#### Filter Checks")
+        if sections["filter_checks"]:
+            for check in sections["filter_checks"]:
+                st.markdown(f"- **Filter**: {check.get('filter', 'unknown')}")
+                matched_datasets = check.get("matched_datasets", []) or []
+                matched_documents = check.get("matched_documents", []) or []
+                matched_values = check.get("matched_values", []) or []
+                if matched_datasets:
+                    st.caption(f"datasets: {', '.join(str(item) for item in matched_datasets)}")
+                if matched_documents:
+                    st.caption(f"documents: {', '.join(str(item) for item in matched_documents)}")
+                for value in matched_values[:3]:
+                    st.caption(f"value: {value}")
+        else:
+            st.caption("No filter checks recorded.")
+
+    with info_col2:
+        st.markdown("#### Analysis Outputs")
+        if sections["outputs"]:
+            for raw_output, card in zip(sections["outputs"], build_output_cards(sections["outputs"]), strict=False):
+                asset = describe_output_asset(raw_output)
+                st.markdown("\n".join([f"**[{card['icon']}] {card['title']}**", f"`{card['type']}`", card["subtitle"]]))
+                if asset["path"]:
+                    st.code(asset["path"], language=None)
+                if asset["exists"] and asset["preview_kind"] == "directory":
+                    entries = list_directory_entries(asset["path"])
+                    if entries:
+                        with st.expander(f"Browse {asset['display_name']}"):
+                            for entry in entries:
+                                label = "DIR" if entry["is_dir"] else "FILE"
+                                st.markdown(f"- **[{label}] {entry['name']}**")
+                                st.code(entry["path"], language=None)
+                                if not entry["is_dir"] and entry["size"] is not None:
+                                    st.caption(f"size={entry['size']} bytes")
+                elif asset["exists"] and asset["preview_kind"] in {"image", "text"}:
+                    st.caption("Preview/download disabled in client. Use controlled artifact APIs instead.")
+                st.divider()
+        else:
+            st.caption("No outputs recorded.")
+
+        st.markdown("#### Analysis Caveats")
+        if sections["caveats"]:
+            for item in sections["caveats"]:
+                st.markdown(f"- {item}")
+        else:
+            st.caption("No caveats recorded.")
+
+
+def _render_technical_details(st: Any, *, sections: dict[str, list[Any]]) -> None:
+    def _body() -> None:
+        st.markdown("#### Executions")
+        if sections["executions"]:
+            for execution in sections["executions"]:
+                st.markdown(
+                    f"- **{execution.get('execution_id', 'unknown')}**  \n"
+                    f"  kind=`{execution.get('kind', 'unknown')}` backend=`{execution.get('backend', 'unknown')}` status=`{execution.get('status', 'unknown')}`"
+                )
+                if execution.get("summary"):
+                    st.caption(str(execution.get("summary"))[:240])
+                if execution.get("artifact_count") is not None:
+                    st.caption(f"artifacts={execution.get('artifact_count')} tool_calls={execution.get('tool_call_count', 0)}")
+        else:
+            st.caption("No execution resources recorded.")
+
+        st.markdown("#### Tool Calls")
+        if sections["tool_calls"]:
+            for tool_call in sections["tool_calls"]:
+                st.markdown(
+                    f"- **{tool_call.get('tool_name', 'unknown')}**  \n"
+                    f"  phase=`{tool_call.get('phase', 'unknown')}` call_id=`{tool_call.get('tool_call_id', 'unknown')}`"
+                )
+                if tool_call.get("execution_id"):
+                    st.caption(f"execution={tool_call.get('execution_id')}")
+                if tool_call.get("source_event_type"):
+                    st.caption(f"source_event={tool_call.get('source_event_type')}")
+                if tool_call.get("status"):
+                    st.caption(f"status={tool_call.get('status')}")
+                arguments = tool_call.get("arguments")
+                if arguments:
+                    st.caption(f"args={arguments}")
+                result_payload = tool_call.get("result")
+                if result_payload:
+                    st.caption(f"result={result_payload}")
+        else:
+            st.caption("No tool-call resources recorded.")
+
+        st.markdown("#### Historical Skill Matches")
+        if sections["historical_skill_matches"]:
+            for match in sections["historical_skill_matches"]:
+                st.markdown(f"- **{match.get('name', 'unknown')}**")
+                required = match.get("required_capabilities", []) or []
+                if required:
+                    st.caption(f"caps={', '.join(str(item) for item in required)}")
+                if match.get("match_source"):
+                    st.caption(f"source={match.get('match_source')}")
+                if match.get("match_reason"):
+                    st.caption(f"reason={match.get('match_reason')}")
+                if match.get("match_score") is not None:
+                    st.caption(f"score={match.get('match_score')}")
+                usage = match.get("usage", {}) or {}
+                if usage:
+                    st.caption(str(usage))
+        else:
+            st.caption("No historical skill matches recorded.")
+
+        st.markdown("#### Used Historical Skills")
+        if sections["used_historical_skills"]:
+            for match in sections["used_historical_skills"]:
+                st.markdown(f"- **{match.get('name', 'unknown')}** used in code generation")
+                stages = match.get("selected_by_stages", []) or []
+                if stages:
+                    st.caption(f"stages={', '.join(str(item) for item in stages)}")
+                replay_ids = match.get("used_replay_case_ids", []) or []
+                if replay_ids:
+                    st.caption(f"replay_cases={', '.join(str(item) for item in replay_ids)}")
+                capabilities = match.get("used_capabilities", []) or []
+                if capabilities:
+                    st.caption(f"used_caps={', '.join(str(item) for item in capabilities)}")
+                usage = match.get("usage", {}) or {}
+                if usage:
+                    st.caption(str(usage))
+        else:
+            st.caption("No historical skills were used in code generation.")
+
+        st.markdown("#### Parse Diagnostics")
+        if sections["parser_reports"]:
+            for report in sections["parser_reports"]:
+                st.markdown(f"- **{report.get('file_name', 'unknown')}**: mode=`{report.get('parse_mode', 'default')}`")
+                diagnostics = report.get("parser_diagnostics", {}) or {}
+                if diagnostics:
+                    st.caption(str(diagnostics))
+        else:
+            st.caption("No parser diagnostics recorded.")
+
+        st.markdown("#### Task Lease")
+        if sections["task_lease"]:
+            lease = sections["task_lease"][0]
+            st.caption(f"owner={lease.get('owner_id')}")
+            st.caption(f"expires_at={lease.get('lease_expires_at')}")
+            st.caption(f"backend={lease.get('backend')}")
+        else:
+            st.caption("No active task lease recorded.")
+    render_technical_details_shell(st, body_renderer=_body)
+
+
 def render_task_console() -> None:
     try:
         import streamlit as st
     except Exception as exc:  # pragma: no cover - optional dependency
         raise RuntimeError("Streamlit is not installed in the current environment") from exc
 
-    st.set_page_config(page_title="lite-interpreter Task Console", layout="wide")
-    st.title("lite-interpreter Task Console")
-    st.caption("Observe task status updates and DeerFlow dynamic trace events over SSE.")
+    st.set_page_config(page_title="lite-interpreter Analysis Workspace", layout="wide")
+    st.title("lite-interpreter Analysis Workspace")
+    st.caption("面向数据分析任务的主工作台。先看问题、证据、数据与规则，再看执行和技术细节。")
 
     api_base_url = st.text_input("API Base URL", value="http://127.0.0.1:8000")
     api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="task-console-auth")
@@ -235,23 +568,27 @@ def render_task_console() -> None:
     else:
         default_tenant = "demo-tenant"
         default_workspace = "demo-workspace"
-    tenant_id = st.text_input("Tenant ID", value=default_tenant)
-    workspace_id = st.text_input("Workspace ID", value=default_workspace)
-    governance_profile = st.selectbox(
-        "Governance Profile", options=["researcher", "planner", "executor", "reviewer"], index=0
-    )
-    allowed_tools_text = st.text_input("Allowed Tools (comma separated)", value="web_search,knowledge_query")
     default_task = st.session_state.get("task_id", "")
-    task_id = st.text_input("Task ID", value=default_task)
-    query = st.text_area(
-        "Task Query",
-        value="帮我分析这份财报，并结合宏观经济数据预测下季度走势，自己找数据并写代码验证",
-        height=120,
+    sidebar_state = render_workspace_sidebar(
+        st,
+        api_base_url=api_base_url,
+        tenant_id=default_tenant,
+        workspace_id=default_workspace,
+        governance_profile="researcher",
+        allowed_tools_text="web_search,knowledge_query",
+        default_task=default_task,
+        default_query="帮我分析这份财报，并结合宏观经济数据预测下季度走势，自己找数据并写代码验证",
     )
+    tenant_id = sidebar_state["tenant_id"]
+    workspace_id = sidebar_state["workspace_id"]
+    governance_profile = sidebar_state["governance_profile"]
+    allowed_tools_text = sidebar_state["allowed_tools_text"]
+    task_id = sidebar_state["task_id"]
+    query = sidebar_state["query"]
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("Create Real Task", use_container_width=True):
+        if st.button("Start Analysis Task", use_container_width=True):
             response = httpx.post(
                 f"{api_base_url.rstrip('/')}/api/tasks",
                 json={
@@ -268,10 +605,11 @@ def render_task_console() -> None:
             response.raise_for_status()
             task_info = response.json()
             st.session_state["task_id"] = task_info["task_id"]
+            st.session_state.pop("task_result", None)
             st.success(f"Created task: {task_info['task_id']}")
             st.rerun()
     with col2:
-        if st.button("Trigger Demo Trace", use_container_width=True):
+        if st.button("Trigger Demo Stream", use_container_width=True):
             if not task_id:
                 st.warning("Enter or create a task id first.")
             else:
@@ -284,7 +622,7 @@ def render_task_console() -> None:
                 response.raise_for_status()
                 st.success(f"Triggered demo trace for {task_id}")
 
-    with st.expander("Upload Workspace Assets"):
+    with st.expander("Upload Analysis Inputs"):
         render_file_uploader(
             api_base_url=api_base_url,
             tenant_id=tenant_id,
@@ -295,7 +633,19 @@ def render_task_console() -> None:
 
     if task_id:
         task_result = st.session_state.get("task_result")
-        if st.button("Fetch Final Result", use_container_width=True):
+        if task_result is None:
+            try:
+                st.session_state["task_result"] = fetch_task_console_bundle(
+                    api_base_url,
+                    task_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    api_token=api_token,
+                )
+                task_result = st.session_state["task_result"]
+            except Exception:
+                task_result = None
+        if st.button("Refresh Analysis Workspace", use_container_width=True):
             try:
                 st.session_state["task_result"] = fetch_task_console_bundle(
                     api_base_url,
@@ -314,13 +664,31 @@ def render_task_console() -> None:
             header = summarize_result_header(task_result)
             sections = collect_result_sections(task_result)
 
-            st.subheader("Final Result")
-            st.markdown(f"**Mode**: `{header['mode']}`")
+            workspace = dict(task_result.get("workspace") or {})
+            primary = dict(workspace.get("primary") or {})
+            evidence = dict(workspace.get("evidence") or {})
+
+            st.subheader("Analysis Summary")
+            st.markdown(f"**Current Path**: `{header['mode']}`")
             st.markdown(f"### {header['headline']}")
             st.write(header["answer"])
+            if primary.get("next_action"):
+                st.info(f"Next step: {primary.get('next_action')}")
+
+            summary_col1, summary_col2, summary_col3 = st.columns(3)
+            summary_col1.metric("Evidence Refs", len(evidence.get("evidence_refs") or sections["evidence_refs"]))
+            summary_col2.metric("Executions", len(sections["executions"]))
+            summary_col3.metric("Output Assets", len(sections["outputs"]))
 
             info_col1, info_col2 = st.columns(2)
             with info_col1:
+                st.markdown("#### Analysis Question")
+                analysis_brief = sections["analysis_brief"][0] if sections["analysis_brief"] else {}
+                if analysis_brief.get("question"):
+                    st.write(str(analysis_brief.get("question")))
+                else:
+                    st.caption("No explicit analysis question recorded.")
+
                 st.markdown("#### Key Findings")
                 if sections["findings"]:
                     for item in sections["findings"]:
@@ -335,8 +703,7 @@ def render_task_console() -> None:
                 else:
                     st.caption("No evidence refs recorded.")
 
-                st.markdown("#### Analysis Brief")
-                analysis_brief = sections["analysis_brief"][0] if sections["analysis_brief"] else {}
+                st.markdown("#### Data And Rules")
                 if analysis_brief:
                     if analysis_brief.get("analysis_mode"):
                         st.caption(f"mode={analysis_brief.get('analysis_mode')}")
@@ -365,6 +732,15 @@ def render_task_console() -> None:
                         st.caption(f"next={analysis_brief.get('recommended_next_step')}")
                 else:
                     st.caption("No analysis brief recorded.")
+
+                st.markdown("#### Task Inputs")
+                if sections["structured_inputs"] or sections["document_inputs"]:
+                    for item in sections["structured_inputs"]:
+                        st.caption(f"dataset: {item.get('file_name')} path={item.get('path')}")
+                    for item in sections["document_inputs"]:
+                        st.caption(f"document: {item.get('file_name')} status={item.get('status')}")
+                else:
+                    st.caption("No task inputs recorded.")
 
                 st.markdown("#### Knowledge Snapshot")
                 knowledge_snapshot = sections["knowledge_snapshot"][0] if sections["knowledge_snapshot"] else {}
@@ -418,103 +794,6 @@ def render_task_console() -> None:
                 else:
                     st.caption("No compiled knowledge recorded.")
 
-                st.markdown("#### Historical Skill Matches")
-                if sections["historical_skill_matches"]:
-                    for match in sections["historical_skill_matches"]:
-                        st.markdown(f"- **{match.get('name', 'unknown')}**")
-                        required = match.get("required_capabilities", []) or []
-                        if required:
-                            st.caption(f"caps={', '.join(str(item) for item in required)}")
-                        if match.get("match_source"):
-                            st.caption(f"source={match.get('match_source')}")
-                        if match.get("match_reason"):
-                            st.caption(f"reason={match.get('match_reason')}")
-                        if match.get("match_score") is not None:
-                            st.caption(f"score={match.get('match_score')}")
-                        usage = match.get("usage", {}) or {}
-                        if usage:
-                            st.caption(str(usage))
-                else:
-                    st.caption("No historical skill matches recorded.")
-
-                st.markdown("#### Task Lease")
-                if sections["task_lease"]:
-                    lease = sections["task_lease"][0]
-                    st.caption(f"owner={lease.get('owner_id')}")
-                    st.caption(f"expires_at={lease.get('lease_expires_at')}")
-                    st.caption(f"backend={lease.get('backend')}")
-                else:
-                    st.caption("No active task lease recorded.")
-
-                st.markdown("#### Used Historical Skills")
-                if sections["used_historical_skills"]:
-                    for match in sections["used_historical_skills"]:
-                        st.markdown(f"- **{match.get('name', 'unknown')}** used in code generation")
-                        stages = match.get("selected_by_stages", []) or []
-                        if stages:
-                            st.caption(f"stages={', '.join(str(item) for item in stages)}")
-                        replay_ids = match.get("used_replay_case_ids", []) or []
-                        if replay_ids:
-                            st.caption(f"replay_cases={', '.join(str(item) for item in replay_ids)}")
-                        capabilities = match.get("used_capabilities", []) or []
-                        if capabilities:
-                            st.caption(f"used_caps={', '.join(str(item) for item in capabilities)}")
-                        usage = match.get("usage", {}) or {}
-                        if usage:
-                            st.caption(str(usage))
-                else:
-                    st.caption("No historical skills were used in code generation.")
-
-                st.markdown("#### Executions")
-                if sections["executions"]:
-                    for execution in sections["executions"]:
-                        st.markdown(
-                            f"- **{execution.get('execution_id', 'unknown')}**  \n"
-                            f"  kind=`{execution.get('kind', 'unknown')}` backend=`{execution.get('backend', 'unknown')}` status=`{execution.get('status', 'unknown')}`"
-                        )
-                        if execution.get("summary"):
-                            st.caption(str(execution.get("summary"))[:240])
-                        if execution.get("artifact_count") is not None:
-                            st.caption(
-                                f"artifacts={execution.get('artifact_count')} tool_calls={execution.get('tool_call_count', 0)}"
-                            )
-                else:
-                    st.caption("No execution resources recorded.")
-
-                st.markdown("#### Tool Calls")
-                if sections["tool_calls"]:
-                    for tool_call in sections["tool_calls"]:
-                        st.markdown(
-                            f"- **{tool_call.get('tool_name', 'unknown')}**  \n"
-                            f"  phase=`{tool_call.get('phase', 'unknown')}` call_id=`{tool_call.get('tool_call_id', 'unknown')}`"
-                        )
-                        if tool_call.get("execution_id"):
-                            st.caption(f"execution={tool_call.get('execution_id')}")
-                        if tool_call.get("source_event_type"):
-                            st.caption(f"source_event={tool_call.get('source_event_type')}")
-                        if tool_call.get("status"):
-                            st.caption(f"status={tool_call.get('status')}")
-                        arguments = tool_call.get("arguments")
-                        if arguments:
-                            st.caption(f"args={arguments}")
-                        result_payload = tool_call.get("result")
-                        if result_payload:
-                            st.caption(f"result={result_payload}")
-                else:
-                    st.caption("No tool-call resources recorded.")
-
-                st.markdown("#### Parse Diagnostics")
-                if sections["parser_reports"]:
-                    for report in sections["parser_reports"]:
-                        st.markdown(
-                            f"- **{report.get('file_name', 'unknown')}**: mode=`{report.get('parse_mode', 'default')}`"
-                        )
-                        diagnostics = report.get("parser_diagnostics", {}) or {}
-                        if diagnostics:
-                            st.caption(str(diagnostics))
-                else:
-                    st.caption("No parser diagnostics recorded.")
-
                 st.markdown("#### Rule Checks")
                 if sections["rule_checks"]:
                     for check in sections["rule_checks"]:
@@ -566,7 +845,7 @@ def render_task_console() -> None:
                     st.caption("No filter checks recorded.")
 
             with info_col2:
-                st.markdown("#### Outputs")
+                st.markdown("#### Analysis Outputs")
                 if sections["outputs"]:
                     for raw_output, card in zip(
                         sections["outputs"], build_output_cards(sections["outputs"]), strict=False
@@ -583,16 +862,7 @@ def render_task_console() -> None:
                         )
                         if asset["path"]:
                             st.code(asset["path"], language=None)
-                        if asset["exists"] and asset["preview_kind"] == "image":
-                            st.image(asset["path"], use_container_width=True)
-                        elif asset["exists"] and asset["preview_kind"] == "text":
-                            try:
-                                preview_text = Path(asset["path"]).read_text(encoding="utf-8", errors="ignore")[:1200]
-                                if preview_text:
-                                    st.caption(preview_text)
-                            except Exception:
-                                pass
-                        elif asset["exists"] and asset["preview_kind"] == "directory":
+                        if asset["exists"] and asset["preview_kind"] == "directory":
                             entries = list_directory_entries(asset["path"])
                             if entries:
                                 with st.expander(f"Browse {asset['display_name']}"):
@@ -602,30 +872,118 @@ def render_task_console() -> None:
                                         st.code(entry["path"], language=None)
                                         if not entry["is_dir"] and entry["size"] is not None:
                                             st.caption(f"size={entry['size']} bytes")
-                        if asset["exists"] and asset["preview_kind"] in {"image", "text"}:
-                            try:
-                                file_bytes = Path(asset["path"]).read_bytes()
-                                st.download_button(
-                                    label=f"Download {asset['display_name']}",
-                                    data=file_bytes,
-                                    file_name=asset["download_name"],
-                                    key=f"download-{task_id}-{asset['download_name']}",
-                                    use_container_width=True,
-                                )
-                            except Exception:
-                                pass
+                        elif asset["exists"] and asset["preview_kind"] in {"image", "text"}:
+                            st.caption("Preview/download disabled in client. Use controlled artifact APIs instead.")
                         st.divider()
                 else:
                     st.caption("No outputs recorded.")
 
-                st.markdown("#### Caveats")
+                st.markdown("#### Analysis Caveats")
                 if sections["caveats"]:
                     for item in sections["caveats"]:
                         st.markdown(f"- {item}")
                 else:
                     st.caption("No caveats recorded.")
 
-            with st.expander("Raw Result JSON"):
+            with st.expander("Technical Details"):
+                st.markdown("#### Executions")
+                if sections["executions"]:
+                    for execution in sections["executions"]:
+                        st.markdown(
+                            f"- **{execution.get('execution_id', 'unknown')}**  \n"
+                            f"  kind=`{execution.get('kind', 'unknown')}` backend=`{execution.get('backend', 'unknown')}` status=`{execution.get('status', 'unknown')}`"
+                        )
+                        if execution.get("summary"):
+                            st.caption(str(execution.get("summary"))[:240])
+                        if execution.get("artifact_count") is not None:
+                            st.caption(
+                                f"artifacts={execution.get('artifact_count')} tool_calls={execution.get('tool_call_count', 0)}"
+                            )
+                else:
+                    st.caption("No execution resources recorded.")
+
+                st.markdown("#### Tool Calls")
+                if sections["tool_calls"]:
+                    for tool_call in sections["tool_calls"]:
+                        st.markdown(
+                            f"- **{tool_call.get('tool_name', 'unknown')}**  \n"
+                            f"  phase=`{tool_call.get('phase', 'unknown')}` call_id=`{tool_call.get('tool_call_id', 'unknown')}`"
+                        )
+                        if tool_call.get("execution_id"):
+                            st.caption(f"execution={tool_call.get('execution_id')}")
+                        if tool_call.get("source_event_type"):
+                            st.caption(f"source_event={tool_call.get('source_event_type')}")
+                        if tool_call.get("status"):
+                            st.caption(f"status={tool_call.get('status')}")
+                        arguments = tool_call.get("arguments")
+                        if arguments:
+                            st.caption(f"args={arguments}")
+                        result_payload = tool_call.get("result")
+                        if result_payload:
+                            st.caption(f"result={result_payload}")
+                else:
+                    st.caption("No tool-call resources recorded.")
+
+                st.markdown("#### Historical Skill Matches")
+                if sections["historical_skill_matches"]:
+                    for match in sections["historical_skill_matches"]:
+                        st.markdown(f"- **{match.get('name', 'unknown')}**")
+                        required = match.get("required_capabilities", []) or []
+                        if required:
+                            st.caption(f"caps={', '.join(str(item) for item in required)}")
+                        if match.get("match_source"):
+                            st.caption(f"source={match.get('match_source')}")
+                        if match.get("match_reason"):
+                            st.caption(f"reason={match.get('match_reason')}")
+                        if match.get("match_score") is not None:
+                            st.caption(f"score={match.get('match_score')}")
+                        usage = match.get("usage", {}) or {}
+                        if usage:
+                            st.caption(str(usage))
+                else:
+                    st.caption("No historical skill matches recorded.")
+
+                st.markdown("#### Used Historical Skills")
+                if sections["used_historical_skills"]:
+                    for match in sections["used_historical_skills"]:
+                        st.markdown(f"- **{match.get('name', 'unknown')}** used in code generation")
+                        stages = match.get("selected_by_stages", []) or []
+                        if stages:
+                            st.caption(f"stages={', '.join(str(item) for item in stages)}")
+                        replay_ids = match.get("used_replay_case_ids", []) or []
+                        if replay_ids:
+                            st.caption(f"replay_cases={', '.join(str(item) for item in replay_ids)}")
+                        capabilities = match.get("used_capabilities", []) or []
+                        if capabilities:
+                            st.caption(f"used_caps={', '.join(str(item) for item in capabilities)}")
+                        usage = match.get("usage", {}) or {}
+                        if usage:
+                            st.caption(str(usage))
+                else:
+                    st.caption("No historical skills were used in code generation.")
+
+                st.markdown("#### Parse Diagnostics")
+                if sections["parser_reports"]:
+                    for report in sections["parser_reports"]:
+                        st.markdown(
+                            f"- **{report.get('file_name', 'unknown')}**: mode=`{report.get('parse_mode', 'default')}`"
+                        )
+                        diagnostics = report.get("parser_diagnostics", {}) or {}
+                        if diagnostics:
+                            st.caption(str(diagnostics))
+                else:
+                    st.caption("No parser diagnostics recorded.")
+
+                st.markdown("#### Task Lease")
+                if sections["task_lease"]:
+                    lease = sections["task_lease"][0]
+                    st.caption(f"owner={lease.get('owner_id')}")
+                    st.caption(f"expires_at={lease.get('lease_expires_at')}")
+                    st.caption(f"backend={lease.get('backend')}")
+                else:
+                    st.caption("No active task lease recorded.")
+
+            with st.expander("Raw Workspace JSON"):
                 st.json(task_result)
 
     preferred_execution_id = ""
@@ -660,4 +1018,4 @@ def render_task_console() -> None:
             height=460,
         )
     else:
-        st.info("Enter a task id to start streaming status and dynamic trace events.")
+        st.info("Enter a task id to open an analysis workspace and stream task or execution status.")

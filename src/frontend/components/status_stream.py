@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-from urllib.parse import urlencode
 
 
 def build_status_stream_html(
@@ -16,31 +15,25 @@ def build_status_stream_html(
     api_token: str = "",
     height: int = 420,
 ) -> str:
-    query = {}
-    if tenant_id:
-        query["tenant_id"] = tenant_id
-    if workspace_id:
-        query["workspace_id"] = workspace_id
-    if api_token:
-        query["access_token"] = api_token
-    query_string = urlencode(query)
     if execution_id:
-        stream_url = f"{api_base_url.rstrip('/')}/api/executions/{execution_id}/events"
-        title = "Execution Stream"
-        state_label = "Execution State"
+        poll_url = f"{api_base_url.rstrip('/')}/api/executions/{execution_id}/events/poll"
+        title = "Execution Detail Stream"
+        state_label = "Execution Status"
     else:
-        stream_url = f"{api_base_url.rstrip('/')}/api/tasks/{task_id}/events"
-        title = "Dynamic Task Stream"
-        state_label = "Task State"
-    if query_string:
-        stream_url = f"{stream_url}?{query_string}"
-
-    safe_stream_url = html.escape(stream_url, quote=True)
+        poll_url = f"{api_base_url.rstrip('/')}/api/tasks/{task_id}/events/poll"
+        title = "Analysis Task Stream"
+        state_label = "Task Status"
+    safe_poll_url = html.escape(poll_url, quote=True)
+    safe_task_id = html.escape(task_id, quote=True)
+    safe_execution_id = html.escape(execution_id, quote=True)
+    safe_tenant_id = html.escape(tenant_id, quote=True)
+    safe_workspace_id = html.escape(workspace_id, quote=True)
+    safe_token = html.escape(api_token, quote=True)
     return f"""
 <div style="font-family: ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid #d9d9d9; border-radius: 12px; overflow: hidden; background: #fcfcfc;">
   <div style="padding: 12px 16px; background: #111827; color: #f9fafb;">
     <div style="font-size: 14px; font-weight: 700;">{title}</div>
-    <div style="font-size: 12px; opacity: 0.8;">{html.escape(stream_url)}</div>
+    <div style="font-size: 12px; opacity: 0.8;">{html.escape(poll_url)}</div>
   </div>
   <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0; border-top: 1px solid #e5e7eb;">
     <div style="padding: 12px 16px; border-right: 1px solid #e5e7eb; background: #ffffff;">
@@ -61,7 +54,15 @@ def build_status_stream_html(
   const statusNode = document.getElementById("status-summary");
   const governanceNode = document.getElementById("governance-summary");
   const traceNode = document.getElementById("trace-log");
-  const source = new EventSource("{safe_stream_url}");
+  const pollUrl = "{safe_poll_url}";
+  const authToken = "{safe_token}";
+  const scopeParams = {{
+    task_id: "{safe_task_id}",
+    execution_id: "{safe_execution_id}",
+    tenant_id: "{safe_tenant_id}",
+    workspace_id: "{safe_workspace_id}",
+  }};
+  let lastEventId = "";
 
   function appendTrace(line) {{
     const stamp = new Date().toLocaleTimeString();
@@ -78,8 +79,7 @@ def build_status_stream_html(
       `tools: ${{tools}}\\nreasons: ${{reasons}}`;
   }}
 
-  source.onmessage = function(event) {{
-    const data = JSON.parse(event.data);
+  function handleEvent(data) {{
     const topic = data.topic || "";
     const payload = data.payload || {{}};
 
@@ -99,11 +99,33 @@ def build_status_stream_html(
     }}
 
     appendTrace(JSON.stringify(data));
-  }};
+  }}
 
-  source.onerror = function() {{
-    appendTrace("stream disconnected");
-  }};
+  async function pollOnce() {{
+    const params = new URLSearchParams();
+    if (lastEventId) params.set("after_event_id", lastEventId);
+    const requestUrl = params.toString() ? `${{pollUrl}}?${{params.toString()}}` : pollUrl;
+    const headers = {{ "Accept": "application/json" }};
+    if (authToken) headers["Authorization"] = `Bearer ${{authToken}}`;
+    const response = await fetch(requestUrl, {{ headers }});
+    if (!response.ok) {{
+      throw new Error(`poll failed: ${{response.status}}`);
+    }}
+    const body = await response.json();
+    const events = body.events || [];
+    for (const event of events) {{
+      handleEvent(event);
+    }}
+    if (body.last_event_id) {{
+      lastEventId = body.last_event_id;
+    }}
+  }}
+
+  appendTrace("poll connected");
+  pollOnce().catch((error) => appendTrace(String(error)));
+  setInterval(() => {{
+    pollOnce().catch((error) => appendTrace(String(error)));
+  }}, 1500);
 </script>
 """
 
