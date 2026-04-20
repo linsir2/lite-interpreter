@@ -81,7 +81,7 @@ def test_sidecar_health_endpoint_reports_service_metadata():
     assert body["service"] == "deerflow-sidecar"
 
 
-def test_sidecar_chat_endpoint_uses_embedded_client_contract(monkeypatch):
+def test_sidecar_chat_endpoint_uses_sidecar_client_contract(monkeypatch):
     _install_fake_deerflow_client(monkeypatch)
     module = _load_sidecar_module()
     response = asyncio.run(

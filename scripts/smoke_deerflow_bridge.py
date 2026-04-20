@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test the DeerFlow embedded client integration used by lite-interpreter."""
+"""Smoke-test the DeerFlow sidecar bridge client integration used by lite-interpreter."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Smoke-test DeerFlow embedded client availability.")
+    parser = argparse.ArgumentParser(description="Smoke-test DeerFlow sidecar bridge client availability.")
     parser.add_argument(
         "--module",
         default=os.getenv("DEERFLOW_CLIENT_MODULE", "deerflow.client"),
