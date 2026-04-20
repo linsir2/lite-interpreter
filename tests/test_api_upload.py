@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from config.settings import UPLOAD_DIR
+from src.api.routers.analysis_router import create_task
 from src.api.routers.knowledge_router import get_task_knowledge
 from src.api.routers.upload_router import list_knowledge_assets, list_workspace_skills, upload_asset
 from src.blackboard import execution_blackboard, global_blackboard, knowledge_blackboard
@@ -50,10 +51,34 @@ class _FakeRequest:
         return self._form_data
 
 
+class _FakeFormData(dict):
+    def __init__(self, *args, file_list=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._file_list = list(file_list or [])
+
+    def getlist(self, key):
+        if key == "file":
+            return list(self._file_list)
+        return []
+
+
 class _FakeTaskRequest:
     def __init__(self, task_id: str, *, tenant_id: str, workspace_id: str) -> None:
         self.path_params = {"task_id": task_id}
         self.query_params = {"tenant_id": tenant_id, "workspace_id": workspace_id}
+
+
+class _FakeCreateTaskRequest:
+    def __init__(self, body: dict[str, object]) -> None:
+        self._body = body
+        self.query_params = {}
+        self.headers = {}
+        self.url = type("U", (), {"path": "/api/tasks"})()
+        self.method = "POST"
+        self.state = type("S", (), {})()
+
+    async def json(self):
+        return self._body
 
 
 def _clear_upload_dir(tenant_id: str, workspace_id: str) -> None:
@@ -141,6 +166,27 @@ def test_upload_asset_supports_chunked_reads():
     assert response.status_code == 200
     assert body["size"] == len(b"region,amount\nsh,10\n")
     assert len(upload.read_sizes) >= 2
+
+
+def test_upload_asset_supports_multiple_files():
+    _clear_upload_dir("tenant-upload-multi", "ws-upload-multi")
+    form_data = _FakeFormData(
+        {
+            "tenant_id": "tenant-upload-multi",
+            "workspace_id": "ws-upload-multi",
+            "asset_kind": "business_document",
+        },
+        file_list=[
+            _FakeUploadFile("rule-a.txt", b"rule a"),
+            _FakeUploadFile("rule-b.txt", b"rule b"),
+        ],
+    )
+    response = asyncio.run(upload_asset(_FakeRequest(form_data=form_data)))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert body["file_count"] == 2
+    assert len(body["uploaded_files"]) == 2
 
 
 def test_upload_asset_is_idempotent_per_task():
@@ -336,6 +382,44 @@ def test_upload_asset_rejects_same_name_with_different_payload():
     assert first.status_code == 200
     assert second.status_code == 409
     assert json.loads(second.body.decode())["error"] == "file_name_conflict"
+
+
+def test_create_task_can_attach_workspace_assets_by_sha():
+    _clear_upload_dir("tenant-attach", "ws-attach")
+    upload_response = asyncio.run(
+        upload_asset(
+            _FakeRequest(
+                form_data={
+                    "tenant_id": "tenant-attach",
+                    "workspace_id": "ws-attach",
+                    "asset_kind": "structured_dataset",
+                    "file": _FakeUploadFile("sales.csv", b"region,amount\nsh,10\n"),
+                }
+            )
+        )
+    )
+    upload_body = json.loads(upload_response.body.decode())
+    create_response = asyncio.run(
+        create_task(
+            _FakeCreateTaskRequest(
+                {
+                    "tenant_id": "tenant-attach",
+                    "workspace_id": "ws-attach",
+                    "input_query": "analyze sales",
+                    "autorun": False,
+                    "workspace_asset_refs": [upload_body["file_sha256"]],
+                }
+            )
+        )
+    )
+    task_body = json.loads(create_response.body.decode())
+    task_id = task_body["task_id"]
+    execution_data = execution_blackboard.read("tenant-attach", task_id)
+
+    assert create_response.status_code == 200
+    assert execution_data is not None
+    assert len(execution_data.inputs.structured_datasets) == 1
+    assert execution_data.inputs.structured_datasets[0].file_name == "sales.csv"
 
 
 def test_list_workspace_skills_includes_preset_skills():

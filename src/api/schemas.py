@@ -21,6 +21,7 @@ class CreateTaskRequest(BaseModel):
     input_query: StrictStr
     autorun: StrictBool = True
     allowed_tools: list[StrictStr] = Field(default_factory=list)
+    workspace_asset_refs: list[StrictStr] = Field(default_factory=list)
     governance_profile: StrictStr = "researcher"
     idempotency_key: StrictStr | None = None
 
@@ -39,6 +40,13 @@ class CreateTaskRequest(BaseModel):
                 raise ValueError("allowed_tools must not contain empty values")
             normalized_tools.append(stripped)
         self.allowed_tools = normalized_tools
+        normalized_asset_refs = []
+        for asset_ref in self.workspace_asset_refs:
+            stripped = asset_ref.strip()
+            if not stripped:
+                raise ValueError("workspace_asset_refs must not contain empty values")
+            normalized_asset_refs.append(stripped)
+        self.workspace_asset_refs = normalized_asset_refs
         if self.idempotency_key is not None:
             self.idempotency_key = self.idempotency_key.strip() or None
         return self

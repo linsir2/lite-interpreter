@@ -29,6 +29,7 @@ from src.api.execution_resources import (
     to_jsonable_payload,
 )
 from src.api.request_scope import ensure_claimed_scope, ensure_resource_scope
+from src.api.routers.upload_router import attach_workspace_assets_to_execution
 from src.api.schemas import CreateTaskRequest, validation_error_payload
 from src.blackboard import (
     ExecutionData,
@@ -85,6 +86,7 @@ def _build_task_request_fingerprint(
     query: str,
     governance_profile: str,
     allowed_tools: list[str],
+    workspace_asset_refs: list[str],
     autorun: bool,
 ) -> str:
     payload = {
@@ -93,6 +95,7 @@ def _build_task_request_fingerprint(
         "input_query": query,
         "governance_profile": governance_profile,
         "allowed_tools": sorted(str(item).strip() for item in allowed_tools if str(item).strip()),
+        "workspace_asset_refs": sorted(str(item).strip() for item in workspace_asset_refs if str(item).strip()),
         "autorun": bool(autorun),
     }
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -468,6 +471,7 @@ async def create_task(request: Request) -> JSONResponse:
         query=query,
         governance_profile=governance_profile,
         allowed_tools=list(allowed_tools),
+        workspace_asset_refs=list(command.workspace_asset_refs),
         autorun=autorun,
     )
 
@@ -535,6 +539,11 @@ async def create_task(request: Request) -> JSONResponse:
             ).model_dump(mode="json")
         },
     )
+    if command.workspace_asset_refs:
+        execution_data = attach_workspace_assets_to_execution(
+            execution_data=execution_data,
+            asset_refs=list(command.workspace_asset_refs),
+        )
     execution_blackboard.write(tenant_id, task_id, execution_data)
     execution_blackboard.persist(tenant_id, task_id)
 

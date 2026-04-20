@@ -140,6 +140,22 @@ def fetch_task_console_bundle(
     return enriched
 
 
+def fetch_workspace_assets(
+    api_base_url: str,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    timeout: float = 20.0,
+    api_token: str = "",
+) -> list[dict[str, Any]]:
+    payload = fetch_json_payload(
+        _scoped_url(api_base_url.rstrip("/"), "/api/knowledge/assets", tenant_id=tenant_id, workspace_id=workspace_id),
+        timeout=timeout,
+        api_token=api_token,
+    )
+    return list(payload.get("assets") or [])
+
+
 def collect_result_sections(task_result: dict[str, Any]) -> dict[str, list[Any]]:
     workspace = dict(task_result.get("workspace") or {})
     final_response = task_result.get("response") or task_result.get("final_response") or {}
@@ -585,6 +601,31 @@ def render_task_console() -> None:
     allowed_tools_text = sidebar_state["allowed_tools_text"]
     task_id = sidebar_state["task_id"]
     query = sidebar_state["query"]
+    available_assets: list[dict[str, Any]] = []
+    asset_option_labels: list[str] = []
+    asset_ref_map: dict[str, str] = {}
+    try:
+        available_assets = fetch_workspace_assets(
+            api_base_url,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            api_token=api_token,
+        )
+        for asset in available_assets:
+            file_sha256 = str(asset.get("file_sha256") or "").strip()
+            if not file_sha256:
+                continue
+            label = f"{asset.get('file_name', 'unknown')} [{asset.get('kind', 'unknown')}]"
+            asset_option_labels.append(label)
+            asset_ref_map[label] = file_sha256
+    except Exception:
+        available_assets = []
+    selected_asset_labels = st.multiselect(
+        "Workspace Assets To Attach",
+        options=asset_option_labels,
+        default=asset_option_labels,
+        help="新建任务时显式挂接这些 workspace 资产。",
+    )
 
     col1, col2 = st.columns(2)
     with col1:
@@ -598,6 +639,7 @@ def render_task_console() -> None:
                     "autorun": True,
                     "governance_profile": governance_profile,
                     "allowed_tools": [item.strip() for item in allowed_tools_text.split(",") if item.strip()],
+                    "workspace_asset_refs": [asset_ref_map[label] for label in selected_asset_labels if label in asset_ref_map],
                 },
                 headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
                 timeout=20.0,

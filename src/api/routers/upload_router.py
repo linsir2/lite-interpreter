@@ -231,6 +231,66 @@ def _is_workspace_upload_task_id(task_id: str | None) -> bool:
     return str(task_id or "").startswith(f"{_WORKSPACE_UPLOAD_TASK_PREFIX}:")
 
 
+def _iter_uploads(form: Any) -> list[Any]:
+    getlist = getattr(form, "getlist", None)
+    if callable(getlist):
+        uploads = [item for item in getlist("file") if item is not None]
+        if uploads:
+            return uploads
+    upload = form.get("file")
+    return [upload] if upload is not None else []
+
+
+def _resolve_workspace_asset_by_ref(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    asset_ref: str,
+) -> tuple[str, Path, str] | None:
+    normalized_ref = str(asset_ref or "").strip().lower()
+    if not normalized_ref:
+        return None
+    upload_root = Path(UPLOAD_DIR) / tenant_id / workspace_id
+    if not upload_root.exists():
+        return None
+    for file_path in sorted(upload_root.glob("*")):
+        if not file_path.is_file():
+            continue
+        file_sha256 = _hash_file(file_path)
+        if file_sha256.lower() != normalized_ref:
+            continue
+        return _infer_asset_kind(file_path.name), file_path, file_sha256
+    return None
+
+
+def attach_workspace_assets_to_execution(
+    *,
+    execution_data: ExecutionData,
+    asset_refs: list[str],
+) -> ExecutionData:
+    tenant_id = str(execution_data.tenant_id)
+    workspace_id = str(execution_data.workspace_id)
+    for asset_ref in asset_refs:
+        resolved = _resolve_workspace_asset_by_ref(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            asset_ref=asset_ref,
+        )
+        if resolved is None:
+            continue
+        asset_kind, file_path, file_sha256 = resolved
+        _append_uploaded_asset(
+            execution_data,
+            file_name=file_path.name,
+            file_path=str(file_path),
+            asset_kind=asset_kind,
+            file_sha256=file_sha256,
+        )
+    if execution_data.inputs.business_documents:
+        _sync_task_knowledge_documents(tenant_id, execution_data.task_id, execution_data)
+    return execution_data
+
+
 def _sync_task_knowledge_documents(tenant_id: str, task_id: str, execution_data: ExecutionData) -> None:
     knowledge_data = knowledge_blackboard.read(tenant_id, task_id)
     if knowledge_data is None and knowledge_blackboard.restore(tenant_id, task_id):
@@ -287,8 +347,8 @@ async def upload_asset(request: Request) -> JSONResponse:
     if role_error is not None:
         return role_error
     form = await request.form()
-    upload = form.get("file")
-    if upload is None:
+    uploads = _iter_uploads(form)
+    if not uploads:
         return JSONResponse({"error": "missing file field"}, status_code=400)
 
     requested_tenant_id = str(form.get("tenant_id") or "").strip()
@@ -299,12 +359,8 @@ async def upload_asset(request: Request) -> JSONResponse:
             requested_tenant_id = validate_scope_identifier(requested_tenant_id, field_name="tenant_id")
         if requested_workspace_id:
             requested_workspace_id = validate_scope_identifier(requested_workspace_id, field_name="workspace_id")
-        asset_kind = _infer_asset_kind(getattr(upload, "filename", "upload.bin"), str(form.get("asset_kind") or ""))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    safe_name = _safe_name(getattr(upload, "filename", "upload.bin"))
-    deduplicated = False
-    payload_size = 0
 
     execution_data: ExecutionData | None = None
     if task_id:
@@ -380,88 +436,81 @@ async def upload_asset(request: Request) -> JSONResponse:
             return scope_error
 
     target_dir = Path(UPLOAD_DIR) / tenant_id / workspace_id
-    temp_path = _build_temp_upload_path(target_dir, safe_name)
-    try:
-        payload_sha256, payload_size = await _stream_upload_to_temp(upload, temp_path)
-        if task_id and execution_data is not None:
-            try:
-                existing_path, deduplicated = _find_existing_task_asset(
-                    execution_data,
-                    asset_kind=asset_kind,
-                    file_name=safe_name,
-                    file_sha256=payload_sha256,
-                )
-            except ValueError:
-                _cleanup_temp_upload(temp_path)
-                return JSONResponse(
-                    {"error": "file_name_conflict", "task_id": task_id, "file_name": safe_name},
-                    status_code=409,
-                )
-            if existing_path:
-                target_path = Path(existing_path)
-                if not deduplicated:
-                    try:
-                        target_path, deduplicated = _resolve_target_path(
-                            target_path.parent,
-                            target_path.name,
-                            payload_sha256,
-                        )
-                    except ValueError:
-                        _cleanup_temp_upload(temp_path)
-                        return JSONResponse(
-                            {"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name},
-                            status_code=409,
-                        )
-            else:
+    uploaded_items: list[dict[str, Any]] = []
+    for upload in uploads:
+        safe_name = _safe_name(getattr(upload, "filename", "upload.bin"))
+        deduplicated = False
+        payload_size = 0
+        try:
+            asset_kind = _infer_asset_kind(getattr(upload, "filename", "upload.bin"), str(form.get("asset_kind") or ""))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc), "file_name": safe_name}, status_code=400)
+        temp_path = _build_temp_upload_path(target_dir, safe_name)
+        try:
+            payload_sha256, payload_size = await _stream_upload_to_temp(upload, temp_path)
+            if task_id and execution_data is not None:
                 try:
-                    target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
+                    existing_path, deduplicated = _find_existing_task_asset(
+                        execution_data,
+                        asset_kind=asset_kind,
+                        file_name=safe_name,
+                        file_sha256=payload_sha256,
+                    )
                 except ValueError:
                     _cleanup_temp_upload(temp_path)
                     return JSONResponse(
                         {"error": "file_name_conflict", "task_id": task_id, "file_name": safe_name},
                         status_code=409,
                     )
-            if deduplicated:
-                _cleanup_temp_upload(temp_path)
-            else:
-                try:
-                    target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
-                except ValueError:
+                if existing_path:
+                    target_path = Path(existing_path)
+                    if not deduplicated:
+                        try:
+                            target_path, deduplicated = _resolve_target_path(
+                                target_path.parent,
+                                target_path.name,
+                                payload_sha256,
+                            )
+                        except ValueError:
+                            _cleanup_temp_upload(temp_path)
+                            return JSONResponse(
+                                {"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name},
+                                status_code=409,
+                            )
+                else:
+                    try:
+                        target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
+                    except ValueError:
+                        _cleanup_temp_upload(temp_path)
+                        return JSONResponse(
+                            {"error": "file_name_conflict", "task_id": task_id, "file_name": safe_name},
+                            status_code=409,
+                        )
+                if deduplicated:
                     _cleanup_temp_upload(temp_path)
-                    return JSONResponse(
-                        {"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name},
-                        status_code=409,
-                    )
-            _append_uploaded_asset(
-                execution_data,
-                file_name=target_path.name,
-                file_path=str(target_path),
-                asset_kind=asset_kind,
-                file_sha256=payload_sha256,
-            )
-            execution_blackboard.write(tenant_id, task_id, execution_data)
-            execution_blackboard.persist(tenant_id, task_id)
-            if asset_kind == "business_document":
-                _sync_task_knowledge_documents(tenant_id, task_id, execution_data)
-        else:
-            try:
-                target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
-            except ValueError:
-                _cleanup_temp_upload(temp_path)
-                return JSONResponse(
-                    {
-                        "error": "file_name_conflict",
-                        "file_name": safe_name,
-                        "tenant_id": tenant_id,
-                        "workspace_id": workspace_id,
-                    },
-                    status_code=409,
+                else:
+                    try:
+                        target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
+                    except ValueError:
+                        _cleanup_temp_upload(temp_path)
+                        return JSONResponse(
+                            {"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name},
+                            status_code=409,
+                        )
+                _append_uploaded_asset(
+                    execution_data,
+                    file_name=target_path.name,
+                    file_path=str(target_path),
+                    asset_kind=asset_kind,
+                    file_sha256=payload_sha256,
                 )
-            if deduplicated:
-                _cleanup_temp_upload(temp_path)
+                execution_blackboard.write(tenant_id, task_id, execution_data)
+                execution_blackboard.persist(tenant_id, task_id)
+                if asset_kind == "business_document":
+                    _sync_task_knowledge_documents(tenant_id, task_id, execution_data)
             else:
                 try:
-                    target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
+                    target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
                 except ValueError:
                     _cleanup_temp_upload(temp_path)
                     return JSONResponse(
@@ -473,47 +522,75 @@ async def upload_asset(request: Request) -> JSONResponse:
                         },
                         status_code=409,
                     )
-            if asset_kind == "business_document":
-                _sync_workspace_knowledge_document(
-                    tenant_id,
-                    workspace_id,
-                    file_name=target_path.name,
-                    file_path=str(target_path),
-                    file_sha256=payload_sha256,
-                )
-    except Exception:
-        _cleanup_temp_upload(temp_path)
-        raise
+                if deduplicated:
+                    _cleanup_temp_upload(temp_path)
+                else:
+                    try:
+                        target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
+                    except ValueError:
+                        _cleanup_temp_upload(temp_path)
+                        return JSONResponse(
+                            {
+                                "error": "file_name_conflict",
+                                "file_name": safe_name,
+                                "tenant_id": tenant_id,
+                                "workspace_id": workspace_id,
+                            },
+                            status_code=409,
+                        )
+                if asset_kind == "business_document":
+                    _sync_workspace_knowledge_document(
+                        tenant_id,
+                        workspace_id,
+                        file_name=target_path.name,
+                        file_path=str(target_path),
+                        file_sha256=payload_sha256,
+                    )
+        except Exception:
+            _cleanup_temp_upload(temp_path)
+            raise
 
-    response_payload = {
-        "uploaded": True,
-        "tenant_id": tenant_id,
-        "workspace_id": workspace_id,
-        "task_id": task_id or None,
-        "asset_kind": asset_kind,
-        "file_name": target_path.name,
-        "path": str(target_path),
-        "file_sha256": payload_sha256,
-        "size": payload_size,
-        "deduplicated": deduplicated,
-    }
-    record_api_audit(
-        request,
-        action="asset.upload",
-        outcome="success",
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        task_id=task_id or None,
-        resource_type="asset_upload",
-        resource_id=str(target_path),
-        metadata={
+        item_payload = {
+            "uploaded": True,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "task_id": task_id or None,
             "asset_kind": asset_kind,
             "file_name": target_path.name,
-            "deduplicated": deduplicated,
+            "path": str(target_path),
+            "file_sha256": payload_sha256,
             "size": payload_size,
-        },
+            "deduplicated": deduplicated,
+        }
+        uploaded_items.append(item_payload)
+        record_api_audit(
+            request,
+            action="asset.upload",
+            outcome="success",
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            task_id=task_id or None,
+            resource_type="asset_upload",
+            resource_id=str(target_path),
+            metadata={
+                "asset_kind": asset_kind,
+                "file_name": target_path.name,
+                "deduplicated": deduplicated,
+                "size": payload_size,
+            },
+        )
+    if len(uploaded_items) == 1:
+        return JSONResponse(uploaded_items[0])
+    return JSONResponse(
+        {
+            "uploaded": True,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "task_id": task_id or None,
+            "uploaded_files": uploaded_items,
+            "file_count": len(uploaded_items),
+        }
     )
-    return JSONResponse(response_payload)
 
 
 async def list_knowledge_assets(request: Request) -> JSONResponse:
