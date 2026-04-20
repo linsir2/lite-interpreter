@@ -15,7 +15,7 @@ def render_skill_manager() -> None:
 
     st.title("Skill Manager")
     api_base_url = st.text_input("API Base URL", value="http://127.0.0.1:8000", key="skill-api")
-    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="skill-auth")
+    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="workspace-auth")
     if session_info and session_info.get("grants"):
         first_grant = session_info["grants"][0]
         default_tenant = str(first_grant.get("tenant_id") or "demo-tenant")

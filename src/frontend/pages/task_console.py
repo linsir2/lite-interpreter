@@ -653,7 +653,7 @@ def render_task_console() -> None:
     st.caption("面向数据分析任务的主工作台。先看问题、证据、数据与规则，再看执行和技术细节。")
 
     api_base_url = st.text_input("API Base URL", value="http://127.0.0.1:8000")
-    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="task-console-auth")
+    api_token, session_info = render_auth_panel(api_base_url=api_base_url, state_prefix="workspace-auth")
     if session_info and session_info.get("grants"):
         first_grant = session_info["grants"][0]
         default_tenant = str(first_grant.get("tenant_id") or "demo-tenant")
@@ -707,39 +707,49 @@ def render_task_console() -> None:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Start Analysis Task", use_container_width=True):
-            response = httpx.post(
-                f"{api_base_url.rstrip('/')}/api/tasks",
-                json={
-                    "tenant_id": tenant_id,
-                    "workspace_id": workspace_id,
-                    "input_query": query,
-                    "autorun": True,
-                    "governance_profile": governance_profile,
-                    "allowed_tools": [item.strip() for item in allowed_tools_text.split(",") if item.strip()],
-                    "workspace_asset_refs": [asset_ref_map[label] for label in selected_asset_labels if label in asset_ref_map],
-                },
-                headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
-                timeout=20.0,
-            )
-            response.raise_for_status()
-            task_info = response.json()
-            st.session_state["task_id"] = task_info["task_id"]
-            st.session_state.pop("task_result", None)
-            st.success(f"Created task: {task_info['task_id']}")
-            st.rerun()
+            try:
+                response = httpx.post(
+                    f"{api_base_url.rstrip('/')}/api/tasks",
+                    json={
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                        "input_query": query,
+                        "autorun": True,
+                        "governance_profile": governance_profile,
+                        "allowed_tools": [item.strip() for item in allowed_tools_text.split(",") if item.strip()],
+                        "workspace_asset_refs": [asset_ref_map[label] for label in selected_asset_labels if label in asset_ref_map],
+                    },
+                    headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
+                    timeout=20.0,
+                )
+                response.raise_for_status()
+                task_info = response.json()
+                st.session_state["task_id"] = task_info["task_id"]
+                st.session_state.pop("task_result", None)
+                st.success(f"Created task: {task_info['task_id']}")
+                st.rerun()
+            except httpx.HTTPStatusError as exc:
+                st.error(f"Create task failed: {exc.response.status_code}")
+            except Exception as exc:
+                st.error(f"Create task failed: {exc}")
     with col2:
         if st.button("Trigger Demo Stream", use_container_width=True):
             if not task_id:
                 st.warning("Enter or create a task id first.")
             else:
-                response = httpx.post(
-                    f"{api_base_url.rstrip('/')}/api/dev/tasks/{task_id}/demo-trace",
-                    json={"tenant_id": tenant_id, "workspace_id": workspace_id},
-                    headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
-                    timeout=20.0,
-                )
-                response.raise_for_status()
-                st.success(f"Triggered demo trace for {task_id}")
+                try:
+                    response = httpx.post(
+                        f"{api_base_url.rstrip('/')}/api/dev/tasks/{task_id}/demo-trace",
+                        json={"tenant_id": tenant_id, "workspace_id": workspace_id},
+                        headers={"Authorization": f"Bearer {api_token}"} if api_token else None,
+                        timeout=20.0,
+                    )
+                    response.raise_for_status()
+                    st.success(f"Triggered demo trace for {task_id}")
+                except httpx.HTTPStatusError as exc:
+                    st.error(f"Trigger demo trace failed: {exc.response.status_code}")
+                except Exception as exc:
+                    st.error(f"Trigger demo trace failed: {exc}")
 
     with st.expander("Upload Analysis Inputs"):
         render_file_uploader(
