@@ -77,7 +77,7 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
 
     summaries: list[dict[str, Any]] = []
     execution_record = serialize_execution_record(execution_data.static.execution_record)
-    sandbox_execution_id = f"sandbox:{execution_record['session_id']}" if execution_record else None
+    sandbox_execution_id = f"sandbox:{execution_data.task_id}:{execution_record['session_id']}" if execution_record else None
     runtime_execution_id = (
         f"runtime:{execution_data.task_id}"
         if execution_data.dynamic.runtime_backend and execution_data.dynamic.status
@@ -126,7 +126,10 @@ def build_task_execution_summaries(execution_data: ExecutionData | None) -> list
 def build_execution_artifacts(execution_data: ExecutionData, execution_id: str) -> list[dict[str, Any]]:
     execution_record = serialize_execution_record(execution_data.static.execution_record)
     if execution_id.startswith("sandbox:"):
-        if execution_record and execution_id == f"sandbox:{execution_record['session_id']}":
+        if execution_record and execution_id in {
+            f"sandbox:{execution_data.task_id}:{execution_record['session_id']}",
+            f"sandbox:{execution_record['session_id']}",
+        }:
             return [
                 {
                     **dict(artifact),
@@ -180,7 +183,7 @@ def build_execution_tool_calls(execution_data: ExecutionData, execution_id: str 
     execution_record = serialize_execution_record(execution_data.static.execution_record)
 
     if execution_id.startswith("sandbox:"):
-        sandbox_session_id = execution_id.removeprefix("sandbox:")
+        sandbox_session_id = execution_id.split(":")[-1]
         if execution_record and execution_record.get("session_id") == sandbox_session_id:
             records.append(
                 ToolCallRecord(
@@ -288,7 +291,7 @@ def matches_execution_stream_record(
         return False
 
     if execution_id.startswith("sandbox:"):
-        sandbox_session_id = execution_id.removeprefix("sandbox:")
+        sandbox_session_id = execution_id.split(":")[-1]
         if trace_id == sandbox_session_id:
             return True
         if payload.get("source") == "sandbox":
@@ -325,6 +328,24 @@ def filter_records_after_event_id(records: list[dict[str, Any]], after_event_id:
 
 
 def resolve_execution_resource(execution_id: str) -> tuple[dict[str, Any] | None, ExecutionData | None]:
+    if execution_id.startswith("runtime:"):
+        task_id = execution_id.removeprefix("runtime:").strip()
+        state = StateRepo.load_blackboard_state_by_task(task_id)
+        execution_data = _normalize_execution_data(state)
+        if execution_data is not None:
+            for summary in build_task_execution_summaries(execution_data):
+                if summary["execution_id"] == execution_id:
+                    return summary, execution_data
+    if execution_id.startswith("sandbox:"):
+        parts = execution_id.split(":", 2)
+        if len(parts) == 3:
+            task_id = parts[1].strip()
+            state = StateRepo.load_blackboard_state_by_task(task_id)
+            execution_data = _normalize_execution_data(state)
+            if execution_data is not None:
+                for summary in build_task_execution_summaries(execution_data):
+                    if summary["execution_id"] == execution_id:
+                        return summary, execution_data
     for state in StateRepo.list_blackboard_states():
         execution_data = _normalize_execution_data(state)
         if execution_data is None:

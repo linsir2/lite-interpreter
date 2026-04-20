@@ -101,7 +101,7 @@ def test_list_task_executions_returns_sandbox_execution():
     body = json.loads(response.body.decode())
 
     assert response.status_code == 200
-    assert body["executions"][0]["execution_id"] == "sandbox:session-123"
+    assert body["executions"][0]["execution_id"] == f"sandbox:{task_id}:session-123"
     assert body["executions"][0]["kind"] == "sandbox"
     assert body["executions"][0]["tool_call_count"] == 2
 
@@ -145,7 +145,7 @@ def test_list_task_executions_restores_execution_state_when_memory_is_cold():
     body = json.loads(response.body.decode())
 
     assert response.status_code == 200
-    assert body["executions"][0]["execution_id"] == "sandbox:session-restore"
+    assert body["executions"][0]["execution_id"] == f"sandbox:{task_id}:session-restore"
 
 
 def test_list_execution_tool_calls_returns_static_sandbox_tool_calls():
@@ -189,7 +189,7 @@ def test_list_execution_tool_calls_returns_static_sandbox_tool_calls():
     )
     execution_blackboard.persist(tenant_id, task_id)
 
-    execution_id = "sandbox:session-static-1"
+    execution_id = f"sandbox:{task_id}:session-static-1"
     response = asyncio.run(
         list_execution_tool_calls(
             _make_request(
@@ -299,7 +299,7 @@ def test_get_execution_artifact_content_returns_controlled_file():
     )
     execution_blackboard.persist(tenant_id, task_id)
 
-    execution_id = "sandbox:session-artifact"
+    execution_id = f"sandbox:{task_id}:session-artifact"
     artifacts_response = asyncio.run(
         list_execution_artifacts(
             _make_request(
