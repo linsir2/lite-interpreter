@@ -1,155 +1,192 @@
 # lite-interpreter 开发手册
 
-## 1. 开发环境
+本文件是 **How-to Guide**：面向日常开发者，回答“改东西前看什么、怎么改、改完至少验证什么”。
 
-默认环境：
+当前成熟度、测试基线与已知热点统一以 `docs/project_status.md` 为准。
 
-- conda env：`lite_interpreter`
-- Python：`3.12`
+## 1. 开发前先统一心智
 
-推荐习惯：
+这个项目最重要的不是“多做几个功能”，而是让以下边界始终稳定：
 
-- 单条命令执行时优先：`conda run -n lite_interpreter ...`
-- 长时间交互调试时可先：`conda activate lite_interpreter`
-- 任何改动前先读：`docs/project_status.md`
+1. DAG 是主流程 owner
+2. DeerFlow 只是受控动态研究 runtime
+3. Sandbox 仍是最终代码执行边界
+4. Blackboard 是状态事实源
+5. Web 前端只消费 `/api/app/*` 合同，不再回头依赖旧公开接口
 
-## 2. 开发原则
+## 2. 先读哪些文件
 
-这个项目最重要的不是“把功能拼出来”，而是保持控制面、执行面、知识面和动态运行面的边界清楚。
+### 2.1 改产品面（前端 / app-facing API）
 
-开发时默认遵守：
+先读：
 
-1. 不绕开 Blackboard 传隐藏状态
-2. 不绕开 Harness 直接做动态执行或 sandbox 执行
-3. 不把 DeerFlow 当系统 owner
-4. 不为了“看起来灵活”引入假支持
-5. 改 bug 先补回归测试，再改实现
+- `docs/architecture.md`
+- `apps/web/src/app/App.tsx`
+- `apps/web/src/lib/api.ts`
+- `src/api/routers/app_router.py`
+- `src/api/app_schemas.py`
+- `src/api/app_presenters.py`
 
-## 3. 常用命令
+适用问题：
 
-### 3.1 检查
+- 页面字段怎么来的
+- 前端为什么只用 `/api/app/*`
+- 某个产品读模型应该在哪一层拼装
 
-```bash
-conda run -n lite_interpreter python -m ruff check src tests scripts config
-```
+### 2.2 改控制面
 
-### 3.2 全量测试
-
-```bash
-conda run -n lite_interpreter python -m pytest -q
-```
-
-### 3.3 快速验收脚本
-
-```bash
-python3 scripts/check_hybrid_readiness.py
-conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
-```
-
-### 3.4 常用运行入口
-
-```bash
-make run-api
-make run-sidecar
-make run-web
-make test-stream
-```
-
-## 4. 改动前先看哪里
-
-### 控制面问题
-
-先看：
+先读：
 
 - `src/common/contracts.py`
 - `src/blackboard/schema.py`
 - `src/blackboard/global_blackboard.py`
 - `src/blackboard/execution_blackboard.py`
 - `src/common/event_journal.py`
-- `src/storage/repository/state_repo.py`
 
 适用问题：
 
 - 为什么任务状态不一致
-- 为什么冷恢复失败
-- 为什么 SSE 重放不对
-- 为什么 execution 资源查不到
+- 为什么事件回放不对
+- 为什么 API 读模型拿不到正确终态
 
-### 静态链问题
+### 2.3 改静态链 / 动态链
 
-先看：
+先读：
 
-- `src/dag_engine/nodes/data_inspector.py`
-- `src/dag_engine/nodes/kag_retriever.py`
-- `src/dag_engine/nodes/context_builder_node.py`
-- `src/dag_engine/nodes/analyst_node.py`
-- `src/dag_engine/nodes/coder_node.py`
-- `src/dag_engine/nodes/static_codegen.py`
-- `src/dag_engine/nodes/auditor_node.py`
-- `src/dag_engine/nodes/executor_node.py`
-- `src/dag_engine/nodes/summarizer_node.py`
-
-### 动态链问题
-
-先看：
-
+- `src/dag_engine/dag_graph.py`
+- `src/dag_engine/graphstate.py`
+- `src/dag_engine/nodes/*`
 - `src/dynamic_engine/supervisor.py`
 - `src/dynamic_engine/deerflow_bridge.py`
-- `src/dynamic_engine/runtime_backends.py`
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
 
-### 知识/技能问题
+适用问题：
 
-先看：
+- router 为什么这样分流
+- dynamic 研究结果如何回流静态链
+- 最终摘要为何与真实状态不一致
 
-- `src/kag/builder/*`
-- `src/kag/retriever/*`
+### 2.4 改执行层 / 安全边界
+
+先读：
+
+- `src/sandbox/ast_auditor.py`
+- `src/sandbox/docker_executor.py`
+- `src/sandbox/execution_reporting.py`
+- `src/harness/*`
+
+适用问题：
+
+- 执行为什么被拒绝
+- AST 风险为什么判成这样
+- 产物、日志、结果为什么没正确落库/投影
+
+### 2.5 改知识 / 方法沉淀
+
+先读：
+
+- `src/kag/*`
 - `src/skillnet/*`
 - `src/memory/memory_service.py`
 - `src/storage/repository/knowledge_repo.py`
 - `src/storage/repository/memory_repo.py`
 
-### API / 前端问题
+## 3. 日常改动原则
 
-先看：
+默认遵守：
 
-- `src/api/main.py`
-- `src/api/auth.py`
-- `src/api/request_scope.py`
-- `src/api/execution_resources.py`
-- `src/api/routers/*`
-- `apps/web/src/pages/AnalysisDetailPage.tsx`
-- `apps/web/src/pages/NewAnalysisPage.tsx`
+1. 不绕开 Blackboard 传隐式状态
+2. 不绕开 Harness 直接触发执行
+3. 不把 DeerFlow 当系统 owner
+4. 不为了“看起来支持更多”恢复假支持
+5. 涉及行为变化的修复，优先补回归测试
+6. 涉及产品面合同变化，必须同时更新文档与测试
 
-## 5. 推荐改动流程
+## 4. 推荐改动流程
 
-### 5.1 改动前
+### 4.1 改动前
 
-1. 找到对应模块与现有测试
-2. 明确这是安全问题、一致性问题、产品流问题还是文档漂移问题
-3. 能补回归测试的先补测试
+1. 先确认这是产品流问题、控制面一致性问题、执行安全问题，还是文档/配置漂移问题
+2. 找到已有测试和相关文档
+3. 如果会改行为，先补一个能锁住旧问题的测试
 
-### 5.2 改动中
+### 4.2 改动中
 
-- 优先做局部 helper 拆分，不做大重构
-- 节点保持“编排职责”，复杂拼装逻辑尽量往 helper / service / repository 放
-- 涉及最终用户结果的逻辑，优先保证“不要说错”
+- 优先做局部拆分和边界修正，不做无根据的大重构
+- 节点保持编排职责，复杂拼装逻辑尽量下沉到 service / helper / repository
+- 对前端和 API 合同改动时，优先保持字段含义稳定
+- 改动配置契约时，同步更新 `.env.example`、`config/settings.py` 和部署文档
 
-### 5.3 改动后
+### 4.3 改动后
 
 至少执行：
 
 ```bash
+cd /home/linsir365/projects/lite-interpreter
 conda run -n lite_interpreter python -m ruff check src tests scripts config
 conda run -n lite_interpreter python -m pytest -q
 ```
 
-如果只改局部，也要至少跑对应测试文件。
+如果改了 Web 前端，再补：
 
-## 6. 当前最值得小心的点
+```bash
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm run lint
+npm run build
+```
+
+## 5. 常用命令
+
+### 后端检查
+
+```bash
+make lint-all
+make test
+```
+
+### 前端检查
+
+```bash
+cd apps/web
+npm run lint
+npm run build
+```
+
+### 关键 smoke / readiness
+
+```bash
+python3 scripts/check_hybrid_readiness.py
+conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
+conda run -n lite_interpreter python scripts/smoke_deerflow_bridge.py
+```
+
+## 6. 改不同区域时最容易踩坑的点
+
+### 6.1 改前端时
+
+- 不要重新引入旧 `/api/tasks*` 或 `/api/executions*` 依赖
+- 不要在浏览器里绕开 `Authorization` header 改走 query token
+- 不要让页面自己拼第二套状态真相
+
+### 6.2 改 app-facing API 时
+
+- 不要把内部实体原样泄露给前端
+- presenter / schema / frontend type 必须同步看
+- 任何字段删改都要检查 `apps/web/src/lib/types.ts` 与页面消费点
+
+### 6.3 改配置时
+
+- `.env.example`、`config/settings.py`、`docs/deployment.md` 必须同步
+- 默认值要服务当前前端/API 现实，不要继续保留 Streamlit 时代的残留默认项
+
+### 6.4 改文档时
+
+- `docs/project_status.md` 负责状态与验证基线
+- 其它文档引用它，不要各自硬编码测试通过数字
+- 新文档要先回答“它到底只负责哪一个问题”
+
+## 7. 当前最需要警惕的热点
 
 1. `src/sandbox/docker_executor.py` 仍然偏大
-2. `static_codegen.py` 仍然偏模板化
-3. 前端主工作台已经收口，但 artifact 消费仍需继续 API 化
-4. KAG 的真实支持边界要保持诚实，不要再把没闭环的格式宣传成“支持”
-5. docs 与 tests 的 contract 漂移要尽早收掉，不要拖
+2. `src/dag_engine/nodes/static_codegen.py` 仍然偏模板化
+3. app-facing 合同已经稳定，但新字段一旦漂移，前后端都会一起坏
+4. 资料、产物、方法、审计这些辅助页已经成型，但不应抢走主分析链路的注意力

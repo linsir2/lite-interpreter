@@ -1,70 +1,77 @@
 lite-interpreter
-├── README.md                     # 中文总览：定位、能力边界、启动方式、文档入口
-├── AGENTS.md                     # 仓库级协作与实现约束（保留，供 agent/自动化遵守）
-├── 项目二.md                     # 中文项目综述、工程判断、下一阶段重点
-├── directory.txt                 # 仓库目录总览
-├── Makefile                      # 常用运行/测试/检查入口
-├── pyproject.toml                # pytest / ruff / black 配置，要求 Python 3.12+
-├── requirements.txt              # 运行依赖
+├── README.md                     # 仓库入口：定位、快速开始、文档入口
+├── AGENTS.md                     # 仓库级协作与实现约束（供 agent / 自动化遵守）
+├── 项目二.md                     # 中文综述：这轮收口做对了什么、下一步该盯什么
+├── directory.txt                 # 仓库目录总览与阅读顺序
+├── Makefile                      # 常用运行、构建、测试、检查入口
+├── pyproject.toml                # Python 工具链配置（pytest / ruff 等）
+├── requirements.txt              # Python 运行依赖
 ├── docker-compose.yml            # 外部依赖示例编排
 ├── litellm_config.yml            # 模型 alias 配置
-├── config/deerflow_sidecar.yaml  # DeerFlow sidecar 默认配置
+├── .env.example                  # 环境变量契约模板
 ├── config/
-│   ├── settings.py               # 全局配置、路径、模型、API、安全默认值
+│   ├── settings.py               # 环境变量读取、默认值、路径与安全默认项
+│   ├── deerflow_sidecar.yaml     # DeerFlow sidecar 默认配置
 │   ├── harness_policy.yaml       # 动态/执行治理策略
+│   ├── analysis_runtime.yaml     # 运行时策略与分流规则
+│   ├── graph_lexicon.yaml        # 图谱/语义词汇表
 │   ├── sandbox_config.py         # sandbox 资源限制与镜像配置
 │   └── security_config.py        # AST 风险面默认规则
+├── apps/
+│   └── web/
+│       ├── package.json          # Web 前端依赖与脚本
+│       ├── vite.config.ts        # Vite 配置与 `/api` 开发代理
+│       ├── tailwind.config.ts    # 视觉设计令牌与 Tailwind 配置
+│       └── src/
+│           ├── app/App.tsx       # 应用入口：会话、查询、路由、工作区切换
+│           ├── app/AppShell.tsx  # 工作台外壳：侧栏、导航、页面布局
+│           ├── lib/api.ts        # `/api/app/*` 前端 API 客户端
+│           ├── lib/types.ts      # app-facing 前端类型契约
+│           ├── pages/            # Analyses / Assets / Methods / Audit / Session 页面
+│           └── styles.css        # 全局设计语言与主题样式
+├── docs/
+│   ├── README.md                 # 文档地图：每份文档的职责与阅读路径
+│   ├── user_guide.md             # 业务使用手册：连接、上传、分析、查看结果
+│   ├── project_status.md         # 状态、验证基线、热点、非目标真相源
+│   ├── architecture.md           # 架构说明：系统分层、主链路、边界
+│   ├── development_guide.md      # 开发手册：改动入口、流程、验证要求
+│   ├── deployment.md             # 部署与运行说明：配置、启动、排障
+│   └── testing.md                # 测试说明：测试分层、命令、最低验证要求
 ├── scripts/
-│   ├── check_hybrid_readiness.py # 快速验收关键混合编排文件是否齐全
-│   ├── create_analysis.py        # 调 app-facing API 创建分析
+│   ├── check_hybrid_readiness.py # 检查关键混合编排文件是否齐全
+│   ├── create_analysis.py        # 调用 app-facing API 创建分析
 │   ├── run_deerflow_sidecar.py   # 启动 DeerFlow sidecar
 │   ├── smoke_dashscope_litellm.py# 模型配置 smoke test
-│   └── smoke_deerflow_bridge.py  # DeerFlow sidecar/bridge smoke test
+│   └── smoke_deerflow_bridge.py  # DeerFlow sidecar / bridge smoke test
 ├── src/
-│   ├── api/                      # Starlette API 层
-│   │   ├── main.py               # 应用入口与路由装配
-│   │   ├── auth.py               # 认证、角色、scope 绑定
-│   │   ├── request_scope.py      # 请求 scope 解析与资源 scope 校验
-│   │   ├── execution_resources.py# task/execution 读模型投影
-│   │   └── routers/              # 任务、执行、SSE、上传、诊断、策略等接口
+│   ├── api/
+│   │   ├── main.py               # Starlette 应用入口与路由装配
+│   │   ├── auth.py               # 认证、角色、grant、scope 解析
+│   │   ├── request_scope.py      # 请求 scope 校验
+│   │   ├── app_schemas.py        # app-facing API schema
+│   │   ├── app_presenters.py     # app-facing 读模型 presenter
+│   │   ├── services/             # task_flow / asset 等产品流 service
+│   │   └── routers/              # app / diagnostics / policy / runtime 路由
 │   ├── blackboard/               # 控制面状态子域
-│   │   ├── global_blackboard.py  # 任务全局生命周期状态
-│   │   ├── execution_blackboard.py# 执行态主状态
-│   │   ├── knowledge_blackboard.py# 知识态观察状态
-│   │   ├── memory_blackboard.py  # 任务记忆快照
-│   │   ├── task_state_services.py# 执行/知识写入服务层
-│   │   └── schema.py             # 全部核心状态模型
 │   ├── common/                   # 契约、事件、通用工具
-│   │   ├── contracts.py          # TaskEnvelope / ExecutionIntent / ExecutionRecord 等
-│   │   ├── capability_registry.py# capability id 与别名映射
-│   │   ├── event_bus.py          # 实时事件总线
-│   │   ├── event_journal.py      # 事件回放日志
-│   │   └── utils.py              # scope 校验、uuid、token 估算等工具
-│   ├── dag_engine/               # 宏观静态编排
-│   │   ├── dag_graph.py          # 主任务流 orchestrator
-│   │   ├── graphstate.py         # DAG state 字段
-│   │   └── nodes/                # router / analyst / coder / auditor / executor / summarizer 等节点
-│   ├── dynamic_engine/           # 受控动态运行时隔离层
-│   │   ├── deerflow_bridge.py    # DeerFlow sidecar 适配
-│   │   ├── supervisor.py         # 动态请求、治理决策、上下文封装
-│   │   ├── runtime_backends.py   # runtime capability manifest 与 backend 描述
-│   │   └── trace_normalizer.py   # 动态事件标准化
+│   ├── dag_engine/               # 宏观静态编排与节点
+│   ├── dynamic_engine/           # DeerFlow sidecar 适配与动态研究监督
 │   ├── harness/                  # 动态/执行治理层
 │   ├── kag/                      # 文档解析、检索、上下文构建
 │   ├── mcp_gateway/              # 进程内 MCP tool registry
-│   ├── memory/                   # 任务记忆与 durable memory 协调
-│   ├── sandbox/                  # AST 审计、Docker 执行、session、metrics
-│   ├── skillnet/                 # 技能抽取、验证、提升、检索
+│   ├── memory/                   # durable memory 协调
+│   ├── sandbox/                  # AST 审计、Docker 执行、会话与结果映射
+│   ├── skillnet/                 # 方法抽取、校验、提升、检索
 │   └── storage/                  # Postgres / Qdrant / Neo4j / repository 层
-├── tests/                        # 单测、集成测试、端到端测试
-├── docs/
-│   ├── architecture.md           # 架构与主链路说明
-│   ├── development_guide.md      # 开发与改动指南
-│   ├── deployment.md             # 部署与运行说明
-│   ├── project_status.md         # 成熟度与测试基线真相源
-│   └── testing.md                # 测试分层与执行建议
+├── tests/                        # 单测、集成测试、契约测试、端到端测试
 ├── data/                         # 运行时数据（上传、输出、状态）
-├── artifacts/                    # 测试/评测产物
+├── artifacts/                    # 测试 / 评测产物
 └── .omx/                         # 会话规划与状态产物（非产品文档）
 
-阅读顺序建议：README.md -> docs/project_status.md -> docs/architecture.md -> directory.txt -> docs/development_guide.md。
+推荐阅读顺序：
+1. README.md
+2. docs/README.md
+3. docs/project_status.md
+4. docs/architecture.md
+5. directory.txt
+6. docs/development_guide.md

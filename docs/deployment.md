@@ -1,71 +1,112 @@
 # lite-interpreter 部署与运行说明
 
-## 1. 运行前提
+本文件是 **How-to Guide**：只讲如何配置、启动、构建和排查，不重复架构讨论。
 
-当前成熟度、测试基线与已知热点以 `docs/project_status.md` 为准；本文件只讲部署与运行。
+当前成熟度、测试基线与已知热点统一以 `docs/project_status.md` 为准。
 
-部署这个项目，至少要准备：
+## 1. 使用前先确定场景
+
+### 本地开发场景
+
+适合你要做前端、API、交互或联调：
+
+- 启动 API
+- 按需启动 DeerFlow sidecar
+- 启动 `apps/web` 的 Vite 开发服务器
+
+### 本地验收 / 近生产场景
+
+适合你要验证后端直接挂载前端产物：
+
+- 先构建 `apps/web/dist`
+- 再启动 API
+- 由 Starlette 挂载静态站点到 `/`
+
+## 2. 依赖前提
+
+至少准备：
 
 - conda env：`lite_interpreter`
 - Python：`3.12`
-- DashScope API Key
+- Node.js：18+
+- Docker daemon
 - Postgres
 - Qdrant
 - Neo4j
-- Docker daemon
 - 可选：DeerFlow sidecar
 
-## 2. 关键环境变量
+## 3. 配置分层
 
-### 2.1 模型与运行时
+当前配置面已经收口成三层：
 
-- `DASHSCOPE_API_KEY`
-- `DEERFLOW_SIDECAR_URL`
-- `DEERFLOW_CONFIG_PATH`
-- `DEERFLOW_MODEL_NAME`
-- `DEERFLOW_RUNTIME_MODE`（当前推荐固定为 `sidecar`）
+### 3.1 跟踪在仓库里的默认配置
 
-### 2.2 持久化与外部依赖
+- `config/settings.py`：环境变量读取与默认值
+- `config/deerflow_sidecar.yaml`：DeerFlow sidecar 默认配置
+- `config/harness_policy.yaml`：治理策略
+- `config/analysis_runtime.yaml`：运行时策略
+- `config/graph_lexicon.yaml`：图谱/语义词汇配置
 
-- `POSTGRES_URI`
-- `QDRANT_HOST`
-- `QDRANT_PORT`
-- `NEO4J_URI`
-- `NEO4J_USER`
-- `NEO4J_PASSWORD`
+### 3.2 本地环境与密钥
 
-### 2.3 API 与前端
-
-- `API_ALLOW_ORIGINS`
-- `API_ENABLE_DIAGNOSTICS`
-- `API_ENABLE_POLICY_API`
-- `UPLOAD_MAX_FILE_BYTES`
-- `UPLOAD_MAX_REQUEST_BYTES`
-
-### 2.4 认证
-
-- `API_AUTH_REQUIRED`
-- `API_AUTH_TOKENS_JSON`
-
-说明：
-
-- 当前版本默认走更保守的安全姿态，建议明确设置认证配置。
-
-配置分层建议：
-- `config/*.yaml`：项目内可跟踪的默认配置
-- `.env`：本地环境与密钥
+- `.env`：本地运行时环境变量
 - `.env.example`：环境变量契约模板
 
-## 3. 启动顺序
+### 3.3 不应混进仓库的内容
 
-### 3.1 启动 API
+- 真实生产密钥
+- 本机临时联调地址
+- 临时调试 token
+
+## 4. 最小可运行配置
+
+最小建议做法：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+cp .env.example .env
+```
+
+至少检查这些值：
+
+### API 与前端联调
+
+- `API_ALLOW_ORIGINS=http://127.0.0.1:5173,http://localhost:5173`
+- `API_AUTH_REQUIRED=true`
+- `API_AUTH_TOKENS_JSON=...`
+
+### 动态运行时
+
+- `DEERFLOW_RUNTIME_MODE=sidecar`
+- `DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765`
+- `DEERFLOW_CONFIG_PATH=config/deerflow_sidecar.yaml`
+
+### 外部依赖
+
+- `POSTGRES_URI=...`
+- `NEO4J_URI=...`
+- `NEO4J_USER=...`
+- `NEO4J_PASSWORD=...`
+- `QDRANT_HOST=...`
+- `QDRANT_PORT=...`
+
+## 5. 启动顺序
+
+### 5.1 安装前端依赖
+
+```bash
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm install
+```
+
+### 5.2 启动 API
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
 conda run -n lite_interpreter python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 3.2 启动 DeerFlow sidecar
+### 5.3 启动 DeerFlow sidecar（按需）
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
@@ -73,141 +114,141 @@ export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
 conda run -n lite_interpreter python scripts/run_deerflow_sidecar.py --host 127.0.0.1 --port 8765
 ```
 
-### 3.3 启动 Web 前端
+### 5.4 启动 Web 前端（开发模式）
 
 ```bash
-cd /home/linsir365/projects/lite-interpreter
 cd /home/linsir365/projects/lite-interpreter/apps/web
-npm install
 npm run dev
 ```
 
-说明：
+Vite 默认端口：`5173`
 
-- 当前 Web 前端通过 `/api/app/*` 读取稳定的 app-facing 合同，并通过 polling 拉取分析事件。
-- 前端开发服务器默认代理 `/api` 到后端，生产构建产物位于 `apps/web/dist`。
-
-## 4. 推荐配置
-
-### 4.1 动态运行时
-
-推荐固定：
+如果需要改开发代理目标，可设置：
 
 ```bash
-export DEERFLOW_RUNTIME_MODE=sidecar
-export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
+export VITE_DEV_API_PROXY=http://127.0.0.1:8000
 ```
 
-当前不建议再尝试 embedded / auto 模式，因为仓库内已经明确收口到 sidecar-only 语义。
-
-### 4.2 API 认证示例
+### 5.5 构建前端（近生产验收）
 
 ```bash
-export API_AUTH_REQUIRED=true
-export API_AUTH_TOKENS_JSON='{
-  "viewer-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"viewer","subject":"viewer-user"},
-  "operator-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"operator","subject":"operator-user"},
-  "admin-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"admin","subject":"admin-user"}
-}'
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm run build
 ```
 
-## 5. 当前格式支持边界
+当 `apps/web/dist` 存在时，`src/api/main.py` 会把它挂载到 `/`，你可以直接打开后端地址查看页面。
 
-### 结构化数据
-
-当前静态链稳定支持：
-
-- `csv`
-- `tsv`
-- `json`
-
-不建议直接上传到静态执行链：
-
-- `xlsx`
-- `xls`
-- `parquet`
-
-建议先预转换，再上传。
-
-### 5.1 上传接口行为
-
-当前 `/api/app/assets` 行为：
-
-- 支持单文件上传
-- 支持多文件上传
-- 单文件上传返回兼容结构
-- 多文件上传返回 `uploaded_files` + `file_count`
-- 超过上传限制时返回 `413`
-
-如果你要让 workspace 资产进入新任务，不是自动发生的，需要在创建任务时传：
-
-- `assetIds`
-
-其值是 `/api/app/assets` 返回的 `assetId` 列表。
-
-### 业务文档
-
-当前业务文档主格式：
-
-- `pdf`
-- `md`
-- `txt`
-- `docx`
-- `doc`
-
-## 6. 常用验收命令
-
-### 全量测试
-
-```bash
-conda run -n lite_interpreter python -m pytest -q
-```
-
-### 快速检查
-
-```bash
-conda run -n lite_interpreter python -m ruff check src tests scripts config
-python3 scripts/check_hybrid_readiness.py
-```
-
-### 关键运行命令
+## 6. 常用 Make 入口
 
 ```bash
 make run-api
 make run-sidecar
 make run-web
-make test-stream
-make smoke-models
+make build-web
+make create-analysis
+make test
+make lint-all
 ```
 
-## 7. 故障排查
+## 7. 产品面合同边界
 
-### API 起不来
+### 7.1 当前主产品接口
 
-先看：
+前端主工作台只应该依赖：
 
-- `API_AUTH_REQUIRED` 是否和当前 token/session 配置匹配
-- `POSTGRES_URI` 是否可连接
+- `/api/app/session`
+- `/api/app/analyses`
+- `/api/app/analyses/{analysis_id}`
+- `/api/app/analyses/{analysis_id}/events`
+- `/api/app/analyses/{analysis_id}/outputs/{output_id}`
+- `/api/app/assets`
+- `/api/app/methods`
+- `/api/app/audit`
 
-### 动态链一直 unavailable
+### 7.2 已经不该继续使用的旧接口
 
-先看：
+不要再把下面这些当产品前端依赖：
+
+- `/api/tasks*`
+- `/api/executions*`
+- `/api/uploads`
+- `/api/knowledge/assets`
+- `/api/skills`
+- `/api/audit/logs`
+- `/api/session/login`
+- `/api/session/me`
+
+## 8. 结构化输入边界
+
+当前静态链可靠支持：
+
+- `csv`
+- `tsv`
+- `json`
+
+当前不应再宣传为稳定静态链输入：
+
+- `xlsx`
+- `xls`
+- `parquet`
+
+建议先预转换，再上传到工作区。
+
+## 9. 验收命令
+
+### 后端
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m pytest -q
+conda run -n lite_interpreter python -m ruff check src tests scripts config
+```
+
+### 前端
+
+```bash
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm run lint
+npm run build
+```
+
+### app-facing API 快速验收
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python scripts/create_analysis.py --api-base-url http://127.0.0.1:8000 --access-token operator-token
+```
+
+## 10. 故障排查
+
+### API 能启动，但前端调不通
+
+优先检查：
+
+- `API_ALLOW_ORIGINS` 是否包含 `http://127.0.0.1:5173`
+- Bearer Token 是否有效
+- 当前 token 是否对目标 workspace 有 grant
+
+### 动态链一直 `unavailable`
+
+优先检查：
 
 - `DEERFLOW_SIDECAR_URL` 是否正确
 - sidecar 是否真的在监听
-- `scripts/run_deerflow_sidecar.py` 是否正常启动
+- `DEERFLOW_RUNTIME_MODE` 是否仍然是 `sidecar`
 
-### KAG 只走稀疏召回
+### 前端能打开，但看不到数据
 
-先看：
+优先检查：
 
-- Qdrant / Neo4j 是否可达
-- 这是当前版本的预期降级行为，不应把节点打崩
+- `GET /api/app/session` 是否返回当前会话
+- `workspaceId` 是否落在当前 token 的 grants 内
+- `/api/app/analyses` 是否带上了 Bearer Token
 
-### 前端看不到实时状态
+### 产物不能下载或预览
 
-先看：
+优先检查：
 
-- 前端现在走 polling，不再是浏览器 `EventSource + query token`
-- 检查 `Authorization` header 对应 token 是否有权限
-- 检查 task/execution poll 接口是否返回事件
+- 前端是否走 `outputs/{output_id}` 内容 API
+- 产物路径是否位于受控上传目录或输出目录下
+- 是否误把任意绝对路径当作前端直连文件

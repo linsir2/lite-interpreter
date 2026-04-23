@@ -1,30 +1,105 @@
 # lite-interpreter 架构说明
 
-## 1. 总体目标
+`lite-interpreter` 的目标，不是让模型“看起来很聪明”，而是把一条真实的数据分析任务链路做成可治理、可观测、可回放、可交付的系统。
 
-`lite-interpreter` 的目标，是把一个真实的数据分析任务拆成可治理、可观测、可回放的工程闭环，而不是把所有事情都塞进一个 prompt。
+当前成熟度、测试基线与已知热点统一以 `docs/project_status.md` 为准；本文件只解释系统结构、协作关系与边界设计。
 
-当前成熟度、测试基线与已知热点统一以 `docs/project_status.md` 为准，这份文档只描述结构与边界。
+## 1. 系统总览
 
-系统当前最关键的设计原则有四条：
+系统现在由六个协作层组成：
 
-1. **DAG 仍是 owner**
-   静态主链负责可预测、可审计、可回放的主流程。
+1. **产品层**：`apps/web` 提供真实 Web 工作台
+2. **产品 API 层**：`/api/app/*` 提供稳定的 app-facing 合同
+3. **控制层**：Blackboard、Event Bus、Event Journal 持有状态事实源
+4. **编排层**：DAG 静态链负责主流程 owner 身份
+5. **动态运行层**：DeerFlow sidecar 负责受控研究，不负责最终执行
+6. **执行与知识层**：Sandbox、KAG、SkillNet 负责执行、安全、知识与方法沉淀
 
-2. **动态能力按需触发**
-   只有在复杂、长尾、需要外部研究的任务上，才进入 DeerFlow sidecar。
+对应关系可以粗略看成：
 
-3. **最终代码执行留在本地 sandbox**
-   不把最终执行权交给动态 runtime。
+```text
+Web frontend
+  -> /api/app/*
+  -> blackboard-backed read models
+  -> DAG static chain / DeerFlow dynamic research
+  -> sandbox execution + KAG + SkillNet
+  -> artifacts / audit / memory / status projections
+```
 
-4. **Blackboard 是事实源**
-   所有任务状态、执行状态、知识状态和记忆状态都要回到控制面，不允许侧写隐状态。
+## 2. 端到端主链路
 
-## 2. 五个主面
+### 2.1 创建分析
 
-### 2.1 控制面
+1. 前端通过 `POST /api/app/analyses` 提交问题、工作区和 `assetIds`
+2. `src/api/services/task_flow_service.py` 创建任务与执行上下文
+3. Blackboard 建立任务主状态
+4. DAG 根据任务内容决定走静态链还是动态链
 
-核心模块：
+### 2.2 任务执行
+
+- **静态链**：适合结构稳定、可模板化的分析任务
+- **动态链**：适合需要外部研究、多步探索的复杂问题
+- 两条链都必须回写 Blackboard，最终结果统一由 summarizer 收束
+
+### 2.3 结果消费
+
+前端不直接碰底层执行对象，而是只消费 server-built 读模型：
+
+- 分析列表：`GET /api/app/analyses`
+- 分析详情：`GET /api/app/analyses/{analysis_id}`
+- 事件轮询：`GET /api/app/analyses/{analysis_id}/events`
+- 产物内容：`GET /api/app/analyses/{analysis_id}/outputs/{output_id}`
+
+## 3. 六个协作层
+
+### 3.1 产品层：真实 Web 前端
+
+核心文件：
+
+- `apps/web/src/app/App.tsx`
+- `apps/web/src/app/AppShell.tsx`
+- `apps/web/src/lib/api.ts`
+- `apps/web/src/pages/*`
+
+职责：
+
+- 管理会话、工作区切换与页面路由
+- 渲染分析、资料、方法、审计四类主要读模型
+- 通过 Bearer Token 调用 `/api/app/*`
+- 通过 polling 获取分析事件，不再依赖 Streamlit 或浏览器 query token
+
+重要边界：
+
+- 前端不再直接消费旧 `/api/tasks*`、`/api/executions*` 等公开接口
+- 前端不自己拼凑多份真相，优先读取 server-built payload
+- 产物读取必须走内容 API，不直接暴露任意本地绝对路径
+
+### 3.2 产品 API 层：app-facing 合同
+
+核心文件：
+
+- `src/api/main.py`
+- `src/api/routers/app_router.py`
+- `src/api/app_schemas.py`
+- `src/api/app_presenters.py`
+- `src/api/services/task_flow_service.py`
+- `src/api/services/asset_service.py`
+
+职责：
+
+- 对前端暴露稳定、可理解的业务合同
+- 把底层 blackboard / execution / asset / audit 数据投影为产品读模型
+- 处理会话、工作区 scope、角色约束与审计打点
+
+当前明确收口：
+
+- 只保留 `/api/app/*` 作为产品前端主接口
+- 旧产品面接口已从公开路由表移除
+- 运行时诊断、策略与 capability 接口保留在 `/api/*`，但不属于主产品工作台合同
+
+### 3.3 控制层：Blackboard 作为事实源
+
+核心文件：
 
 - `src/blackboard/global_blackboard.py`
 - `src/blackboard/execution_blackboard.py`
@@ -34,28 +109,22 @@
 - `src/common/event_bus.py`
 - `src/common/event_journal.py`
 
-核心职责：
+职责：
 
-- 维护任务生命周期状态
-- 维护执行态主状态
-- 维护知识态与记忆态快照
-- 发布实时事件
-- 提供 backlog 回放
-- 支撑 API 读模型与前端工作台
+- 保存任务生命周期主状态
+- 保存执行态、知识态与记忆态快照
+- 发布实时事件与历史回放
+- 为 app-facing API 提供统一读模型输入
 
-关键共享对象：
+架构原则：
 
-- `TaskEnvelope`
-- `ExecutionIntent`
-- `DecisionRecord`
-- `ExecutionRecord`
-- `TraceEvent`
-- `ToolCallRecord`
-- `RuntimeCapabilityManifest`
+- Blackboard 是事实源，不允许模块绕开它传隐式状态
+- Event Bus 负责实时流，Event Journal 负责可回放性
+- API 层读的是投影结果，不直接把底层内部对象暴露给前端
 
-### 2.2 路由与编排面
+### 3.4 编排层：DAG 仍是 owner
 
-核心模块：
+核心文件：
 
 - `src/dag_engine/dag_graph.py`
 - `src/dag_engine/graphstate.py`
@@ -66,107 +135,14 @@
 - `src/dag_engine/nodes/executor_node.py`
 - `src/dag_engine/nodes/summarizer_node.py`
 
-当前主判断：
+核心原则：
 
-- **静态链优先**
-- **动态链按需触发**
-- **动态研究后可回流静态链**
-- **最终摘要必须反映真实终态**
+1. 静态链优先
+2. 动态能力按需触发
+3. 最终执行仍回到本地 sandbox
+4. summarizer 必须反映真实终态，而不是假象
 
-当前主链顺序：
-
-1. Router
-2. 静态链或动态链
-3. Skill Harvester
-4. Summarizer
-5. Web app / app-facing analysis resources
-
-### 2.3 动态运行面
-
-核心模块：
-
-- `src/dynamic_engine/supervisor.py`
-- `src/dynamic_engine/deerflow_bridge.py`
-- `src/dynamic_engine/runtime_backends.py`
-- `src/dynamic_engine/trace_normalizer.py`
-- `src/dag_engine/nodes/dynamic_swarm_node.py`
-
-当前只支持：
-
-- **DeerFlow sidecar**
-
-不再支持：
-
-- embedded Python client 模式
-- auto runtime mode
-
-动态链职责边界：
-
-- 处理复杂研究任务
-- 发起受控外部检索/工具调用
-- 产出研究摘要、trace、artifact refs、候选静态 skill
-- 不直接拥有最终 Python 执行边界
-
-### 2.4 执行面
-
-核心模块：
-
-- `src/sandbox/ast_auditor.py`
-- `src/sandbox/docker_executor.py`
-- `src/sandbox/session_manager.py`
-- `src/sandbox/execution_reporting.py`
-- `src/mcp_gateway/tools/sandbox_exec_tool.py`
-
-当前执行流程：
-
-1. 输入校验
-2. AST 审计
-3. harness governance 预判
-4. Docker sandbox 执行
-5. `ExecutionRecord` 标准化
-6. task/execution 事件投影
-
-当前安全边界：
-
-- `tenant_id/workspace_id` 不再允许任意字符进入路径与 DB 标识符
-- artifact path 只允许受控根目录或显式 URL
-- session secret 不再允许默认固定值
-- API 不再支持 query-string token
-
-### 2.5 知识与技能面
-
-核心模块：
-
-- `src/kag/builder/*`
-- `src/kag/retriever/*`
-- `src/kag/context/*`
-- `src/skillnet/*`
-- `src/memory/memory_service.py`
-- `src/storage/repository/knowledge_repo.py`
-- `src/storage/repository/memory_repo.py`
-
-KAG 当前职责：
-
-- 文档解析
-- chunk / embedding / graph
-- 证据召回
-- context 构建
-
-SkillNet 当前职责：
-
-- 动态或静态成功路径的 skill harvest
-- validation / authorization / promotion
-- 历史 skill recall 与 usage/outcome 回写
-
-当前真实约束：
-
-- 结构化静态执行可靠格式限定为 `csv/tsv/json`
-- business document 与 structured dataset 不能再随意互相伪装
-- durable memory 不可用时主链降级继续，不再直接卡死 router
-
-## 3. 两条主链
-
-### 3.1 静态链
+静态链：
 
 ```text
 router
@@ -181,13 +157,7 @@ router
   -> summarizer
 ```
 
-适用场景：
-
-- 结构比较稳定的分析任务
-- 已知 SOP 或可模板化执行的问题
-- 不需要大量外部研究与多步探索的问题
-
-### 3.2 动态链
+动态链：
 
 ```text
 router
@@ -197,64 +167,105 @@ router
   -> summarizer
 ```
 
-适用场景：
+### 3.5 动态运行层：DeerFlow sidecar only
 
-- 需要自己找资料
-- 需要跨多步探索
-- 需要动态研究后再收束成静态验证的问题
+核心文件：
 
-## 4. 前端和 API 的关系
+- `src/dynamic_engine/supervisor.py`
+- `src/dynamic_engine/deerflow_bridge.py`
+- `src/dynamic_engine/runtime_backends.py`
+- `src/dynamic_engine/trace_normalizer.py`
+- `src/dag_engine/nodes/dynamic_swarm_node.py`
 
-前端不再自己拼多份真相，而是优先读取 server-built workspace payload。
+当前只支持：
 
-关键接口：
+- **DeerFlow sidecar**
 
-- `GET /api/app/session`
-- `GET /api/app/analyses`
-- `POST /api/app/analyses`
-- `GET /api/app/analyses/{analysis_id}`
-- `GET /api/app/analyses/{analysis_id}/events`
-- `GET /api/app/analyses/{analysis_id}/outputs/{output_id}`
-- `GET /api/app/assets`
-- `POST /api/app/assets`
-- `GET /api/app/methods`
-- `GET /api/app/audit`
+已经明确废弃：
 
-当前前端主面：
+- embedded Python client 模式
+- auto runtime mode
 
-- `Web Analyses`
-- `Assets`
-- `Methods`
-- `Audit`
+职责边界：
 
-其中真正的主产品面仍是 `Web Analyses`。
+- 负责复杂研究、外部资料探索、轨迹标准化
+- 不拥有最终 Python 执行边界
+- 不能替代 DAG 的 owner 身份
 
-### 4.1 产物消费边界
+### 3.6 执行与知识层
 
-当前 artifact 消费分两层：
+#### 执行层
 
-1. `execution_artifacts`
-   - 列出 artifact 元数据
-   - 包含稳定 `artifact_id`
-   - 不再把任意绝对路径当作前端直接可读文件
+核心文件：
 
-2. `execution artifact content API`
-   - 通过 `GET /api/app/analyses/{analysis_id}/outputs/{output_id}` 读取受控内容
-   - 只允许受控上传根和输出根内的本地文件
-   - 文本/图片预览与下载都应走这条 API
+- `src/sandbox/ast_auditor.py`
+- `src/sandbox/docker_executor.py`
+- `src/sandbox/execution_reporting.py`
+- `src/mcp_gateway/tools/sandbox_exec_tool.py`
 
-### 4.2 workspace 资产到 task 输入
+职责：
 
-当前控制面已经把“workspace 资产”和“task 输入”拆开：
+1. 输入校验
+2. AST 审计
+3. harness governance 预判
+4. Docker sandbox 执行
+5. `ExecutionRecord` 标准化
+6. 产物与执行事件投影
 
-- workspace 上传只是把资产放进当前 workspace
-- analysis 真正执行什么输入，必须通过 `assetIds` 显式绑定
-- 这样可以避免“一个 workspace 里所有资产自动污染每个新任务”的隐式行为
+#### 知识与方法层
 
-## 5. 当前最重要的工程结论
+核心文件：
 
-1. **系统核心不是“更多模块”，而是边界更清楚**
-2. **动态能力不是越多越好，而是越可控越好**
-3. **文档、测试、运行时 contract 必须保持一致**
-4. **假支持比不支持更危险**
-5. **所有最终用户可见结果，必须反映真实终态，而不是漂亮的假象**
+- `src/kag/*`
+- `src/skillnet/*`
+- `src/memory/memory_service.py`
+- `src/storage/repository/knowledge_repo.py`
+- `src/storage/repository/memory_repo.py`
+
+职责：
+
+- 解析业务文档、构建知识、召回证据
+- 在成功路径中沉淀复用方法
+- 保存使用结果与 outcome，用于后续推荐与提升
+
+## 4. 前端与 API 的合同边界
+
+### 4.1 会话与权限
+
+- 前端必须通过 `Authorization: Bearer <token>` 调用 API
+- 会话 bootstrap 只走 `GET /api/app/session`
+- 工作区切换通过 `workspaceId` query 参数进入 app-facing 合同
+
+### 4.2 资料与任务输入
+
+- 工作区上传资料只会进入当前 workspace 资产池
+- 创建分析时必须通过 `assetIds` 显式挂接输入
+- 不再允许“一个 workspace 里的所有资料自动污染每个任务”
+
+### 4.3 结果产物
+
+- 产物元数据由分析详情返回
+- 产物内容/下载必须走 `outputs/{output_id}` API
+- 不再把任意绝对路径直接暴露给前端
+
+## 5. 迁移后的明确结论
+
+这次迁移完成了两个非常重要的收口：
+
+1. **产品面从 Streamlit 硬切到真实 Web 前端**
+2. **公开产品接口从旧 tasks/executions 风格硬切到 `/api/app/*`**
+
+因此，后续任何改动都应该遵守下面的判断：
+
+- 不要再恢复旧公开产品接口
+- 不要再把实验性质的运行时模式包装成正式能力
+- 不要让文档、配置与路由表再次出现两套真相
+
+## 6. 现在最值得盯的风险
+
+当前结构已经比以前清楚很多，但仍有几个需要持续警惕的点：
+
+1. `src/sandbox/docker_executor.py` 体量仍然偏大
+2. `static_codegen` 仍然偏模板化
+3. Web 前端已经成型，但输出预览、长任务反馈等体验还可以继续增强
+4. Skill usage/outcome 的跨进程并发一致性仍需继续补强

@@ -11,19 +11,22 @@
 ### 目录结构
 ```
 lite-interpreter/
-├── config/              # 配置层：全局配置管理
+├── apps/web/            # 真实 Web 前端（React/Vite）
+├── config/              # 配置层：默认策略、运行时与安全配置
 ├── src/                 # 核心源码层：所有业务代码
-│   ├── storage/         # 统一数据访问层（DAL）
-│   ├── sandbox/         # 安全沙箱引擎（第一阶段）
-│   ├── blackboard/      # 全局黑板状态中枢（第二阶段）
-│   ├── privacy/         # PII数据脱敏与隐私保护（第二阶段）
-│   ├── dag_engine/      # DAG确定性执行引擎（第三阶段）
-│   ├── kag/             # KAG静态知识流（第四阶段）
-│   ├── mcp_gateway/     # MCP标准化协议网关（第四阶段）
-│   ├── skillnet/        # Skillnet自进化技能网络（第五阶段）
-│   ├── api/             # FastAPI接口层（第六阶段）
-│   ├── frontend/        # Streamlit前端界面（第六阶段）
-│   └── common/          # 公共工具层
+│   ├── api/             # Starlette app-facing API 与运行时接口
+│   ├── blackboard/      # 全局黑板状态中枢
+│   ├── common/          # 契约、事件、通用工具
+│   ├── dag_engine/      # DAG 确定性执行引擎
+│   ├── dynamic_engine/  # DeerFlow sidecar 动态研究适配层
+│   ├── harness/         # 动态/执行治理层
+│   ├── kag/             # KAG 静态知识流
+│   ├── mcp_gateway/     # MCP 标准化协议网关
+│   ├── memory/          # durable memory 协调
+│   ├── privacy/         # PII 数据脱敏与隐私保护
+│   ├── sandbox/         # 安全沙箱执行边界
+│   ├── skillnet/        # SkillNet 方法沉淀与复用
+│   └── storage/         # 统一数据访问层（DAL）
 ├── tests/               # 自动化测试用例
 ├── docs/                # 项目文档
 └── data/                # 本地数据目录（git忽略）
@@ -31,10 +34,13 @@ lite-interpreter/
 
 ### 关键文件
 - `directory.txt`: 项目完整结构和文件协作关系
+- `README.md`: 当前产品面、快速开始与文档入口
+- `apps/web/src/app/App.tsx`: Web 工作台入口与主路由
+- `src/api/routers/app_router.py`: app-facing `/api/app/*` 合同
 - `src/storage/schema.py`: 统一数据架构定义
 - `src/kag/builder/classifier.py`: 文档复杂度分类器
-- `src/dag_engine/nodes/kag_retriever.py`: 调用KAG进行检索，kag模块的代码必须符合该文件中的引用与设计
-- `src/kag/retriever/recall/hybrid_search.py`: 混合检索实现  
+- `src/dag_engine/nodes/kag_retriever.py`: 调用 KAG 进行检索，kag 模块的代码必须符合该文件中的引用与设计
+- `src/kag/retriever/recall/hybrid_search.py`: 混合检索实现
 
 ## kag（知识图谱增强）模块规范
 

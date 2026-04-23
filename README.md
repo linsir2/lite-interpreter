@@ -1,128 +1,112 @@
 # lite-interpreter
 
-`lite-interpreter` 是一个面向数据分析任务的、受控且可观测的智能执行运行时原型。它不是一个让 agent 自由发挥的通用自治系统，而是一个把路由、知识检索、动态研究、代码生成、审计、执行、事件回放和技能沉淀都纳入工程控制面的项目。
+`lite-interpreter` 是一个面向财务、会计与经营分析场景的受控分析运行时。
 
-## 项目定位
+它把“资料上传、任务路由、动态研究、代码执行、结果产物、审计回放”放进同一条工程闭环里：前端是一个真正的 React/Vite Web 工作台，后端暴露稳定的 `/api/app/*` app-facing 合同，底层继续由 DAG、Blackboard、Sandbox、KAG、SkillNet 和 DeerFlow sidecar 协同完成分析任务。
 
-这个项目要解决的问题，不是“让模型看起来很聪明”，而是让一条真实的数据分析任务链路满足下面几个要求：
+当前成熟度、测试基线、已知热点统一以 `docs/project_status.md` 为准；本文件负责回答“这个项目是什么、现在怎么跑、接下来该看哪份文档”。
 
-- 能判断任务该走静态链还是动态研究链
-- 能把结构化数据、业务文档、检索证据和治理决策纳入统一状态
-- 能把最终代码执行留在本地受控 sandbox，而不是把执行权交给动态 runtime
-- 能把执行轨迹、产物、tool-call、最终回答统一暴露给 API 和前端
-- 能把成功经验沉淀为可复用 skill，而不是每次重新烧 token
+## 这是什么 / 不是什么
 
-一句话总结：
+### 这是
 
-> 宏观用确定性 DAG 托底，微观用 DeerFlow sidecar 做受控动态研究，最终代码执行留在本地 sandbox，所有状态回写 Blackboard。
+- 一个面向数据分析任务的工程化运行时，而不是自由发挥的通用 autonomous agent
+- 一个以“可治理、可观测、可回放、可交付”为目标的分析平台原型
+- 一个已经完成前端硬切换的产品面：真实 Web 前端 + app-facing API，而不是 Streamlit 壳子
 
-## 当前架构
+### 这不是
 
-当前项目由五个主面组成：
+- 不是把所有事情塞进一个 prompt 的黑箱助手
+- 不是把 DeerFlow 当系统 owner 的 runtime playground
+- 不是宣称支持很多格式、但实际链路闭不了环的“假支持”产品
 
-1. **控制面**
-   - `GlobalBlackboard / ExecutionBlackboard / KnowledgeBlackboard / MemoryBlackboard`
-   - `EventBus / EventJournal`
-   - `TaskEnvelope / ExecutionIntent / DecisionRecord / ExecutionRecord`
-   - 负责状态事实源、事件投递、回放和资源投影
+## 当前交付面
 
-2. **运行面**
-   - `router -> static chain / dynamic_swarm`
-   - `DynamicSupervisor -> DeerflowBridge -> TraceNormalizer`
-   - 当前动态运行时只支持 **DeerFlow sidecar**，不再支持 embedded / auto 模式
+当前仓库真正对外的产品面已经收口到以下几部分：
 
-3. **执行面**
-   - `ast_auditor.py`
-   - `docker_executor.py`
-   - `sandbox_exec_tool.py`
-   - 负责输入校验、AST 审计、治理决策、Docker 执行和执行记录标准化
+### Web 前端
 
-4. **知识面**
-   - `KAG Builder / Retriever / Context`
-   - `KnowledgeRepo / Postgres / Qdrant / Neo4j`
-   - `SkillNet / MemoryRepo`
-   - 负责文档解析、知识召回、上下文压缩、技能沉淀和历史复用
+- 目录：`apps/web`
+- 技术栈：React 18、TypeScript、Vite、React Router、TanStack Query、Tailwind CSS
+- 主要页面：
+  - `Analyses`：分析总览
+  - `New Analysis`：新建分析
+  - `Analysis Detail`：查看结论、事件与产物
+  - `Assets`：管理工作区资料
+  - `Methods`：查看沉淀方法
+  - `Audit`：查看审计记录
+  - `Session Settings`：切换 API 地址与 Bearer Token
 
-5. **产品面**
-   - `Web Analyses` 为主工作台
-   - `Assets / Methods / Audit` 为辅助页面
-   - API 提供 app-facing analyses/assets/methods/audit 与运行时诊断资源
+### App-facing API
 
-## 当前支持的能力边界
+- `GET /api/app/session`
+- `GET /api/app/analyses`
+- `POST /api/app/analyses`
+- `GET /api/app/analyses/{analysis_id}`
+- `GET /api/app/analyses/{analysis_id}/events`
+- `GET /api/app/analyses/{analysis_id}/outputs/{output_id}`
+- `GET /api/app/assets`
+- `POST /api/app/assets`
+- `GET /api/app/methods`
+- `GET /api/app/audit`
+
+### 保留下来的核心协作模块
+
+- `src/blackboard`：任务、执行、知识、记忆状态事实源
+- `src/dag_engine`：静态主链与节点编排
+- `src/dynamic_engine`：DeerFlow sidecar 适配与动态研究监督
+- `src/sandbox`：AST 审计、Docker 执行、执行记录
+- `src/kag`：知识构建、检索、上下文压缩
+- `src/skillnet`：方法沉淀、历史复用、提升与校验
+- `src/api`：app-facing API、认证、运行时与策略接口
+
+## 当前能力边界
 
 ### 动态运行时
 
 当前唯一支持的动态运行时是 **DeerFlow sidecar**。
 
-- 支持：动态研究、工具化检索、轨迹写回、研究结果回流静态链
-- 不支持：把最终代码执行权交给 DeerFlow
-- sidecar 不可用时：返回明确的 `unavailable` 语义，不再悄悄切到 embedded 或 auto 模式
+- 支持：动态研究、检索与工具调用、研究轨迹回写、研究后回流静态链
+- 不支持：把最终 Python 执行边界交给 DeerFlow
+- sidecar 不可用时：明确返回 `unavailable` 语义，不再悄悄回退到 embedded / auto 模式
 
 ### 结构化数据输入
 
-当前静态执行链**可靠支持**以下结构化格式：
+当前静态执行链稳定支持：
 
-- `.csv`
-- `.tsv`
-- `.json`
+- `csv`
+- `tsv`
+- `json`
 
-说明：
+不应继续对外宣传为稳定静态分析输入：
 
-- 项目历史上对 `.xlsx / .xls / .parquet` 有过“表面支持”，但静态 codegen 和数据嗅探链路并没有真正完成这些格式的稳定执行闭环。
-- 因此当前版本对这些格式不再宣传为“直接可执行支持”。如果你要做稳定分析，建议先预转换成 `csv/tsv/json` 再上传。
+- `xlsx`
+- `xls`
+- `parquet`
 
 ### 认证与访问控制
 
-当前 API 默认采用更保守的安全姿态：
-
-- `API_AUTH_REQUIRED` 默认开启
-- 除 `/health` 外，受保护接口按角色校验
-- 不再支持通过 query string 传 `access_token`
-- 前端通过 Bearer Token + `/api/app/session` 完成会话 bootstrap
+- 默认通过 Bearer Token 访问 API
+- `/health` 之外的受保护接口按角色校验
+- 不再支持 query-string token
+- 前端通过 `/api/app/session` 完成会话 bootstrap
 - `viewer / operator / admin` 三层角色仍然保留
-- 前端流式状态改为带 `Authorization` header 的 polling，不再通过浏览器 query token 建立 `EventSource`
-
-### 执行产物暴露
-
-当前版本对 artifact path 做了安全收口：
-
-- 只允许暴露受控根目录内的本地产物路径（上传目录 / 输出目录）
-- 允许显式的 `http/https` 远端引用
-- 不再把任意绝对路径当作可预览/可下载文件直接交给前端
-- 文本和图片类 artifact 现在通过 execution artifact content API 读取内容，而不是前端直接读本机路径
-
-### Workspace 资产与任务输入
-
-当前版本支持更明确的“workspace 资产 -> task 输入”流：
-
-- workspace 层上传后，前端会收到稳定的 `assetId`
-- 新建分析时，通过 `assetIds` 显式挂接这些资产
-- 前端工作台支持从当前 workspace 资产列表里选择要附带到新分析的输入
-
-### 多文件上传
-
-当前 `/api/app/assets` 支持一次上传多个文件：
-
-- 单文件上传时，响应保持原有兼容结构
-- 多文件上传时，响应返回 `uploaded_files` 和 `file_count`
-- 上传同时受两层大小限制约束：
-  - 单文件大小上限：`UPLOAD_MAX_FILE_BYTES`
-  - 单请求总大小上限：`UPLOAD_MAX_REQUEST_BYTES`
 
 ## 快速开始
 
 ### 1. 准备环境
 
+```bash
+cd /home/linsir365/projects/lite-interpreter
+cp .env.example .env
+```
+
 推荐环境：
 
-- conda env: `lite_interpreter`
-- Python: `3.12`
-
-安装依赖后，先执行：
-
-```bash
-conda run -n lite_interpreter python -m pytest -q
-```
+- conda env：`lite_interpreter`
+- Python：`3.12`
+- Node.js：18+
+- Docker daemon：用于真实 sandbox 执行与部分集成测试
 
 ### 2. 启动 API
 
@@ -131,7 +115,7 @@ cd /home/linsir365/projects/lite-interpreter
 conda run -n lite_interpreter python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-### 3. 启动 DeerFlow sidecar
+### 3. 启动 DeerFlow sidecar（需要动态研究时）
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
@@ -139,54 +123,78 @@ export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
 conda run -n lite_interpreter python scripts/run_deerflow_sidecar.py --host 127.0.0.1 --port 8765
 ```
 
-### 4. 启动前端
+### 4. 启动 Web 前端
 
 ```bash
-cd /home/linsir365/projects/lite-interpreter
 cd /home/linsir365/projects/lite-interpreter/apps/web
 npm install
 npm run dev
 ```
+
+如果你已经构建过前端，也可以直接通过后端挂载的静态站点访问：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm run build
+```
+
+构建产物位于 `apps/web/dist`。当该目录存在时，`src/api/main.py` 会把它挂到 `/`。
 
 ### 5. 常用验证命令
 
 ```bash
 conda run -n lite_interpreter python -m ruff check src tests scripts config
 conda run -n lite_interpreter python -m pytest -q
-python3 scripts/check_hybrid_readiness.py
+cd apps/web && npm run lint && npm run build
 ```
 
-## 建议阅读顺序
+## 文档地图
 
-第一次读仓库，建议顺序：
+完整文档层次见 `docs/README.md`。如果你只想快速进入正确上下文，按下面顺序读：
 
-1. `docs/project_status.md`
-2. `docs/architecture.md`
-3. `directory.txt`
-4. `docs/development_guide.md`
-5. `docs/deployment.md`
-6. `docs/testing.md`
-7. `项目二.md`
+### 第一次接手项目
 
-## 文档索引
+1. `docs/README.md`
+2. `docs/project_status.md`
+3. `docs/architecture.md`
+4. `directory.txt`
+5. `docs/development_guide.md`
 
-- `docs/project_status.md`：当前成熟度、测试基线、已知热点、明确非目标
-- `docs/architecture.md`：系统结构、模块边界、主链路说明
-- `docs/development_guide.md`：开发环境、改动原则、常见改动入口
-- `docs/deployment.md`：依赖、环境变量、启动方式、运维要点
-- `docs/testing.md`：测试分层、命令、回归要求
-- `directory.txt`：仓库目录导览
-- `项目二.md`：中文项目综述与下一阶段工程重点
+### 想跑起来并验证产品面
+
+1. `docs/user_guide.md`
+2. `docs/deployment.md`
+3. `docs/testing.md`
+4. `scripts/create_analysis.py`
+
+### 如果你是业务同学，只想先把一次分析跑通
+
+1. `docs/user_guide.md`
+2. 找管理员拿 API 地址和 Bearer Token
+3. 用小范围资料先做一次主题明确的分析
+
+### 想理解工程判断与后续方向
+
+1. `项目二.md`
+2. `docs/project_status.md`
+3. `docs/architecture.md`
+
+## 仓库导览
+
+- `apps/web`：真实 Web 前端
+- `config`：可跟踪配置默认值与策略文件
+- `docs`：按 Diataxis 划分的说明文档
+- `scripts`：启动、smoke、readiness 与 API 辅助脚本
+- `src`：后端源码与核心运行时
+- `tests`：自动化测试与契约校验
+- `directory.txt`：仓库目录说明与阅读顺序
 
 ## 当前工程判断
 
-这个项目现在已经不是“概念验证玩具”，但也还没到“上线即产品”的程度。
+这个项目已经完成“旧前端 -> 真实 Web 前端”的产品面迁移，也完成了“旧公开接口 -> `/api/app/*` 合同”的 API 收口。
 
-它已经具备：
+接下来最重要的工作，不是继续加新页面，而是继续做三件事：
 
-- 静态链 / 动态链 / sandbox / blackboard 的最小闭环
-- execution / artifacts / tool-calls / diagnostics / conformance 资源层
-- 前端主工作台与 API 读模型的基本联动
-- 历史 skill recall 与 usage/outcome 回写能力
-
-但你仍然应该把它视为一个**正在工程化收口的原型**。最重要的工作，不是继续堆模块，而是继续收紧边界、减少假支持、把控制面和产品面做扎实。
+1. 保持控制面、动态面、执行面、产品面边界稳定
+2. 让文档、测试、配置契约和实际实现保持同步
+3. 把已经跑通的分析主链做得更稳，而不是重新引入假支持和隐式行为

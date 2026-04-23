@@ -91,7 +91,7 @@ TASK_SCHEDULER_INSTANCE_ID: Final[str] = _env_str(
 TASK_FLOW_MAX_WORKERS: Final[int] = _env_int("TASK_FLOW_MAX_WORKERS", 4)
 API_ALLOW_ORIGINS: Final[list[str]] = _env_csv(
     "API_ALLOW_ORIGINS",
-    "http://127.0.0.1:8501,http://localhost:8501",
+    "http://127.0.0.1:5173,http://localhost:5173",
 )
 API_ENABLE_POLICY_API: Final[bool] = _env_bool("API_ENABLE_POLICY_API", False)
 API_ENABLE_DIAGNOSTICS: Final[bool] = _env_bool("API_ENABLE_DIAGNOSTICS", False)
