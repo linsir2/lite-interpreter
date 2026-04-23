@@ -181,6 +181,43 @@ class AuditRepo:
         recorded_before: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        records, _total = cls.query_records(
+            tenant_id,
+            workspace_id,
+            subject=subject,
+            role=role,
+            action=action,
+            outcome=outcome,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            task_id=task_id,
+            execution_id=execution_id,
+            recorded_after=recorded_after,
+            recorded_before=recorded_before,
+            page=1,
+            page_size=limit,
+        )
+        return records
+
+    @classmethod
+    def query_records(
+        cls,
+        tenant_id: str,
+        workspace_id: str,
+        *,
+        subject: str | None = None,
+        role: str | None = None,
+        action: str | None = None,
+        outcome: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        task_id: str | None = None,
+        execution_id: str | None = None,
+        recorded_after: str | None = None,
+        recorded_before: str | None = None,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> tuple[list[dict[str, Any]], int]:
         normalized_subject = str(subject or "").strip()
         normalized_role = str(role or "").strip()
         normalized_action = str(action or "").strip()
@@ -189,6 +226,9 @@ class AuditRepo:
         normalized_resource_id = str(resource_id or "").strip()
         normalized_task_id = str(task_id or "").strip()
         normalized_execution_id = str(execution_id or "").strip()
+        normalized_page = max(1, int(page))
+        normalized_page_size = max(1, int(page_size))
+        offset = (normalized_page - 1) * normalized_page_size
         recorded_after_dt = datetime.fromisoformat(recorded_after) if recorded_after else None
         recorded_before_dt = datetime.fromisoformat(recorded_before) if recorded_before else None
         with cls._lock:
@@ -221,12 +261,13 @@ class AuditRepo:
             return True
 
         filtered_memory = [record for record in reversed(memory_records) if _matches(record)]
+        total_memory = len(filtered_memory)
 
         cls._require_backend("list_records")
         if not pg_client.engine:
             if not cls._allow_test_backend():
                 raise RuntimeError("AuditRepo list_records requires Postgres")
-            return filtered_memory[:limit]
+            return filtered_memory[offset : offset + normalized_page_size], total_memory
 
         cls._ensure_table()
         sql = """
@@ -237,45 +278,63 @@ class AuditRepo:
             WHERE tenant_id = :tenant_id
               AND workspace_id = :workspace_id
         """
+        count_sql = """
+            SELECT COUNT(*)
+            FROM api_audit_logs
+            WHERE tenant_id = :tenant_id
+              AND workspace_id = :workspace_id
+        """
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "workspace_id": workspace_id,
-            "limit": limit,
+            "limit": normalized_page_size,
+            "offset": offset,
         }
         if normalized_subject:
             sql += " AND subject = :subject"
+            count_sql += " AND subject = :subject"
             params["subject"] = normalized_subject
         if normalized_role:
             sql += " AND role = :role"
+            count_sql += " AND role = :role"
             params["role"] = normalized_role
         if normalized_action:
             sql += " AND action = :action"
+            count_sql += " AND action = :action"
             params["action"] = normalized_action
         if normalized_outcome:
             sql += " AND outcome = :outcome"
+            count_sql += " AND outcome = :outcome"
             params["outcome"] = normalized_outcome
         if normalized_resource_type:
             sql += " AND resource_type = :resource_type"
+            count_sql += " AND resource_type = :resource_type"
             params["resource_type"] = normalized_resource_type
         if normalized_resource_id:
             sql += " AND resource_id = :resource_id"
+            count_sql += " AND resource_id = :resource_id"
             params["resource_id"] = normalized_resource_id
         if normalized_task_id:
             sql += " AND task_id = :task_id"
+            count_sql += " AND task_id = :task_id"
             params["task_id"] = normalized_task_id
         if normalized_execution_id:
             sql += " AND execution_id = :execution_id"
+            count_sql += " AND execution_id = :execution_id"
             params["execution_id"] = normalized_execution_id
         if recorded_after:
             sql += " AND recorded_at >= :recorded_after"
+            count_sql += " AND recorded_at >= :recorded_after"
             params["recorded_after"] = recorded_after
         if recorded_before:
             sql += " AND recorded_at <= :recorded_before"
+            count_sql += " AND recorded_at <= :recorded_before"
             params["recorded_before"] = recorded_before
-        sql += " ORDER BY recorded_at DESC LIMIT :limit"
+        sql += " ORDER BY recorded_at DESC LIMIT :limit OFFSET :offset"
 
         try:
             with pg_client.engine.connect() as conn:
+                total = int(conn.execute(text(count_sql), params).scalar_one())
                 rows = conn.execute(text(sql), params)
                 records: list[dict[str, Any]] = []
                 for row in rows:
@@ -284,7 +343,7 @@ class AuditRepo:
                     if isinstance(metadata, str):
                         payload["metadata"] = json.loads(metadata)
                     records.append(payload)
-                return records or filtered_memory[:limit]
+                return records, total
         except Exception as exc:
             cls._handle_backend_error("读取审计记录", exc)
-            return filtered_memory[:limit]
+            return filtered_memory[offset : offset + normalized_page_size], total_memory

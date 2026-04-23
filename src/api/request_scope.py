@@ -6,6 +6,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from src.api.auth import auth_context_allows_scope, request_auth_context
+from src.api.schemas import api_error_response
 from src.common.utils import validate_scope_identifier
 
 
@@ -38,13 +39,12 @@ def require_request_scope(request: Request) -> tuple[str, str] | JSONResponse:
                 validate_scope_identifier(workspace_id, field_name="workspace_id"),
             )
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-    return JSONResponse(
-        {
-            "error": "missing tenant/workspace scope",
-            "required_query_params": ["tenant_id", "workspace_id"],
-        },
+            return api_error_response("INVALID_SCOPE", str(exc), status_code=400)
+    return api_error_response(
+        "MISSING_SCOPE",
+        "Missing tenant/workspace scope.",
         status_code=400,
+        details={"requiredQueryParams": ["tenant_id", "workspace_id"]},
     )
 
 
@@ -59,7 +59,7 @@ def ensure_resource_scope(
         return requested_scope
     requested_tenant_id, requested_workspace_id = requested_scope
     if requested_tenant_id != tenant_id or requested_workspace_id != workspace_id:
-        return JSONResponse({"error": "resource not found"}, status_code=404)
+        return api_error_response("NOT_FOUND", "Resource not found.", status_code=404)
     return None
 
 
@@ -73,9 +73,13 @@ def ensure_claimed_scope(
     if auth_context is None:
         return None
     if not auth_context_allows_scope(auth_context, tenant_id, workspace_id):
-        return JSONResponse({"error": "scope forbidden"}, status_code=403)
+        return api_error_response(
+            "SCOPE_FORBIDDEN",
+            "The selected scope is not available in the current session.",
+            status_code=403,
+        )
     return None
 
 
 def endpoint_disabled(error: str) -> JSONResponse:
-    return JSONResponse({"error": error}, status_code=404)
+    return api_error_response("ENDPOINT_DISABLED", error, status_code=404)

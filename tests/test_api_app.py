@@ -18,6 +18,7 @@ from src.api.routers.app_router import (
     list_app_assets,
     list_app_audit,
     list_app_methods,
+    upload_app_assets,
 )
 from src.blackboard import ExecutionData, GlobalStatus, execution_blackboard, global_blackboard
 from src.common import EventTopic, event_bus
@@ -65,6 +66,12 @@ def _viewer_auth(*, tenant_id: str = "tenant-app", workspace_id: str = "ws-app",
         grants=(AuthGrant(tenant_id, workspace_id),),
         auth_type="session",
     )
+
+
+def _assert_structured_error(body: dict, *, code: str) -> None:
+    assert body["error"]["code"] == code
+    assert isinstance(body["error"]["message"], str)
+    assert body["error"]["message"]
 
 
 def test_get_app_session_returns_current_workspace_and_capabilities():
@@ -120,6 +127,20 @@ def test_list_app_analyses_returns_paginated_items():
     assert body["items"][0]["analysisId"] == task_id
     assert body["items"][0]["title"] == "利润下滑原因"
     assert body["pagination"]["totalItems"] >= 1
+
+
+def test_list_app_analyses_rejects_invalid_pagination_query():
+    request = _make_request(
+        method="GET",
+        path="/api/app/analyses",
+        query_params={"workspaceId": "ws-app", "page": "oops"},
+        auth_context=_viewer_auth(),
+    )
+    response = asyncio.run(list_app_analyses(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 422
+    _assert_structured_error(body, code="VALIDATION_ERROR")
 
 
 def test_list_app_analyses_hides_raw_failure_trace_text():
@@ -306,6 +327,58 @@ def test_get_app_analysis_output_uses_app_facing_download_route(tmp_path):
     assert output_response.body == b"month,profit\n2026-01,10\n"
 
 
+def test_get_app_analysis_output_rejects_sibling_prefix_escape(tmp_path):
+    tenant_id = "tenant-app-output-escape"
+    workspace_id = "ws-app-output-escape"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "导出分析结果")
+    rogue_dir = Path(f"{OUTPUT_DIR}_evil") / tenant_id / workspace_id
+    rogue_dir.mkdir(parents=True, exist_ok=True)
+    rogue_path = rogue_dir / "secret.txt"
+    rogue_path.write_text("secret-data", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={
+                "final_response": {
+                    "headline": "分析已完成",
+                    "answer": "结果已导出",
+                    "outputs": [{"name": "secret.txt", "type": "dataset", "summary": "逃逸路径", "path": str(rogue_path)}],
+                }
+            },
+            static={
+                "execution_record": {
+                    "session_id": "session-output-escape",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "task_id": task_id,
+                    "success": True,
+                    "trace_id": "trace-output-escape",
+                    "duration_seconds": 0.2,
+                    "artifacts": [{"path": str(rogue_path), "artifact_type": "artifact"}],
+                }
+            },
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    output_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1",
+        path_params={"analysis_id": task_id, "output_id": f"output_{task_id}_1"},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    output_response = asyncio.run(get_app_analysis_output(output_request))
+    body = json.loads(output_response.body.decode())
+
+    assert output_response.status_code == 404
+    _assert_structured_error(body, code="NOT_FOUND")
+
+
 def test_get_app_analysis_events_normalizes_task_events():
     tenant_id = "tenant-app-events"
     workspace_id = "ws-app-events"
@@ -420,6 +493,52 @@ def test_list_app_assets_returns_business_facing_items(tmp_path):
     assert body["items"][0]["readinessLabel"] in {"可直接分析", "待处理"}
 
 
+def test_list_app_assets_rejects_invalid_pagination_query():
+    request = _make_request(
+        method="GET",
+        path="/api/app/assets",
+        query_params={"workspaceId": "ws-app", "pageSize": "oops"},
+        auth_context=_viewer_auth(),
+    )
+    response = asyncio.run(list_app_assets(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 422
+    _assert_structured_error(body, code="VALIDATION_ERROR")
+
+
+def test_list_app_assets_returns_structured_workspace_forbidden_error():
+    request = _make_request(
+        method="GET",
+        path="/api/app/assets",
+        query_params={"workspaceId": "ws-other"},
+        auth_context=_viewer_auth(tenant_id="tenant-app", workspace_id="ws-app"),
+    )
+    response = asyncio.run(list_app_assets(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 403
+    _assert_structured_error(body, code="WORKSPACE_FORBIDDEN")
+
+
+def test_upload_app_assets_returns_structured_errors_for_missing_file(monkeypatch):
+    request = _make_request(
+        method="POST",
+        path="/api/app/assets",
+        auth_context=_viewer_auth(role="operator"),
+    )
+
+    async def _empty_form():
+        return {}
+
+    monkeypatch.setattr(request, "form", _empty_form)
+    response = asyncio.run(upload_app_assets(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 400
+    _assert_structured_error(body, code="MISSING_FILE_FIELD")
+
+
 def test_list_app_methods_and_audit():
     tenant_id = "tenant-app-admin"
     workspace_id = "ws-app-admin"
@@ -459,3 +578,52 @@ def test_list_app_methods_and_audit():
     audit_body = json.loads(audit_response.body.decode())
     assert audit_response.status_code == 200
     assert audit_body["items"][0]["auditId"] == "audit-app-1"
+
+
+def test_list_app_audit_supports_real_pagination_beyond_500_records():
+    tenant_id = "tenant-app-audit-pagination"
+    workspace_id = "ws-app-audit-pagination"
+    for index in range(520):
+        AuditRepo.append_record(
+            AuditRecord(
+                audit_id=f"audit-app-{index}",
+                subject="alice",
+                role="admin",
+                action="app.analysis.create",
+                outcome="success",
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                request_method="POST",
+                request_path="/api/app/analyses",
+                resource_type="task",
+            )
+        )
+
+    request = _make_request(
+        method="GET",
+        path="/api/app/audit",
+        query_params={"workspaceId": workspace_id, "page": "26", "pageSize": "20"},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id, role="admin"),
+    )
+    response = asyncio.run(list_app_audit(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert body["pagination"]["totalItems"] == 520
+    assert body["pagination"]["totalPages"] == 26
+    assert len(body["items"]) == 20
+    assert body["items"][0]["auditId"] == "audit-app-19"
+
+
+def test_list_app_audit_rejects_invalid_pagination_query():
+    request = _make_request(
+        method="GET",
+        path="/api/app/audit",
+        query_params={"workspaceId": "ws-app", "page": "oops"},
+        auth_context=_viewer_auth(role="admin"),
+    )
+    response = asyncio.run(list_app_audit(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 422
+    _assert_structured_error(body, code="VALIDATION_ERROR")

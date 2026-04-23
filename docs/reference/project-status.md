@@ -10,7 +10,7 @@
 
 - 最后复验日期：`2026-04-23`
 - 验证命令：`conda run -n lite_interpreter python -m pytest -q`
-- 最新结果：`230 passed, 4 skipped`
+- 最新结果：`244 passed, 4 skipped`
 - 说明：4 个 skip 仍来自 Docker / 本地 TCP 绑定等环境能力缺失，而不是已知断言失败
 
 ### 前端构建验证
@@ -24,6 +24,14 @@
 - 最近一次人工浏览器烟测：`2026-04-23`
 - 结论：通过
 - 备注：当次验证未发现严重 console error、失败请求、坏响应或遗留旧接口调用
+
+### 这轮 app-facing 风险收口
+
+- `/api/app/*` 的列表查询现在会稳定校验 `page` / `pageSize`，非法值不再演变成 500
+- app-facing 认证、权限、scope、上传失败等主要错误语义已收口到统一结构化 envelope
+- 分析结果下载边界已收紧到“当前 task 的 tenant/workspace upload/output 根目录”
+- 审计记录已改为真实分页，前端可访问完整记录而不是截断后的局部结果
+- 前端本地缓存的 workspace 会在 session bootstrap 后自动校正到当前会话仍然可用的 workspace
 
 这份文档是仓库内关于“当前成熟度、测试基线、已知热点、非目标”的唯一真相源。其它文档只引用这里，不再各自维护通过数字。
 
@@ -71,7 +79,7 @@
 2. `src/dag_engine/nodes/static_codegen.py` 仍然偏模板化，后续应让 `analysis_plan`、skill hints 和知识上下文更深地影响生成策略。
 3. Web 前端已经完成形态迁移，但长任务中的更细粒度进度反馈、结果预览和操作回路还可以继续增强。
 4. skill usage / outcome 在跨进程并发场景下仍需进一步做原子化持久化。
-5. 文档、配置与合同虽然已收口，但未来每次产品面改动都仍有再次漂移的风险。
+5. 文档、配置与合同虽然再次完成了一轮同步，但未来每次产品面改动都仍有再次漂移的风险。
 
 ## 6. 当前明确非目标
 

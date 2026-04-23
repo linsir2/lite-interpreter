@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from src.api.audit_logging import record_api_audit
 from src.api.auth import require_request_role
 from src.api.request_scope import ensure_claimed_scope
+from src.api.schemas import api_error_response
 from src.blackboard import (
     BusinessDocumentState,
     ExecutionData,
@@ -308,7 +309,7 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
     form = await request.form()
     uploads = iter_uploads(form)
     if not uploads:
-        return JSONResponse({"error": "missing file field"}, status_code=400)
+        return api_error_response("MISSING_FILE_FIELD", "Missing file field.", status_code=400)
 
     requested_tenant_id = str(form.get("tenant_id") or "").strip()
     requested_workspace_id = str(form.get("workspace_id") or "").strip()
@@ -319,18 +320,28 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
         if requested_workspace_id:
             requested_workspace_id = validate_scope_identifier(requested_workspace_id, field_name="workspace_id")
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return api_error_response("INVALID_SCOPE", str(exc), status_code=400)
 
     execution_data: ExecutionData | None = None
     if task_id:
         try:
             task, execution_data = _load_execution_for_task(task_id)
         except TaskNotExistError:
-            return JSONResponse({"error": "task not found", "task_id": task_id}, status_code=404)
+            return api_error_response("TASK_NOT_FOUND", "Task not found.", status_code=404, details={"taskId": task_id})
         if requested_tenant_id and requested_tenant_id != task.tenant_id:
-            return JSONResponse({"error": "task tenant/workspace mismatch", "task_id": task_id, "tenant_id": task.tenant_id, "workspace_id": task.workspace_id}, status_code=409)
+            return api_error_response(
+                "TASK_SCOPE_MISMATCH",
+                "Task tenant/workspace mismatch.",
+                status_code=409,
+                details={"taskId": task_id, "tenantId": task.tenant_id, "workspaceId": task.workspace_id},
+            )
         if requested_workspace_id and requested_workspace_id != task.workspace_id:
-            return JSONResponse({"error": "task tenant/workspace mismatch", "task_id": task_id, "tenant_id": task.tenant_id, "workspace_id": task.workspace_id}, status_code=409)
+            return api_error_response(
+                "TASK_SCOPE_MISMATCH",
+                "Task tenant/workspace mismatch.",
+                status_code=409,
+                details={"taskId": task_id, "tenantId": task.tenant_id, "workspaceId": task.workspace_id},
+            )
         tenant_id = task.tenant_id
         workspace_id = task.workspace_id
         scope_error = ensure_claimed_scope(request, tenant_id=tenant_id, workspace_id=workspace_id)
@@ -341,7 +352,12 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
         tenant_id = requested_tenant_id
         workspace_id = requested_workspace_id
         if not tenant_id or not workspace_id:
-            return JSONResponse({"error": "missing tenant/workspace scope", "required_form_fields": ["tenant_id", "workspace_id"]}, status_code=400)
+            return api_error_response(
+                "MISSING_SCOPE",
+                "Missing tenant/workspace scope.",
+                status_code=400,
+                details={"requiredFormFields": ["tenant_id", "workspace_id"]},
+            )
         scope_error = ensure_claimed_scope(request, tenant_id=tenant_id, workspace_id=workspace_id)
         if scope_error is not None:
             record_api_audit(request, action="asset.upload", outcome="denied", tenant_id=tenant_id, workspace_id=workspace_id, resource_type="asset_upload", metadata={"reason": "scope_forbidden"})
@@ -357,20 +373,35 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
         try:
             asset_kind = infer_asset_kind(getattr(upload, "filename", "upload.bin"), str(form.get("asset_kind") or ""))
         except ValueError as exc:
-            return JSONResponse({"error": str(exc), "file_name": safe_name}, status_code=400)
+            return api_error_response(
+                "INVALID_ASSET_KIND",
+                str(exc),
+                status_code=400,
+                details={"fileName": safe_name},
+            )
         temp_path = _build_temp_upload_path(target_dir, safe_name)
         try:
             payload_sha256, payload_size = await _stream_upload_to_temp(upload, temp_path, max_bytes=UPLOAD_MAX_FILE_BYTES)
             total_request_size += payload_size
             if total_request_size > UPLOAD_MAX_REQUEST_BYTES:
                 _cleanup_temp_upload(temp_path)
-                return JSONResponse({"error": "upload_request_too_large", "max_request_bytes": UPLOAD_MAX_REQUEST_BYTES}, status_code=413)
+                return api_error_response(
+                    "UPLOAD_REQUEST_TOO_LARGE",
+                    "Upload request is too large.",
+                    status_code=413,
+                    details={"maxRequestBytes": UPLOAD_MAX_REQUEST_BYTES},
+                )
             if task_id and execution_data is not None:
                 try:
                     existing_path, deduplicated = _find_existing_task_asset(execution_data, asset_kind=asset_kind, file_name=safe_name, file_sha256=payload_sha256)
                 except ValueError:
                     _cleanup_temp_upload(temp_path)
-                    return JSONResponse({"error": "file_name_conflict", "task_id": task_id, "file_name": safe_name}, status_code=409)
+                    return api_error_response(
+                        "FILE_NAME_CONFLICT",
+                        "File name conflict.",
+                        status_code=409,
+                        details={"taskId": task_id, "fileName": safe_name},
+                    )
                 if existing_path:
                     target_path = Path(existing_path)
                     if not deduplicated:
@@ -378,13 +409,23 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
                             target_path, deduplicated = _resolve_target_path(target_path.parent, target_path.name, payload_sha256)
                         except ValueError:
                             _cleanup_temp_upload(temp_path)
-                            return JSONResponse({"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name}, status_code=409)
+                            return api_error_response(
+                                "FILE_NAME_CONFLICT",
+                                "File name conflict.",
+                                status_code=409,
+                                details={"taskId": task_id, "fileName": target_path.name},
+                            )
                 else:
                     try:
                         target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
                     except ValueError:
                         _cleanup_temp_upload(temp_path)
-                        return JSONResponse({"error": "file_name_conflict", "task_id": task_id, "file_name": safe_name}, status_code=409)
+                        return api_error_response(
+                            "FILE_NAME_CONFLICT",
+                            "File name conflict.",
+                            status_code=409,
+                            details={"taskId": task_id, "fileName": safe_name},
+                        )
                 if deduplicated:
                     _cleanup_temp_upload(temp_path)
                 else:
@@ -392,7 +433,12 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
                         target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
                     except ValueError:
                         _cleanup_temp_upload(temp_path)
-                        return JSONResponse({"error": "file_name_conflict", "task_id": task_id, "file_name": target_path.name}, status_code=409)
+                        return api_error_response(
+                            "FILE_NAME_CONFLICT",
+                            "File name conflict.",
+                            status_code=409,
+                            details={"taskId": task_id, "fileName": target_path.name},
+                        )
                 _append_uploaded_asset(execution_data, file_name=target_path.name, file_path=str(target_path), asset_kind=asset_kind, file_sha256=payload_sha256)
                 execution_blackboard.write(tenant_id, task_id, execution_data)
                 execution_blackboard.persist(tenant_id, task_id)
@@ -403,7 +449,12 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
                     target_path, deduplicated = _resolve_target_path(target_dir, safe_name, payload_sha256)
                 except ValueError:
                     _cleanup_temp_upload(temp_path)
-                    return JSONResponse({"error": "file_name_conflict", "file_name": safe_name, "tenant_id": tenant_id, "workspace_id": workspace_id}, status_code=409)
+                    return api_error_response(
+                        "FILE_NAME_CONFLICT",
+                        "File name conflict.",
+                        status_code=409,
+                        details={"fileName": safe_name, "tenantId": tenant_id, "workspaceId": workspace_id},
+                    )
                 if deduplicated:
                     _cleanup_temp_upload(temp_path)
                 else:
@@ -411,13 +462,23 @@ async def upload_assets_from_request(request: Request) -> JSONResponse:
                         target_path, deduplicated = _finalize_staged_upload(temp_path, target_path, payload_sha256)
                     except ValueError:
                         _cleanup_temp_upload(temp_path)
-                        return JSONResponse({"error": "file_name_conflict", "file_name": safe_name, "tenant_id": tenant_id, "workspace_id": workspace_id}, status_code=409)
+                        return api_error_response(
+                            "FILE_NAME_CONFLICT",
+                            "File name conflict.",
+                            status_code=409,
+                            details={"fileName": safe_name, "tenantId": tenant_id, "workspaceId": workspace_id},
+                        )
                 if asset_kind == "business_document":
                     sync_workspace_knowledge_document(tenant_id, workspace_id, file_name=target_path.name, file_path=str(target_path), file_sha256=payload_sha256)
         except ValueError as exc:
             _cleanup_temp_upload(temp_path)
             if str(exc) == "upload_too_large":
-                return JSONResponse({"error": "upload_file_too_large", "file_name": safe_name, "max_file_bytes": UPLOAD_MAX_FILE_BYTES}, status_code=413)
+                return api_error_response(
+                    "UPLOAD_FILE_TOO_LARGE",
+                    "Uploaded file is too large.",
+                    status_code=413,
+                    details={"fileName": safe_name, "maxFileBytes": UPLOAD_MAX_FILE_BYTES},
+                )
             raise
         except Exception:
             _cleanup_temp_upload(temp_path)

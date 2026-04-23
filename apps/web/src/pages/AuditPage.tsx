@@ -1,15 +1,49 @@
 import { PageCard, SectionHeader } from '@/components/ui'
-import type { AuditListItem } from '@/lib/types'
+import type { AuditListResponse } from '@/lib/types'
 import { formatDate } from '@/lib/utils'
 
-export function AuditPage({ items }: { items: AuditListItem[] }) {
+export function AuditPage({
+  data,
+  page,
+  onPageChange,
+}: {
+  data: AuditListResponse | undefined
+  page: number
+  onPageChange: (page: number) => void
+}) {
+  const items = data?.items ?? []
+  const pagination = data?.pagination
+  const totalItems = pagination?.totalItems ?? 0
+  const totalPages = pagination?.totalPages ?? 1
+
   return (
     <PageCard>
       <SectionHeader title="审计记录" description="按时间顺序查看当前工作区的重要操作和结果。" />
       <div className="grid gap-4 border-b border-border px-6 py-5 md:grid-cols-3">
-        <AuditMetric label="记录总数" value={String(items.length)} />
-        <AuditMetric label="成功" value={String(items.filter((item) => item.outcome === 'success').length)} />
-        <AuditMetric label="失败/拒绝" value={String(items.filter((item) => item.outcome !== 'success').length)} />
+        <AuditMetric label="记录总数" value={String(totalItems)} />
+        <AuditMetric label="当前页成功" value={String(items.filter((item) => item.outcome === 'success').length)} />
+        <AuditMetric label="当前页失败/拒绝" value={String(items.filter((item) => item.outcome !== 'success').length)} />
+      </div>
+      <div className="flex items-center justify-between border-b border-border px-6 py-4 text-sm text-muted">
+        <span>第 {page} / {totalPages} 页</span>
+        <div className="flex gap-2">
+          <button
+            className="rounded-full border border-border px-3 py-1 transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={page <= 1}
+            type="button"
+            onClick={() => onPageChange(page - 1)}
+          >
+            上一页
+          </button>
+          <button
+            className="rounded-full border border-border px-3 py-1 transition hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={page >= totalPages}
+            type="button"
+            onClick={() => onPageChange(page + 1)}
+          >
+            下一页
+          </button>
+        </div>
       </div>
       <div className="overflow-x-auto px-4 pb-4">
         <table className="min-w-full border-separate border-spacing-y-2 text-sm">

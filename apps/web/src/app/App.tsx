@@ -1,5 +1,5 @@
 import { QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 
 import { AppShell } from '@/app/AppShell'
@@ -22,10 +22,22 @@ function loadStoredValue(key: string, fallback: string) {
   return window.localStorage.getItem(key) ?? fallback
 }
 
+function resolveWorkspaceId(session: AppSession | undefined, storedWorkspaceId: string) {
+  if (!session) {
+    return storedWorkspaceId
+  }
+  const normalizedStoredWorkspaceId = storedWorkspaceId.trim()
+  if (normalizedStoredWorkspaceId && session.grants.some((grant) => grant.workspaceId === normalizedStoredWorkspaceId)) {
+    return normalizedStoredWorkspaceId
+  }
+  return session.currentWorkspaceId ?? session.grants[0]?.workspaceId ?? ''
+}
+
 function AppInner() {
   const [apiBaseUrl, setApiBaseUrl] = useState(() => loadStoredValue('lite-interpreter:apiBaseUrl', DEFAULT_API_BASE_URL))
   const [accessToken, setAccessToken] = useState(() => loadStoredValue('lite-interpreter:accessToken', ''))
   const [workspaceId, setWorkspaceId] = useState(() => window.localStorage.getItem('lite-interpreter:workspaceId') ?? '')
+  const [auditPage, setAuditPage] = useState(1)
 
   const config = useMemo<ApiClientConfig>(
     () => ({ apiBaseUrl, accessToken, workspaceId: workspaceId || undefined }),
@@ -41,11 +53,22 @@ function AppInner() {
   })
 
   const session = sessionQuery.data as AppSession | undefined
-  const effectiveWorkspaceId = workspaceId || session?.currentWorkspaceId || ''
+  const effectiveWorkspaceId = useMemo(() => resolveWorkspaceId(session, workspaceId), [session, workspaceId])
   const effectiveConfig = useMemo<ApiClientConfig>(
     () => ({ ...config, workspaceId: effectiveWorkspaceId || undefined }),
     [config, effectiveWorkspaceId],
   )
+
+  useEffect(() => {
+    if (effectiveWorkspaceId && effectiveWorkspaceId !== workspaceId) {
+      window.localStorage.setItem('lite-interpreter:workspaceId', effectiveWorkspaceId)
+      setWorkspaceId(effectiveWorkspaceId)
+    }
+  }, [effectiveWorkspaceId, workspaceId])
+
+  useEffect(() => {
+    setAuditPage(1)
+  }, [effectiveWorkspaceId])
 
   const analysesQuery = useQuery({
     queryKey: ['analyses', effectiveConfig],
@@ -66,8 +89,8 @@ function AppInner() {
   })
 
   const auditQuery = useQuery({
-    queryKey: ['audit', effectiveConfig],
-    queryFn: () => api.listAudit(effectiveConfig),
+    queryKey: ['audit', effectiveConfig, auditPage],
+    queryFn: () => api.listAudit(effectiveConfig, { page: auditPage, pageSize: 20 }),
     enabled: Boolean(session?.authenticated && effectiveWorkspaceId && session.uiCapabilities.canViewAudit),
   })
 
@@ -86,17 +109,11 @@ function AppInner() {
     },
   })
 
-  function persistConnection(nextApiBaseUrl: string, nextAccessToken: string, nextWorkspaceId?: string | null) {
+  function persistConnection(nextApiBaseUrl: string, nextAccessToken: string) {
     window.localStorage.setItem('lite-interpreter:apiBaseUrl', nextApiBaseUrl)
     window.localStorage.setItem('lite-interpreter:accessToken', nextAccessToken)
-    if (nextWorkspaceId) {
-      window.localStorage.setItem('lite-interpreter:workspaceId', nextWorkspaceId)
-    }
     setApiBaseUrl(nextApiBaseUrl)
     setAccessToken(nextAccessToken)
-    if (nextWorkspaceId) {
-      setWorkspaceId(nextWorkspaceId)
-    }
   }
 
   if (!accessToken || sessionQuery.isError || session?.authenticated === false) {
@@ -127,10 +144,14 @@ function AppInner() {
             onWorkspaceChange={(nextWorkspaceId) => {
               window.localStorage.setItem('lite-interpreter:workspaceId', nextWorkspaceId)
               setWorkspaceId(nextWorkspaceId)
+              setAuditPage(1)
             }}
             onSignOut={() => {
               window.localStorage.removeItem('lite-interpreter:accessToken')
+              window.localStorage.removeItem('lite-interpreter:workspaceId')
               setAccessToken('')
+              setWorkspaceId('')
+              setAuditPage(1)
             }}
           />
         }
@@ -147,7 +168,10 @@ function AppInner() {
         />
         <Route path="assets" element={<AssetsPage assets={assetsQuery.data?.items ?? []} onUpload={(input) => uploadAssets.mutateAsync(input)} />} />
         <Route path="methods" element={<MethodsPage methods={methodsQuery.data?.items ?? []} />} />
-        <Route path="audit" element={<AuditPage items={auditQuery.data?.items ?? []} />} />
+        <Route
+          path="audit"
+          element={<AuditPage data={auditQuery.data} page={auditPage} onPageChange={setAuditPage} />}
+        />
         <Route
           path="settings/session"
           element={
@@ -155,7 +179,7 @@ function AppInner() {
               apiBaseUrl={apiBaseUrl}
               accessToken={accessToken}
               onSave={({ apiBaseUrl: nextApiBaseUrl, accessToken: nextAccessToken }) => {
-                persistConnection(nextApiBaseUrl, nextAccessToken, effectiveWorkspaceId)
+                persistConnection(nextApiBaseUrl, nextAccessToken)
                 client.invalidateQueries()
               }}
             />

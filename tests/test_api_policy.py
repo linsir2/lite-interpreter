@@ -50,7 +50,8 @@ def test_policy_api_is_disabled_by_default():
     response = asyncio.run(get_harness_policy(_make_request("/api/policy")))
     body = json.loads(response.body.decode())
     assert response.status_code == 404
-    assert body["error"] == "policy api disabled"
+    assert body["error"]["code"] == "ENDPOINT_DISABLED"
+    assert body["error"]["message"] == "policy api disabled"
 
 
 def test_update_harness_policy_persists_and_refreshes(tmp_path, monkeypatch):

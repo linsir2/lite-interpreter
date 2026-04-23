@@ -95,6 +95,10 @@ conda run -n lite_interpreter python scripts/smoke_deerflow_bridge.py
 重点验证：
 
 - `/api/app/*` 合同字段与行为
+- app-facing 错误 envelope 是否统一
+- `page` / `pageSize` 参数校验是否稳定
+- 审计分页是否返回真实 `totalItems`
+- 结果产物下载边界是否仍被限制在当前 task scope 内
 - 旧公开产品接口是否已移除
 - 认证、工作区 scope、角色控制
 - diagnostics / conformance / policy 接口
@@ -143,7 +147,7 @@ conda run -n lite_interpreter python -m pytest -q tests/test_docs_consistency.py
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
-conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/test_api_auth.py tests/test_api_route_surface.py
+conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/test_api_auth.py tests/test_api_route_surface.py tests/test_api_policy.py
 ```
 
 ### 改 DAG / 动态运行时 / 执行链
@@ -165,7 +169,7 @@ npm run lint
 npm run build
 
 cd /home/linsir365/projects/lite-interpreter
-conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/test_api_route_surface.py
+conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/test_api_auth.py tests/test_api_route_surface.py
 ```
 
 ## 5. 如何读 `skipped`
@@ -181,5 +185,5 @@ conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/te
 
 1. 长任务中的前端事件反馈与结果产物体验
 2. skill usage / outcome 的并发计数一致性
-3. 多文件上传 / 大文件限制的更细粒度回归
+3. 多文件上传 / 大文件限制 / 结构化错误的更细粒度回归
 4. 对配置默认值与前端联调约定的契约测试

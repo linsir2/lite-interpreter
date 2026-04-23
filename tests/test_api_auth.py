@@ -61,6 +61,24 @@ def test_authenticate_request_accepts_configured_bearer_token(monkeypatch):
     assert result.subject == "secret-token"
 
 
+def test_authenticate_request_returns_structured_error_for_invalid_token(monkeypatch):
+    monkeypatch.setattr("src.api.auth.API_AUTH_REQUIRED", True)
+    monkeypatch.setattr(
+        "src.api.auth.API_AUTH_TOKENS",
+        {"secret-token": {"tenant_id": "tenant-auth", "workspace_id": "ws-auth", "role": "operator"}},
+    )
+    request = _make_request(
+        method="GET",
+        path="/api/app/session",
+        headers=[(b"authorization", b"Bearer wrong-token")],
+    )
+    response = authenticate_request(request)
+    assert response is not None
+    body = json.loads(response.body.decode())
+    assert response.status_code == 403
+    assert body["error"]["code"] == "INVALID_TOKEN"
+
+
 def test_get_app_session_returns_authenticated_identity():
     request = _make_request(
         method="GET",

@@ -305,18 +305,32 @@ def resolve_analysis_output_content(task: TaskGlobalState, output_id: str) -> tu
     target = next((item for item in build_analysis_outputs(task, execution_data, outputs) if item.id == output_id), None)
     if target is None:
         return None
-    index = int(output_id.rsplit("_", 1)[-1]) - 1
+    try:
+        index = int(output_id.rsplit("_", 1)[-1]) - 1
+    except ValueError:
+        return None
     if index < 0 or index >= len(outputs):
         return None
     raw_output = dict(outputs[index] or {})
     path_value = str(raw_output.get("path") or "").strip()
     if not path_value:
         return None
-    safe_root_candidates = [Path(UPLOAD_DIR).resolve(), Path(OUTPUT_DIR).resolve()]
+    safe_root_candidates = [
+        (Path(UPLOAD_DIR).resolve() / task.tenant_id / task.workspace_id).resolve(),
+        (Path(OUTPUT_DIR).resolve() / task.tenant_id / task.workspace_id).resolve(),
+    ]
     path = Path(path_value).resolve()
-    if not any(str(path).startswith(str(root)) for root in safe_root_candidates):
+    if not any(_path_within_root(path, root) for root in safe_root_candidates):
         return None
     return read_artifact_content({"path": str(path)})
+
+
+def _path_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def build_analysis_events(task: TaskGlobalState, *, after_event_id: str | None = None) -> tuple[list[AnalysisEventItem], str | None]:
@@ -488,5 +502,9 @@ def list_workspace_methods_for_app(tenant_id: str, workspace_id: str) -> list[Me
     return items
 
 
-def list_workspace_audit_items_for_app(tenant_id: str, workspace_id: str, **filters: Any) -> list[dict[str, Any]]:
-    return AuditRepo.list_records(tenant_id, workspace_id, **filters)
+def list_workspace_audit_items_for_app(
+    tenant_id: str,
+    workspace_id: str,
+    **filters: Any,
+) -> tuple[list[dict[str, Any]], int]:
+    return AuditRepo.query_records(tenant_id, workspace_id, **filters)

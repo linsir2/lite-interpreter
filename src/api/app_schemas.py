@@ -5,7 +5,9 @@ from __future__ import annotations
 from math import ceil
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+
+from src.api.schemas import AppPaginationQuery
 
 
 class AppErrorBody(BaseModel):
@@ -209,11 +211,8 @@ class AuditListResponse(BaseModel):
     currentWorkspaceId: StrictStr
 
 
-class AppAuditQuery(BaseModel):
+class AppAuditQuery(AppPaginationQuery):
     model_config = ConfigDict(extra="forbid")
-
-    page: StrictInt = 1
-    pageSize: StrictInt = 20
     subject: StrictStr | None = None
     role: StrictStr | None = None
     action: StrictStr | None = None

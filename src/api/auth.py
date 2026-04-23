@@ -10,6 +10,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from src.api.schemas import api_error_response
+
 
 @dataclass(frozen=True)
 class AuthGrant:
@@ -104,13 +106,17 @@ def authenticate_request(request: Request) -> AuthContext | JSONResponse | None:
     if not enabled:
         return None
     if not token_store:
-        return JSONResponse({"error": "api auth misconfigured"}, status_code=503)
+        return api_error_response(
+            "AUTH_MISCONFIGURED",
+            "API authentication is misconfigured.",
+            status_code=503,
+        )
     token = request_bearer_token(request)
     if not token:
-        return JSONResponse({"error": "authentication required"}, status_code=401)
+        return api_error_response("AUTH_REQUIRED", "Authentication required.", status_code=401)
     auth_context = token_store.get(token)
     if auth_context is None:
-        return JSONResponse({"error": "invalid api token"}, status_code=403)
+        return api_error_response("INVALID_TOKEN", "Invalid API token.", status_code=403)
     return auth_context
 
 
@@ -133,16 +139,17 @@ def require_request_role(request: Request, minimum_role: str) -> JSONResponse | 
     if auth_context is None and (state is None or not getattr(state, "auth_checked", False)):
         return None
     if auth_context is None:
-        return JSONResponse({"error": "authentication required"}, status_code=401)
+        return api_error_response("AUTH_REQUIRED", "Authentication required.", status_code=401)
     if role_allows(auth_context.role, minimum_role):
         return None
-    return JSONResponse(
-        {
-            "error": "insufficient role",
-            "required_role": minimum_role,
-            "current_role": auth_context.role,
-        },
+    return api_error_response(
+        "INSUFFICIENT_ROLE",
+        "The current role does not have access to this endpoint.",
         status_code=403,
+        details={
+            "requiredRole": minimum_role,
+            "currentRole": auth_context.role,
+        },
     )
 
 

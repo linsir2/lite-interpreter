@@ -89,8 +89,15 @@
 - 默认通过 Bearer Token 访问 API
 - `/health` 之外的受保护接口按角色校验
 - 不再支持 query-string token
-- 前端通过 `/api/app/session` 完成会话 bootstrap
+- 前端通过 `/api/app/session` 完成会话 bootstrap，并以当前会话可用 workspace 作为产品面真相源
 - `viewer / operator / admin` 三层角色仍然保留
+
+### app-facing 合同补充约定
+
+- `/api/app/*` 的列表接口统一支持 `page` / `pageSize`
+- 非法分页参数、认证失败、scope 不匹配、上传失败等错误统一返回结构化 error envelope
+- `Audit` 页面读取真实分页结果，不再依赖隐式截断后的假总数
+- 结果产物下载只允许访问当前任务所属 tenant/workspace 的 upload/output 目录
 
 ## 快速开始
 

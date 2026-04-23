@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from config.settings import API_AUTH_REQUIRED
 from pydantic import ValidationError
@@ -38,23 +37,10 @@ from src.api.app_schemas import (
 from src.api.audit_logging import record_api_audit
 from src.api.auth import request_auth_context, require_request_role, role_allows
 from src.api.request_scope import ensure_claimed_scope, require_request_scope
-from src.api.schemas import validation_error_payload
+from src.api.schemas import AppPaginationQuery, api_error_response, validation_error_details
 from src.api.services.asset_service import attach_workspace_assets_to_execution, upload_assets_from_request
 from src.api.services.task_flow_service import create_execution_data_for_task, schedule_task_flow
 from src.blackboard import GlobalStatus, TaskNotExistError, execution_blackboard, global_blackboard
-
-
-def _app_error(code: str, message: str, *, status_code: int, details: dict[str, Any] | None = None) -> JSONResponse:
-    return JSONResponse(
-        {
-            "error": {
-                "code": code,
-                "message": message,
-                "details": details or {},
-            }
-        },
-        status_code=status_code,
-    )
 
 
 def _resolve_app_scope(request: Request, *, requested_workspace_id: str | None = None) -> tuple[str, str] | JSONResponse:
@@ -68,7 +54,7 @@ def _resolve_app_scope(request: Request, *, requested_workspace_id: str | None =
         ).strip()
         grant = next((item for item in auth_context.grants if item.workspace_id == workspace_id), None)
         if grant is None:
-            return _app_error(
+            return api_error_response(
                 "WORKSPACE_FORBIDDEN",
                 "The selected workspace is not available in the current session.",
                 status_code=403,
@@ -87,7 +73,7 @@ async def get_app_session(request: Request) -> JSONResponse:
         scope = require_request_scope(request)
         if isinstance(scope, JSONResponse):
             if API_AUTH_REQUIRED:
-                return _app_error("AUTH_REQUIRED", "Authentication required.", status_code=401)
+                return api_error_response("AUTH_REQUIRED", "Authentication required.", status_code=401)
             return JSONResponse(
                 AppSessionResponse(
                     authenticated=False,
@@ -156,19 +142,31 @@ async def list_app_analyses(request: Request) -> JSONResponse:
     if scope_error is not None:
         return scope_error
 
-    page = max(1, int(str(request.query_params.get("page") or "1")))
-    page_size = max(1, min(100, int(str(request.query_params.get("pageSize") or "20"))))
+    try:
+        pagination = AppPaginationQuery.model_validate(
+            {
+                "page": request.query_params.get("page") or "1",
+                "pageSize": request.query_params.get("pageSize") or "20",
+            }
+        )
+    except ValidationError as exc:
+        return api_error_response(
+            "VALIDATION_ERROR",
+            "Invalid analyses query.",
+            status_code=422,
+            details=validation_error_details(exc),
+        )
     status_filter = str(request.query_params.get("status") or "").strip()
     tasks = global_blackboard.list_workspace_tasks(tenant_id, workspace_id)
     if status_filter:
         tasks = [task for task in tasks if task.global_status.value == status_filter]
     items = [build_analysis_list_item(task) for task in tasks]
     total_items = len(items)
-    start = (page - 1) * page_size
-    paginated = items[start : start + page_size]
+    start = (pagination.page - 1) * pagination.pageSize
+    paginated = items[start : start + pagination.pageSize]
     payload = AnalysisListResponse(
         items=paginated,
-        pagination=PaginationMeta.build(page=page, page_size=page_size, total_items=total_items),
+        pagination=PaginationMeta.build(page=pagination.page, page_size=pagination.pageSize, total_items=total_items),
         currentWorkspaceId=workspace_id,
     )
     record_api_audit(
@@ -190,15 +188,15 @@ async def create_app_analysis(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except ValueError:
-        return _app_error("INVALID_JSON", "Invalid JSON body.", status_code=400)
+        return api_error_response("INVALID_JSON", "Invalid JSON body.", status_code=400)
     try:
         command = CreateAnalysisRequest.model_validate(body)
     except ValidationError as exc:
-        return _app_error(
+        return api_error_response(
             "VALIDATION_ERROR",
             "Invalid analysis request.",
             status_code=422,
-            details=validation_error_payload(exc),
+            details=validation_error_details(exc),
         )
 
     scope = _resolve_app_scope(request, requested_workspace_id=command.workspaceId)
@@ -258,13 +256,13 @@ async def get_app_analysis_detail(request: Request) -> JSONResponse:
     try:
         task = global_blackboard.get_task_state(analysis_id)
     except TaskNotExistError:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     scope = _resolve_app_scope(request)
     if isinstance(scope, JSONResponse):
         return scope
     tenant_id, workspace_id = scope
     if task.tenant_id != tenant_id or task.workspace_id != workspace_id:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     payload = build_analysis_detail(task)
     return JSONResponse(payload.model_dump(mode="json"))
 
@@ -277,13 +275,13 @@ async def get_app_analysis_events(request: Request) -> JSONResponse:
     try:
         task = global_blackboard.get_task_state(analysis_id)
     except TaskNotExistError:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     scope = _resolve_app_scope(request)
     if isinstance(scope, JSONResponse):
         return scope
     tenant_id, workspace_id = scope
     if task.tenant_id != tenant_id or task.workspace_id != workspace_id:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     after_event_id = str(request.query_params.get("afterEventId") or "").strip() or None
     events, last_event_id = build_analysis_events(task, after_event_id=after_event_id)
     payload = AnalysisEventsResponse(analysisId=analysis_id, lastEventId=last_event_id, events=events)
@@ -299,16 +297,16 @@ async def get_app_analysis_output(request: Request) -> Response:
     try:
         task = global_blackboard.get_task_state(analysis_id)
     except TaskNotExistError:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     scope = _resolve_app_scope(request)
     if isinstance(scope, JSONResponse):
         return scope
     tenant_id, workspace_id = scope
     if task.tenant_id != tenant_id or task.workspace_id != workspace_id:
-        return _app_error("NOT_FOUND", "Analysis not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Analysis not found.", status_code=404)
     content = resolve_analysis_output_content(task, output_id)
     if content is None:
-        return _app_error("NOT_FOUND", "Output not found.", status_code=404)
+        return api_error_response("NOT_FOUND", "Output not found.", status_code=404)
     payload, file_name, media_type = content
     return Response(
         payload,
@@ -328,14 +326,26 @@ async def list_app_assets(request: Request) -> JSONResponse:
     scope_error = ensure_claimed_scope(request, tenant_id=tenant_id, workspace_id=workspace_id)
     if scope_error is not None:
         return scope_error
-    page = max(1, int(str(request.query_params.get("page") or "1")))
-    page_size = max(1, min(100, int(str(request.query_params.get("pageSize") or "20"))))
+    try:
+        pagination = AppPaginationQuery.model_validate(
+            {
+                "page": request.query_params.get("page") or "1",
+                "pageSize": request.query_params.get("pageSize") or "20",
+            }
+        )
+    except ValidationError as exc:
+        return api_error_response(
+            "VALIDATION_ERROR",
+            "Invalid assets query.",
+            status_code=422,
+            details=validation_error_details(exc),
+        )
     items = list_workspace_assets_for_app(tenant_id, workspace_id)
     total_items = len(items)
-    start = (page - 1) * page_size
+    start = (pagination.page - 1) * pagination.pageSize
     payload = AssetListResponse(
-        items=items[start : start + page_size],
-        pagination=PaginationMeta.build(page=page, page_size=page_size, total_items=total_items),
+        items=items[start : start + pagination.pageSize],
+        pagination=PaginationMeta.build(page=pagination.page, page_size=pagination.pageSize, total_items=total_items),
         currentWorkspaceId=workspace_id,
     )
     return JSONResponse(payload.model_dump(mode="json"))
@@ -393,8 +403,8 @@ async def list_app_audit(request: Request) -> JSONResponse:
     try:
         query = AppAuditQuery.model_validate(
             {
-                "page": int(str(request.query_params.get("page") or "1")),
-                "pageSize": int(str(request.query_params.get("pageSize") or "20")),
+                "page": request.query_params.get("page") or "1",
+                "pageSize": request.query_params.get("pageSize") or "20",
                 "subject": request.query_params.get("subject"),
                 "role": request.query_params.get("role"),
                 "action": request.query_params.get("action"),
@@ -404,9 +414,14 @@ async def list_app_audit(request: Request) -> JSONResponse:
             }
         )
     except ValidationError as exc:
-        return _app_error("VALIDATION_ERROR", "Invalid audit query.", status_code=422, details=validation_error_payload(exc))
+        return api_error_response(
+            "VALIDATION_ERROR",
+            "Invalid audit query.",
+            status_code=422,
+            details=validation_error_details(exc),
+        )
 
-    all_items = list_workspace_audit_items_for_app(
+    page_items, total_items = list_workspace_audit_items_for_app(
         tenant_id,
         workspace_id,
         subject=query.subject,
@@ -415,11 +430,9 @@ async def list_app_audit(request: Request) -> JSONResponse:
         outcome=query.outcome,
         task_id=query.taskId,
         execution_id=query.executionId,
-        limit=500,
+        page=query.page,
+        page_size=query.pageSize,
     )
-    total_items = len(all_items)
-    start = (query.page - 1) * query.pageSize
-    page_items = all_items[start : start + query.pageSize]
     payload = {
         "items": [
             {
