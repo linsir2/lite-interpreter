@@ -4,7 +4,7 @@
 
 它把“资料上传、任务路由、动态研究、代码执行、结果产物、审计回放”放进同一条工程闭环里：前端是一个真正的 React/Vite Web 工作台，后端暴露稳定的 `/api/app/*` app-facing 合同，底层继续由 DAG、Blackboard、Sandbox、KAG、SkillNet 和 DeerFlow sidecar 协同完成分析任务。
 
-当前成熟度、测试基线、已知热点统一以 `docs/project_status.md` 为准；本文件负责回答“这个项目是什么、现在怎么跑、接下来该看哪份文档”。
+当前成熟度、测试基线、已知热点统一以 `docs/reference/project-status.md` 为准；本文件负责回答“这个项目是什么、现在怎么跑、接下来该看哪份文档”。
 
 ## 这是什么 / 不是什么
 
@@ -155,29 +155,29 @@ cd apps/web && npm run lint && npm run build
 ### 第一次接手项目
 
 1. `docs/README.md`
-2. `docs/project_status.md`
-3. `docs/architecture.md`
+2. `docs/reference/project-status.md`
+3. `docs/explanation/architecture.md`
 4. `directory.txt`
-5. `docs/development_guide.md`
+5. `docs/how-to/development.md`
 
 ### 想跑起来并验证产品面
 
-1. `docs/user_guide.md`
-2. `docs/deployment.md`
-3. `docs/testing.md`
+1. `docs/tutorials/first-analysis.md`
+2. `docs/how-to/deployment.md`
+3. `docs/how-to/testing.md`
 4. `scripts/create_analysis.py`
 
 ### 如果你是业务同学，只想先把一次分析跑通
 
-1. `docs/user_guide.md`
+1. `docs/tutorials/first-analysis.md`
 2. 找管理员拿 API 地址和 Bearer Token
 3. 用小范围资料先做一次主题明确的分析
 
 ### 想理解工程判断与后续方向
 
 1. `项目二.md`
-2. `docs/project_status.md`
-3. `docs/architecture.md`
+2. `docs/reference/project-status.md`
+3. `docs/explanation/architecture.md`
 
 ## 仓库导览
 

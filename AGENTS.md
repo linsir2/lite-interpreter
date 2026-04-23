@@ -6,8 +6,8 @@
 
 - `README.md`
 - `docs/README.md`
-- `docs/project_status.md`
-- `docs/architecture.md`
+- `docs/reference/project-status.md`
+- `docs/explanation/architecture.md`
 - `项目二.md`
 
 ## 1. 项目当前定位
@@ -83,13 +83,13 @@
 
 改动仓库时，优先遵守下面的文档职责：
 
-- `docs/project_status.md`：当前状态、测试基线、热点、非目标的唯一真相源
+- `docs/reference/project-status.md`：当前状态、测试基线、热点、非目标的唯一真相源
 - `README.md`：仓库入口，不维护大量易过期细节
-- `docs/architecture.md`：只解释结构与边界
-- `docs/deployment.md`：只讲运行、配置、排障
-- `docs/development_guide.md`：只讲改动流程与开发入口
-- `docs/testing.md`：只讲验证方法与测试分层
-- `docs/user_guide.md`：只讲业务用户操作路径
+- `docs/explanation/architecture.md`：只解释结构与边界
+- `docs/how-to/deployment.md`：只讲运行、配置、排障
+- `docs/how-to/development.md`：只讲改动流程与开发入口
+- `docs/how-to/testing.md`：只讲验证方法与测试分层
+- `docs/tutorials/first-analysis.md`：只讲业务用户操作路径
 - `directory.txt`：只做目录导览
 
 ## 5. 高风险漂移点
@@ -106,9 +106,9 @@
 
 - `README.md`
 - `docs/README.md`
-- `docs/deployment.md`
-- `docs/development_guide.md`
-- `docs/testing.md`
+- `docs/how-to/deployment.md`
+- `docs/how-to/development.md`
+- `docs/how-to/testing.md`
 - `directory.txt`
 - `.env.example`
 - `config/settings.py`
@@ -131,7 +131,7 @@
 
 - `.env.example`
 - `config/settings.py`
-- `docs/deployment.md`
+- `docs/how-to/deployment.md`
 
 这三处应当一起改
 

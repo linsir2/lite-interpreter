@@ -30,13 +30,17 @@ lite-interpreter
 │           ├── pages/            # Analyses / Assets / Methods / Audit / Session 页面
 │           └── styles.css        # 全局设计语言与主题样式
 ├── docs/
-│   ├── README.md                 # 文档地图：每份文档的职责与阅读路径
-│   ├── user_guide.md             # 业务使用手册：连接、上传、分析、查看结果
-│   ├── project_status.md         # 状态、验证基线、热点、非目标真相源
-│   ├── architecture.md           # 架构说明：系统分层、主链路、边界
-│   ├── development_guide.md      # 开发手册：改动入口、流程、验证要求
-│   ├── deployment.md             # 部署与运行说明：配置、启动、排障
-│   └── testing.md                # 测试说明：测试分层、命令、最低验证要求
+│   ├── README.md                 # 文档地图：文档分层、阅读路径、维护规则
+│   ├── tutorials/
+│   │   └── first-analysis.md     # 业务用户上手：连接、上传、分析、查看结果
+│   ├── how-to/
+│   │   ├── deployment.md         # 运行与部署：配置、启动、排障
+│   │   ├── development.md        # 开发手册：改动入口、流程、验证要求
+│   │   └── testing.md            # 测试说明：测试分层、命令、最低验证要求
+│   ├── reference/
+│   │   └── project-status.md     # 状态、验证基线、热点、非目标真相源
+│   └── explanation/
+│       └── architecture.md       # 架构说明：系统分层、主链路、边界
 ├── scripts/
 │   ├── check_hybrid_readiness.py # 检查关键混合编排文件是否齐全
 │   ├── create_analysis.py        # 调用 app-facing API 创建分析
@@ -71,7 +75,7 @@ lite-interpreter
 推荐阅读顺序：
 1. README.md
 2. docs/README.md
-3. docs/project_status.md
-4. docs/architecture.md
+3. docs/reference/project-status.md
+4. docs/explanation/architecture.md
 5. directory.txt
-6. docs/development_guide.md
+6. docs/how-to/development.md

@@ -14,12 +14,12 @@ def _read(relative_path: str) -> str:
 
 def test_project_status_is_the_only_hardcoded_test_baseline_source():
     baseline_pattern = re.compile(r"\b\d+\s+passed(?:,\s+\d+\s+skipped)?\b")
-    allowed_paths = {"docs/project_status.md"}
+    allowed_paths = {"docs/reference/project-status.md"}
     checked_paths = [
         "README.md",
-        "docs/project_status.md",
-        "docs/development_guide.md",
-        "docs/testing.md",
+        "docs/reference/project-status.md",
+        "docs/how-to/development.md",
+        "docs/how-to/testing.md",
     ]
 
     for relative_path in checked_paths:
@@ -28,21 +28,22 @@ def test_project_status_is_the_only_hardcoded_test_baseline_source():
             assert matches, f"{relative_path} should record the current verified baseline"
         else:
             assert not matches, (
-                f"{relative_path} should reference docs/project_status.md instead of hardcoding test counts"
+                f"{relative_path} should reference docs/reference/project-status.md instead of hardcoding test counts"
             )
 
 
 def test_primary_docs_reference_project_status_truth_source():
     primary_docs = [
         "README.md",
-        "docs/architecture.md",
-        "docs/development_guide.md",
-        "docs/deployment.md",
-        "docs/testing.md",
+        "docs/tutorials/first-analysis.md",
+        "docs/explanation/architecture.md",
+        "docs/how-to/development.md",
+        "docs/how-to/deployment.md",
+        "docs/how-to/testing.md",
         "项目二.md",
     ]
 
     for relative_path in primary_docs:
-        assert "docs/project_status.md" in _read(relative_path), (
-            f"{relative_path} should reference docs/project_status.md"
+        assert "docs/reference/project-status.md" in _read(relative_path), (
+            f"{relative_path} should reference docs/reference/project-status.md"
         )
