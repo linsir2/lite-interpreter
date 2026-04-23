@@ -42,6 +42,7 @@ lite-interpreter
 │   └── explanation/
 │       └── architecture.md       # 架构说明：系统分层、主链路、边界
 ├── scripts/
+│   ├── audit_local_residue.py    # 审计并按需清理本地历史残留（默认 dry-run）
 │   ├── check_hybrid_readiness.py # 检查关键混合编排文件是否齐全
 │   ├── create_analysis.py        # 调用 app-facing API 创建分析
 │   ├── run_deerflow_sidecar.py   # 启动 DeerFlow sidecar

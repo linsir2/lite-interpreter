@@ -167,16 +167,9 @@ make lint-all
 
 ### 7.2 已经不该继续使用的旧接口
 
-不要再把下面这些当产品前端依赖：
+不要再把 legacy task / execution / upload / session 风格的公开接口当产品前端依赖。
 
-- `/api/tasks*`
-- `/api/executions*`
-- `/api/uploads`
-- `/api/knowledge/assets`
-- `/api/skills`
-- `/api/audit/logs`
-- `/api/session/login`
-- `/api/session/me`
+当前产品前端的正式合同只有 `/api/app/*`；旧公开接口的精确移除集合由 `tests/test_api_route_surface.py` 持续守卫。
 
 ## 8. 结构化输入边界
 
@@ -252,3 +245,40 @@ conda run -n lite_interpreter python scripts/create_analysis.py --api-base-url h
 - 前端是否走 `outputs/{output_id}` 内容 API
 - 产物路径是否位于受控上传目录或输出目录下
 - 是否误把任意绝对路径当作前端直连文件
+
+## 11. 本地历史残留清理
+
+迁移到真实 Web 前端后，开发机上可能仍残留一些旧时代目录或本地状态。
+
+先做 dry-run 审计：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+python scripts/audit_local_residue.py
+```
+
+脚本会把结果分成两类：
+
+- `safe historical residue`
+  - 明确属于旧产品面残留，可在你确认后显式删除
+- `review-first local state`
+  - 可能仍是当前运行态、日志或本地工具状态，只建议人工检查，不默认删除
+
+如果你确认要删除安全残留，再显式执行：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+python scripts/audit_local_residue.py --delete
+```
+
+当前默认的安全残留清单主要覆盖：
+
+- 旧前端留下的本地偏好目录（由脚本负责精确识别）
+
+而下面这些目录或文件只会被报告，不会被脚本自动删除：
+
+- `.deer-flow/`
+- `.omx/`
+- `data/`
+- `logs/`
+- `config.yaml`

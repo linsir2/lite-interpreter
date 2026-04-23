@@ -163,7 +163,7 @@ conda run -n lite_interpreter python scripts/smoke_deerflow_bridge.py
 
 ### 6.1 改前端时
 
-- 不要重新引入旧 `/api/tasks*` 或 `/api/executions*` 依赖
+- 不要重新引入旧 task / execution 风格公开接口依赖
 - 不要在浏览器里绕开 `Authorization` header 改走 query token
 - 不要让页面自己拼第二套状态真相
 
@@ -176,7 +176,7 @@ conda run -n lite_interpreter python scripts/smoke_deerflow_bridge.py
 ### 6.3 改配置时
 
 - `.env.example`、`config/settings.py`、`docs/how-to/deployment.md` 必须同步
-- 默认值要服务当前前端/API 现实，不要继续保留 Streamlit 时代的残留默认项
+- 默认值要服务当前前端/API 现实，不要继续保留旧产品面时代的残留默认项
 
 ### 6.4 改文档时
 

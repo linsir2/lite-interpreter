@@ -66,11 +66,11 @@ Web frontend
 - 管理会话、工作区切换与页面路由
 - 渲染分析、资料、方法、审计四类主要读模型
 - 通过 Bearer Token 调用 `/api/app/*`
-- 通过 polling 获取分析事件，不再依赖 Streamlit 或浏览器 query token
+- 通过 polling 获取分析事件，不再依赖浏览器 query token
 
 重要边界：
 
-- 前端不再直接消费旧 `/api/tasks*`、`/api/executions*` 等公开接口
+- 前端不再直接消费 legacy task / execution 风格公开接口
 - 前端不自己拼凑多份真相，优先读取 server-built payload
 - 产物读取必须走内容 API，不直接暴露任意本地绝对路径
 

@@ -21,9 +21,9 @@ export function SessionGate({
         <div className="grid gap-0 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="border-b border-border bg-white px-8 py-10 lg:border-b-0 lg:border-r">
             <div className="text-sm font-semibold uppercase tracking-[0.18em] text-accent">lite-interpreter</div>
-            <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink">连接真实分析前端</h1>
+            <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink">连接分析平台</h1>
             <p className="mt-4 max-w-xl text-base leading-7 text-muted">
-              这是新的 Web 前端，不再沿用 Streamlit。输入 API 地址和 Bearer Token 后，即可进入分析平台。
+              输入 API 地址和 Bearer Token 后，即可进入当前工作区的分析平台。
             </p>
           </div>
           <form
