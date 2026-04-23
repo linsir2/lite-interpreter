@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 from src.blackboard import MemoryData, memory_blackboard
@@ -547,6 +548,225 @@ def test_memory_repo_outcome_is_idempotent_for_same_task():
     skill = MemoryRepo.list_approved_skills("tenant_repo_outcome_idem", "ws_repo_outcome_idem")[0]
     assert skill["usage"]["success_count"] == 1
     assert skill["usage"]["failure_count"] == 0
+
+
+def test_memory_repo_save_approved_skills_preserves_existing_usage_in_memory():
+    MemoryRepo.clear()
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_usage_preserve",
+        "ws_repo_usage_preserve",
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+    MemoryRepo.record_skill_outcome(
+        "tenant_repo_usage_preserve",
+        "ws_repo_usage_preserve",
+        "skill_usage_demo",
+        task_id="task-outcome-preserve",
+        success=True,
+    )
+
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_usage_preserve",
+        "ws_repo_usage_preserve",
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query", "sandbox_exec"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+
+    skill = MemoryRepo.list_approved_skills("tenant_repo_usage_preserve", "ws_repo_usage_preserve")[0]
+    assert skill["required_capabilities"] == ["knowledge_query", "sandbox_exec"]
+    assert skill["usage"]["success_count"] == 1
+    assert skill["usage"]["failure_count"] == 0
+    assert skill["usage"]["last_outcome_task_id"] == "task-outcome-preserve"
+
+
+def test_memory_repo_save_approved_skills_is_atomic_with_in_memory_outcome_updates(monkeypatch):
+    MemoryRepo.clear()
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_usage_atomic",
+        "ws_repo_usage_atomic",
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+
+    started = threading.Event()
+    original_merge = MemoryRepo._merge_approved_skill_usage
+
+    def _slow_merge(existing_payload, incoming_payload):
+        started.set()
+        time.sleep(0.1)
+        return original_merge(existing_payload, incoming_payload)
+
+    monkeypatch.setattr(
+        "src.storage.repository.memory_repo.MemoryRepo._merge_approved_skill_usage",
+        staticmethod(_slow_merge),
+    )
+
+    save_thread = threading.Thread(
+        target=lambda: MemoryRepo.save_approved_skills(
+            "tenant_repo_usage_atomic",
+            "ws_repo_usage_atomic",
+            [
+                {
+                    "name": "skill_usage_demo",
+                    "required_capabilities": ["knowledge_query", "sandbox_exec"],
+                    "promotion": {"status": "approved"},
+                }
+            ],
+        )
+    )
+    outcome_thread = threading.Thread(
+        target=lambda: MemoryRepo.record_skill_outcome(
+            "tenant_repo_usage_atomic",
+            "ws_repo_usage_atomic",
+            "skill_usage_demo",
+            task_id="task-outcome-atomic",
+            success=True,
+        )
+    )
+
+    save_thread.start()
+    assert started.wait(timeout=1)
+    outcome_thread.start()
+    save_thread.join()
+    outcome_thread.join()
+
+    skill = MemoryRepo.list_approved_skills("tenant_repo_usage_atomic", "ws_repo_usage_atomic")[0]
+    assert skill["required_capabilities"] == ["knowledge_query", "sandbox_exec"]
+    assert skill["usage"]["success_count"] == 1
+    assert skill["usage"]["failure_count"] == 0
+    assert skill["usage"]["last_outcome_task_id"] == "task-outcome-atomic"
+
+
+def test_memory_repo_save_approved_skills_preserves_existing_usage_in_postgres(monkeypatch):
+    MemoryRepo.clear()
+
+    class _FakeResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def __iter__(self):
+            return iter(self._rows)
+
+    class _FakeConnection:
+        def __init__(self, store):
+            self.store = store
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            query = str(sql)
+            if isinstance(params, list):
+                for item in params:
+                    self.execute(sql, item)
+                return _FakeResult([])
+            params = params or {}
+            key = (params.get("tenant_id"), params.get("workspace_id"), params.get("memory_key"))
+            if "SELECT memory_payload, usage_count" in query:
+                record = self.store.get(key)
+                if not record:
+                    return _FakeResult([])
+                return _FakeResult([(json.dumps(record["payload"], ensure_ascii=False), record["usage_count"])])
+            if "SELECT memory_payload" in query:
+                rows = []
+                for (tenant_id, workspace_id, _name), record in self.store.items():
+                    if (
+                        tenant_id == params.get("tenant_id")
+                        and workspace_id == params.get("workspace_id")
+                        and params.get("memory_kind") == "approved_skill"
+                    ):
+                        rows.append((json.dumps(record["payload"], ensure_ascii=False),))
+                return _FakeResult(rows[: int(params.get("limit", len(rows) or 1))])
+            if "INSERT INTO agent_memories" in query:
+                payload = params["memory_payload"]
+                record = self.store.setdefault(key, {"usage_count": 0, "payload": {}})
+                incoming_payload = json.loads(payload) if isinstance(payload, str) else payload
+                merged_payload = dict(incoming_payload)
+                existing_usage = dict(record["payload"].get("usage", {}) or {})
+                if existing_usage:
+                    merged_payload["usage"] = existing_usage
+                record["usage_count"] = max(int(record["usage_count"]), int(params["usage_count"]))
+                record["payload"] = merged_payload
+                return _FakeResult([])
+            if "UPDATE agent_memories" in query:
+                payload = params["memory_payload"]
+                record = self.store.setdefault(key, {"usage_count": 0, "payload": {}})
+                record["usage_count"] = int(params["usage_count"])
+                record["payload"] = json.loads(payload) if isinstance(payload, str) else payload
+                return _FakeResult([])
+            raise AssertionError(f"Unexpected SQL: {query}")
+
+    class _FakeEngine:
+        def __init__(self, store):
+            self.store = store
+
+        def begin(self):
+            return _FakeConnection(self.store)
+
+        def connect(self):
+            return _FakeConnection(self.store)
+
+    fake_db = {
+        ("tenant_repo_usage_preserve_pg", "ws_repo_usage_preserve_pg", "skill_usage_demo"): {
+            "usage_count": 1,
+            "payload": {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+                "usage": {
+                    "usage_count": 1,
+                    "success_count": 1,
+                    "failure_count": 0,
+                    "success_rate": 1.0,
+                    "last_outcome_task_id": "task-outcome-preserve-pg",
+                    "last_outcome_success": True,
+                },
+            },
+        }
+    }
+
+    monkeypatch.setattr("src.storage.repository.memory_repo.pg_client.engine", _FakeEngine(fake_db))
+    monkeypatch.setattr("src.storage.repository.memory_repo.MemoryRepo._ensure_table", classmethod(lambda cls: None))
+
+    MemoryRepo.save_approved_skills(
+        "tenant_repo_usage_preserve_pg",
+        "ws_repo_usage_preserve_pg",
+        [
+            {
+                "name": "skill_usage_demo",
+                "required_capabilities": ["knowledge_query", "sandbox_exec"],
+                "promotion": {"status": "approved"},
+            }
+        ],
+    )
+
+    skill = MemoryRepo.list_approved_skills("tenant_repo_usage_preserve_pg", "ws_repo_usage_preserve_pg")[0]
+    assert skill["required_capabilities"] == ["knowledge_query", "sandbox_exec"]
+    assert skill["usage"]["success_count"] == 1
+    assert skill["usage"]["failure_count"] == 0
+    assert skill["usage"]["last_outcome_task_id"] == "task-outcome-preserve-pg"
 
 
 def test_memory_service_recall_skills_refreshes_task_memory_usage():

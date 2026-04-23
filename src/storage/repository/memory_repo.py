@@ -96,6 +96,20 @@ class MemoryRepo:
             workspace_bucket = cls._memory_store.setdefault(tenant_id, {}).setdefault(workspace_id, {})
             workspace_bucket[(memory_kind, memory_key)] = dict(payload)
 
+    @staticmethod
+    def _merge_approved_skill_usage(
+        existing_payload: dict[str, Any] | None,
+        incoming_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = dict(incoming_payload or {})
+        existing_usage = dict((existing_payload or {}).get("usage", {}) or {})
+        incoming_usage = dict(merged.get("usage", {}) or {})
+        if existing_usage:
+            merged["usage"] = existing_usage
+        elif incoming_usage:
+            merged["usage"] = incoming_usage
+        return merged
+
     @classmethod
     def _list_memory_records(
         cls,
@@ -138,6 +152,24 @@ class MemoryRepo:
             return True
 
         cls._ensure_table()
+        update_sql = """
+                memory_payload = CASE
+                    WHEN agent_memories.memory_kind = 'approved_skill' AND agent_memories.memory_payload ? 'usage'
+                    THEN jsonb_set(EXCLUDED.memory_payload, '{usage}', agent_memories.memory_payload->'usage', true)
+                    ELSE EXCLUDED.memory_payload
+                END,
+                usage_count = CASE
+                    WHEN agent_memories.memory_kind = 'approved_skill'
+                    THEN GREATEST(agent_memories.usage_count, EXCLUDED.usage_count)
+                    ELSE EXCLUDED.usage_count
+                END,
+                last_used_at = CASE
+                    WHEN agent_memories.memory_kind = 'approved_skill'
+                    THEN COALESCE(agent_memories.last_used_at, EXCLUDED.last_used_at)
+                    ELSE EXCLUDED.last_used_at
+                END,
+                updated_at = NOW()
+        """
         sql = text(
             """
             INSERT INTO agent_memories (
@@ -164,11 +196,8 @@ class MemoryRepo:
             )
             ON CONFLICT (tenant_id, workspace_id, memory_kind, memory_key)
             DO UPDATE SET
-                memory_payload = EXCLUDED.memory_payload,
-                usage_count = EXCLUDED.usage_count,
-                last_used_at = EXCLUDED.last_used_at,
-                updated_at = NOW();
             """
+            + update_sql
         )
         payload = [
             {
@@ -248,15 +277,36 @@ class MemoryRepo:
         workspace_id: str,
         skills: list[dict[str, Any]],
     ) -> bool:
+        if not pg_client.engine:
+            cls._require_backend("save_approved_skills")
+            with cls._lock:
+                workspace_bucket = cls._memory_store.setdefault(tenant_id, {}).setdefault(workspace_id, {})
+                for skill in skills:
+                    skill_name = str(skill.get("name", "")).strip()
+                    if not skill_name:
+                        continue
+                    key = ("approved_skill", skill_name)
+                    existing_payload = dict(workspace_bucket.get(key, {}) or {})
+                    workspace_bucket[key] = cls._merge_approved_skill_usage(existing_payload, dict(skill))
+            return True
+
+        merged_records: list[tuple[str, dict[str, Any]]] = []
+        for skill in skills:
+            skill_name = str(skill.get("name", "")).strip()
+            if not skill_name:
+                continue
+            existing_payload, _usage_count = cls._load_skill_usage_snapshot(tenant_id, workspace_id, skill_name)
+            merged_records.append(
+                (
+                    skill_name,
+                    cls._merge_approved_skill_usage(existing_payload, dict(skill)),
+                )
+            )
         return cls._upsert_records(
             tenant_id,
             workspace_id,
             memory_kind="approved_skill",
-            records=[
-                (str(skill.get("name", "")).strip(), dict(skill))
-                for skill in skills
-                if str(skill.get("name", "")).strip()
-            ],
+            records=merged_records,
         )
 
     @classmethod

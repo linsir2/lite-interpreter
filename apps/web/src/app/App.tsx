@@ -1,5 +1,5 @@
 import { QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router-dom'
 
 import { AppShell } from '@/app/AppShell'
@@ -7,7 +7,7 @@ import { SessionGate } from '@/app/SessionGate'
 import { api } from '@/lib/api'
 import { queryClient } from '@/lib/query-client'
 import type { ApiClientConfig } from '@/lib/api'
-import type { AppSession, CreateAnalysisRequest } from '@/lib/types'
+import type { AnalysisEvent, AppSession, CreateAnalysisRequest } from '@/lib/types'
 import { AnalysesPage } from '@/pages/AnalysesPage'
 import { AnalysisDetailPage } from '@/pages/AnalysisDetailPage'
 import { AssetsPage } from '@/pages/AssetsPage'
@@ -17,9 +17,16 @@ import { NewAnalysisPage } from '@/pages/NewAnalysisPage'
 import { SessionSettingsPage } from '@/pages/SessionSettingsPage'
 
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000'
+const ANALYSIS_REFRESH_INTERVAL_MS = 4000
+const ANALYSIS_LIST_REFRESH_INTERVAL_MS = 10000
+const TERMINAL_ANALYSIS_STATUSES = new Set(['success', 'failed', 'waiting_for_human'])
 
 function loadStoredValue(key: string, fallback: string) {
   return window.localStorage.getItem(key) ?? fallback
+}
+
+function isTerminalAnalysisStatus(status: string | null | undefined) {
+  return TERMINAL_ANALYSIS_STATUSES.has(String(status || '').trim())
 }
 
 function resolveWorkspaceId(session: AppSession | undefined, storedWorkspaceId: string) {
@@ -74,6 +81,11 @@ function AppInner() {
     queryKey: ['analyses', effectiveConfig],
     queryFn: () => api.listAnalyses(effectiveConfig),
     enabled: Boolean(session?.authenticated && effectiveWorkspaceId),
+    refetchInterval: (query) => {
+      const data = query.state.data as { items?: Array<{ status?: string | null }> } | undefined
+      const hasActiveItems = (data?.items ?? []).some((item) => !isTerminalAnalysisStatus(item.status))
+      return hasActiveItems ? ANALYSIS_LIST_REFRESH_INTERVAL_MS : false
+    },
   })
 
   const assetsQuery = useQuery({
@@ -192,19 +204,79 @@ function AppInner() {
 
 function AnalysisDetailRoute({ config }: { config: ApiClientConfig }) {
   const { analysisId = '' } = useParams<{ analysisId: string }>()
+  const [events, setEvents] = useState<AnalysisEvent[]>([])
+  const [terminalSyncState, setTerminalSyncState] = useState<'idle' | 'syncing' | 'done'>('idle')
+  const lastEventIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setEvents([])
+    setTerminalSyncState('idle')
+    lastEventIdRef.current = null
+  }, [analysisId, config.apiBaseUrl, config.accessToken, config.workspaceId])
+
   const detailQuery = useQuery({
     queryKey: ['analysis-detail', config, analysisId],
     queryFn: () => api.getAnalysis(config, analysisId),
     enabled: Boolean(analysisId),
+    refetchInterval: (query) => {
+      const status = (query.state.data as { status?: string | null } | undefined)?.status
+      if (!status || isTerminalAnalysisStatus(status)) {
+        return false
+      }
+      return ANALYSIS_REFRESH_INTERVAL_MS
+    },
   })
   const eventsQuery = useQuery({
     queryKey: ['analysis-events', config, analysisId],
-    queryFn: async () => api.getAnalysisEvents(config, analysisId),
-    refetchInterval: 4000,
+    queryFn: async () => api.getAnalysisEvents(config, analysisId, lastEventIdRef.current),
     enabled: Boolean(analysisId),
+    refetchInterval: (query) => {
+      if (!query.state.data && !detailQuery.data?.status) {
+        return ANALYSIS_REFRESH_INTERVAL_MS
+      }
+      if (isTerminalAnalysisStatus(detailQuery.data?.status)) {
+        return false
+      }
+      return ANALYSIS_REFRESH_INTERVAL_MS
+    },
   })
+  const detailStatus = detailQuery.data?.status
+  const refetchDetail = detailQuery.refetch
+  const refetchEvents = eventsQuery.refetch
 
-  return <AnalysisDetailPage detail={detailQuery.data} events={eventsQuery.data?.events ?? []} />
+  useEffect(() => {
+    if (!eventsQuery.data) {
+      return
+    }
+    const incomingEvents = eventsQuery.data.events ?? []
+    if (incomingEvents.length) {
+      setEvents((current) => {
+        const seenIds = new Set(current.map((item) => item.eventId))
+        const appended = incomingEvents.filter((item) => !seenIds.has(item.eventId))
+        return appended.length ? [...current, ...appended] : current
+      })
+    }
+    if (eventsQuery.data.lastEventId) {
+      lastEventIdRef.current = eventsQuery.data.lastEventId
+    }
+  }, [eventsQuery.data])
+
+  useEffect(() => {
+    if (!detailStatus || !isTerminalAnalysisStatus(detailStatus) || terminalSyncState !== 'idle') {
+      return
+    }
+    setTerminalSyncState('syncing')
+    void Promise.all([refetchDetail(), refetchEvents()]).finally(() => setTerminalSyncState('done'))
+  }, [detailStatus, refetchDetail, refetchEvents, terminalSyncState])
+
+  return (
+    <AnalysisDetailPage
+      config={config}
+      detail={detailQuery.data}
+      events={events}
+      isLiveRefreshing={!isTerminalAnalysisStatus(detailQuery.data?.status)}
+    />
+  )
 }
 
 export function App() {
