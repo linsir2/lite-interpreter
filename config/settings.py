@@ -94,13 +94,9 @@ API_ALLOW_ORIGINS: Final[list[str]] = _env_csv(
     "http://127.0.0.1:8501,http://localhost:8501",
 )
 API_ENABLE_POLICY_API: Final[bool] = _env_bool("API_ENABLE_POLICY_API", False)
-API_ENABLE_DEMO_TRACE: Final[bool] = _env_bool("API_ENABLE_DEMO_TRACE", False)
 API_ENABLE_DIAGNOSTICS: Final[bool] = _env_bool("API_ENABLE_DIAGNOSTICS", False)
 API_AUTH_REQUIRED: Final[bool] = _env_bool("API_AUTH_REQUIRED", True)
 API_AUTH_TOKENS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_TOKENS_JSON")
-API_AUTH_USERS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_USERS_JSON")
-API_SESSION_SECRET: Final[str] = _env_str("API_SESSION_SECRET", "")
-API_SESSION_TTL_SECONDS: Final[int] = _env_int("API_SESSION_TTL_SECONDS", 43200)
 
 # 数据与模型缓存目录 (本地沙箱执行时使用)
 DATA_DIR = PROJECT_ROOT / "data"

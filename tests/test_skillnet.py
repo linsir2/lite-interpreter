@@ -579,7 +579,7 @@ def test_memory_service_recall_skills_refreshes_task_memory_usage():
 
 
 def test_memory_service_applies_outcome_updates_back_to_task_memory():
-    from src.api.routers.analysis_router import _record_historical_skill_outcomes
+    from src.api.services.task_flow_service import _record_historical_skill_outcomes
 
     MemoryRepo.clear()
     memory_blackboard._storage.clear()

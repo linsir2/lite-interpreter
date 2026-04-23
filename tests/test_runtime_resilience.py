@@ -7,7 +7,7 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 import pytest
-from src.api.routers import analysis_router
+from src.api.services import task_flow_service as analysis_router
 from src.blackboard import ExecutionData, GlobalStatus, execution_blackboard, global_blackboard
 from src.common.utils import get_utc_now
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
@@ -149,7 +149,7 @@ def test_recover_unfinished_tasks_schedules_task_runs(monkeypatch):
     async def fake_run_task_flow(**kwargs):
         scheduled.append(str(kwargs["task_id"]))
 
-    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service._run_task_flow", fake_run_task_flow)
 
     async def scenario():
         recovered = await analysis_router.recover_unfinished_tasks()
@@ -188,7 +188,7 @@ def test_recover_unfinished_tasks_skips_waiting_and_terminal_states(monkeypatch)
     async def fake_run_task_flow(**kwargs):
         scheduled.append(str(kwargs["task_id"]))
 
-    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service._run_task_flow", fake_run_task_flow)
 
     async def scenario():
         recovered = await analysis_router.recover_unfinished_tasks()
@@ -241,7 +241,7 @@ def test_recover_unfinished_tasks_reuses_task_envelope_settings(monkeypatch):
         captured.update(kwargs)
         return {"scheduled": True, "reason": "scheduled"}
 
-    monkeypatch.setattr("src.api.routers.analysis_router.schedule_task_flow", fake_schedule_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service.schedule_task_flow", fake_schedule_task_flow)
 
     recovered = asyncio.run(analysis_router.recover_unfinished_tasks())
 
@@ -260,7 +260,7 @@ def test_schedule_task_flow_skips_duplicate_task_ids(monkeypatch):
     async def fake_run_task_flow(**kwargs):  # noqa: ARG001
         await blocker.wait()
 
-    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service._run_task_flow", fake_run_task_flow)
 
     async def scenario():
         first = analysis_router.schedule_task_flow(
@@ -294,7 +294,7 @@ def test_schedule_task_flow_releases_active_marker_and_lease_after_completion(mo
     async def fake_run_task_flow(**kwargs):  # noqa: ARG001
         return None
 
-    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service._run_task_flow", fake_run_task_flow)
 
     async def scenario():
         scheduled = analysis_router.schedule_task_flow(
@@ -325,7 +325,7 @@ def test_schedule_task_flow_allows_distinct_tasks_to_run_concurrently(monkeypatc
         started.append(str(kwargs["task_id"]))
         await blocker.wait()
 
-    monkeypatch.setattr("src.api.routers.analysis_router._run_task_flow", fake_run_task_flow)
+    monkeypatch.setattr("src.api.services.task_flow_service._run_task_flow", fake_run_task_flow)
 
     async def scenario():
         first = analysis_router.schedule_task_flow(
@@ -360,7 +360,7 @@ def test_schedule_task_flow_skips_when_lease_not_acquired(monkeypatch):
     analysis_router._startup_recovery_state["lease_conflicts"] = 0
     analysis_router._active_task_flow_tasks.clear()
     monkeypatch.setattr(
-        "src.api.routers.analysis_router.StateRepo.claim_task_lease",
+        "src.api.services.task_flow_service.StateRepo.claim_task_lease",
         lambda **kwargs: {"acquired": False, "owner_id": "other-owner"},  # noqa: ARG005
     )
 
@@ -405,7 +405,7 @@ def test_run_task_flow_uses_dedicated_task_flow_executor():
 
     async def scenario():
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr("src.api.routers.analysis_router.asyncio.get_running_loop", lambda: FakeLoop())
+            mp.setattr("src.api.services.task_flow_service.asyncio.get_running_loop", lambda: FakeLoop())
             await analysis_router._run_task_flow(
                 tenant_id=tenant_id,
                 task_id=task_id,
@@ -420,7 +420,7 @@ def test_run_task_flow_uses_dedicated_task_flow_executor():
 
 def test_get_startup_recovery_status_captures_task_lease_error(monkeypatch):
     monkeypatch.setattr(
-        "src.api.routers.analysis_router.StateRepo.list_task_leases",
+        "src.api.services.task_flow_service.StateRepo.list_task_leases",
         lambda: (_ for _ in ()).throw(RuntimeError("lease unavailable")),
     )
     status = analysis_router.get_startup_recovery_status()

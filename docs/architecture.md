@@ -79,7 +79,7 @@
 2. 静态链或动态链
 3. Skill Harvester
 4. Summarizer
-5. Analysis Workspace / execution resources
+5. Web app / app-facing analysis resources
 
 ### 2.3 动态运行面
 
@@ -209,23 +209,25 @@ router
 
 关键接口：
 
-- `GET /api/tasks/{task_id}/workspace`
-- `GET /api/tasks/{task_id}/result`
-- `GET /api/tasks/{task_id}/executions`
-- `GET /api/tasks/{task_id}/events/poll`
-- `GET /api/executions/{execution_id}`
-- `GET /api/executions/{execution_id}/events/poll`
-- `GET /api/executions/{execution_id}/artifacts`
-- `GET /api/executions/{execution_id}/tool-calls`
+- `GET /api/app/session`
+- `GET /api/app/analyses`
+- `POST /api/app/analyses`
+- `GET /api/app/analyses/{analysis_id}`
+- `GET /api/app/analyses/{analysis_id}/events`
+- `GET /api/app/analyses/{analysis_id}/outputs/{output_id}`
+- `GET /api/app/assets`
+- `POST /api/app/assets`
+- `GET /api/app/methods`
+- `GET /api/app/audit`
 
 当前前端主面：
 
-- `Analysis Workspace`
-- `Knowledge Assets`
-- `Skill Library`
-- `Audit Logs`
+- `Web Analyses`
+- `Assets`
+- `Methods`
+- `Audit`
 
-其中真正的主产品面仍是 `Analysis Workspace`。
+其中真正的主产品面仍是 `Web Analyses`。
 
 ### 4.1 产物消费边界
 
@@ -237,7 +239,7 @@ router
    - 不再把任意绝对路径当作前端直接可读文件
 
 2. `execution artifact content API`
-   - 通过 `GET /api/executions/{execution_id}/artifacts/{artifact_id}` 读取受控内容
+   - 通过 `GET /api/app/analyses/{analysis_id}/outputs/{output_id}` 读取受控内容
    - 只允许受控上传根和输出根内的本地文件
    - 文本/图片预览与下载都应走这条 API
 
@@ -246,7 +248,7 @@ router
 当前控制面已经把“workspace 资产”和“task 输入”拆开：
 
 - workspace 上传只是把资产放进当前 workspace
-- task 真正执行什么输入，必须通过 `workspace_asset_refs` 显式绑定
+- analysis 真正执行什么输入，必须通过 `assetIds` 显式绑定
 - 这样可以避免“一个 workspace 里所有资产自动污染每个新任务”的隐式行为
 
 ## 5. 当前最重要的工程结论

@@ -51,7 +51,7 @@ conda run -n lite_interpreter python scripts/smoke_dashscope_litellm.py
 ```bash
 make run-api
 make run-sidecar
-make run-frontend
+make run-web
 make test-stream
 ```
 
@@ -118,8 +118,8 @@ make test-stream
 - `src/api/request_scope.py`
 - `src/api/execution_resources.py`
 - `src/api/routers/*`
-- `src/frontend/components/status_stream.py`
-- `src/frontend/pages/task_console.py`
+- `apps/web/src/pages/AnalysisDetailPage.tsx`
+- `apps/web/src/pages/NewAnalysisPage.tsx`
 
 ## 5. 推荐改动流程
 

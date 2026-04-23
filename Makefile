@@ -7,7 +7,7 @@ TASK_ID ?= demo-task-001
 HOTSPOT_LINT_PATHS ?= src/dag_engine/nodes/coder_node.py src/dag_engine/nodes/static_codegen.py src/sandbox/docker_executor.py tests/test_docs_consistency.py
 FULL_LINT_PATHS ?= src tests scripts config
 
-.PHONY: run-api run-sidecar run-frontend demo-trace create-task test test-docker test-integration test-stream lint fmt-check lint-all fmt-check-all smoke-models
+.PHONY: run-api run-sidecar run-web install-web build-web create-analysis test test-docker test-integration test-stream lint fmt-check lint-all fmt-check-all smoke-models
 
 run-api:
 	conda run -n $(PYTHON_ENV) python -m uvicorn src.api.main:app --host $(API_HOST) --port $(API_PORT)
@@ -15,14 +15,17 @@ run-api:
 run-sidecar:
 	conda run -n $(PYTHON_ENV) python scripts/run_deerflow_sidecar.py --host $(SIDECAR_HOST) --port $(SIDECAR_PORT)
 
-run-frontend:
-	PYTHONPATH=$(CURDIR) conda run -n $(PYTHON_ENV) streamlit run src/frontend/app.py --browser.gatherUsageStats false
+install-web:
+	cd apps/web && npm install
 
-demo-trace:
-	conda run -n $(PYTHON_ENV) python scripts/demo_task_trace.py --api-base-url http://$(API_HOST):$(API_PORT) --task-id $(TASK_ID)
+run-web:
+	cd apps/web && npm run dev
 
-create-task:
-	conda run -n $(PYTHON_ENV) python scripts/create_task.py --api-base-url http://$(API_HOST):$(API_PORT)
+build-web:
+	cd apps/web && npm run build
+
+create-analysis:
+	conda run -n $(PYTHON_ENV) python scripts/create_analysis.py --api-base-url http://$(API_HOST):$(API_PORT)
 
 test:
 	conda run -n $(PYTHON_ENV) python -m pytest -q

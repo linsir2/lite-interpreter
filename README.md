@@ -44,9 +44,9 @@
    - 负责文档解析、知识召回、上下文压缩、技能沉淀和历史复用
 
 5. **产品面**
-   - `Analysis Workspace` 为主工作台
-   - `Knowledge Assets / Skill Library / Audit Logs` 为辅助页面
-   - API 提供 task/workspace/execution/runtime/diagnostics 等资源
+   - `Web Analyses` 为主工作台
+   - `Assets / Methods / Audit` 为辅助页面
+   - API 提供 app-facing analyses/assets/methods/audit 与运行时诊断资源
 
 ## 当前支持的能力边界
 
@@ -78,7 +78,7 @@
 - `API_AUTH_REQUIRED` 默认开启
 - 除 `/health` 外，受保护接口按角色校验
 - 不再支持通过 query string 传 `access_token`
-- session login 只有在显式配置 `API_AUTH_USERS_JSON` 和 `API_SESSION_SECRET` 时才可用
+- 前端通过 Bearer Token + `/api/app/session` 完成会话 bootstrap
 - `viewer / operator / admin` 三层角色仍然保留
 - 前端流式状态改为带 `Authorization` header 的 polling，不再通过浏览器 query token 建立 `EventSource`
 
@@ -95,13 +95,13 @@
 
 当前版本支持更明确的“workspace 资产 -> task 输入”流：
 
-- workspace 层上传后，每个文件都有稳定 `file_sha256`
-- 新建 task 时，可通过 `workspace_asset_refs` 显式挂接这些资产
-- 前端工作台支持从当前 workspace 资产列表里选择要附带到新任务的输入
+- workspace 层上传后，前端会收到稳定的 `assetId`
+- 新建分析时，通过 `assetIds` 显式挂接这些资产
+- 前端工作台支持从当前 workspace 资产列表里选择要附带到新分析的输入
 
 ### 多文件上传
 
-当前 `/api/uploads` 支持一次上传多个文件：
+当前 `/api/app/assets` 支持一次上传多个文件：
 
 - 单文件上传时，响应保持原有兼容结构
 - 多文件上传时，响应返回 `uploaded_files` 和 `file_count`
@@ -143,7 +143,9 @@ conda run -n lite_interpreter python scripts/run_deerflow_sidecar.py --host 127.
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
-PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm install
+npm run dev
 ```
 
 ### 5. 常用验证命令

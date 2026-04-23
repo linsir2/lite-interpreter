@@ -15,8 +15,7 @@ lite-interpreter
 │   └── security_config.py        # AST 风险面默认规则
 ├── scripts/
 │   ├── check_hybrid_readiness.py # 快速验收关键混合编排文件是否齐全
-│   ├── create_task.py            # 调 API 创建任务
-│   ├── demo_task_trace.py        # 触发 demo trace
+│   ├── create_analysis.py        # 调 app-facing API 创建分析
 │   ├── run_deerflow_sidecar.py   # 启动 DeerFlow sidecar
 │   ├── smoke_dashscope_litellm.py# 模型配置 smoke test
 │   └── smoke_deerflow_bridge.py  # DeerFlow sidecar/bridge smoke test
@@ -49,10 +48,6 @@ lite-interpreter
 │   │   ├── supervisor.py         # 动态请求、治理决策、上下文封装
 │   │   ├── runtime_backends.py   # runtime capability manifest 与 backend 描述
 │   │   └── trace_normalizer.py   # 动态事件标准化
-│   ├── frontend/                 # Streamlit 前端
-│   │   ├── app.py                # 页面入口
-│   │   ├── components/           # uploader / stream / workspace shell 组件
-│   │   └── pages/                # task console / knowledge / skill / audit 页面
 │   ├── harness/                  # 动态/执行治理层
 │   ├── kag/                      # 文档解析、检索、上下文构建
 │   ├── mcp_gateway/              # 进程内 MCP tool registry

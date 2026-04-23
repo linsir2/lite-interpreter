@@ -2,21 +2,10 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from config.settings import (
-    API_AUTH_REQUIRED,
-    API_AUTH_TOKENS,
-    API_AUTH_USERS,
-    API_SESSION_SECRET,
-    API_SESSION_TTL_SECONDS,
-)
+from config.settings import API_AUTH_REQUIRED, API_AUTH_TOKENS
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -44,20 +33,6 @@ ROLE_HIERARCHY = {  # 用户权限
     "operator": 20,
     "admin": 30,
 }
-
-
-def _urlsafe_b64encode(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
-
-
-def _urlsafe_b64decode(data: str) -> bytes:
-    padding = "=" * (-len(data) % 4)
-    return base64.urlsafe_b64decode(f"{data}{padding}".encode("ascii"))
-
-
-def _json_bytes(payload: dict[str, Any]) -> bytes:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-
 
 def _normalize_grants(raw: Any, *, tenant_id: str = "", workspace_id: str = "") -> tuple[AuthGrant, ...]:
     grants: list[AuthGrant] = []
@@ -109,126 +84,8 @@ def _normalize_token_store() -> dict[str, AuthContext]:
         )
     return contexts
 
-
-def _normalize_user_store() -> dict[str, dict[str, Any]]:
-    users: dict[str, dict[str, Any]] = {}
-    for username, raw in dict(API_AUTH_USERS or {}).items():
-        normalized_username = str(username or "").strip()
-        if not normalized_username or not isinstance(raw, dict):
-            continue
-        password = str(raw.get("password") or "").strip()
-        role = str(raw.get("role") or "viewer").strip().lower() or "viewer"
-        grants = _normalize_grants(raw.get("grants"))
-        if not password or role not in ROLE_HIERARCHY or not grants:
-            continue
-        users[normalized_username] = {
-            "password": password,
-            "role": role,
-            "grants": grants,
-            "subject": str(raw.get("subject") or normalized_username).strip() or normalized_username,
-        }
-    return users
-
-
-def session_auth_enabled() -> bool:
-    return bool(str(API_SESSION_SECRET or "").strip()) and bool(_normalize_user_store())
-
-
-def _session_secret_bytes() -> bytes:
-    if not str(API_SESSION_SECRET or "").strip():
-        raise RuntimeError("API session secret is not configured")
-    return API_SESSION_SECRET.encode("utf-8")
-
-
-def issue_session_token(*, username: str, subject: str, role: str, grants: tuple[AuthGrant, ...]) -> str:
-    issued_at = datetime.now(UTC)
-    payload = {
-        "typ": "session",
-        "sub": subject,
-        "usr": username,
-        "role": role,
-        "grants": [{"tenant_id": grant.tenant_id, "workspace_id": grant.workspace_id} for grant in grants],
-        "iat": int(issued_at.timestamp()),
-        "exp": int((issued_at + timedelta(seconds=API_SESSION_TTL_SECONDS)).timestamp()),
-    }
-    payload_b64 = _urlsafe_b64encode(_json_bytes(payload))
-    signature = hmac.new(_session_secret_bytes(), payload_b64.encode("ascii"), hashlib.sha256).digest()
-    return f"lis.{payload_b64}.{_urlsafe_b64encode(signature)}"
-
-
-def _decode_session_token(token: str) -> dict[str, Any] | None:
-    normalized = str(token or "").strip()
-    if not normalized.startswith("lis."):
-        return None
-    parts = normalized.split(".", 2)
-    if len(parts) != 3:
-        return None
-    _, payload_b64, signature_b64 = parts
-    expected_sig = hmac.new(_session_secret_bytes(), payload_b64.encode("ascii"), hashlib.sha256).digest()
-    actual_sig = _urlsafe_b64decode(signature_b64)
-    if not hmac.compare_digest(expected_sig, actual_sig):
-        return None
-    payload = json.loads(_urlsafe_b64decode(payload_b64))
-    if not isinstance(payload, dict) or payload.get("typ") != "session":
-        return None
-    if int(payload.get("exp", 0) or 0) < int(datetime.now(UTC).timestamp()):
-        return None
-    return payload
-
-
-def _auth_context_from_session(token: str) -> AuthContext | None:
-    if not str(API_SESSION_SECRET or "").strip():
-        return None
-    payload = _decode_session_token(token)
-    if payload is None:
-        return None
-    grants = _normalize_grants(payload.get("grants"))
-    if not grants:
-        return None
-    role = str(payload.get("role") or "viewer").strip().lower() or "viewer"
-    if role not in ROLE_HIERARCHY:
-        return None
-    subject = str(payload.get("sub") or payload.get("usr") or "").strip()
-    username = str(payload.get("usr") or subject).strip()
-    return AuthContext(
-        token=token,
-        subject=subject or username,
-        tenant_id=grants[0].tenant_id,
-        workspace_id=grants[0].workspace_id,
-        role=role,
-        grants=grants,
-        auth_type="session",
-    )
-
-
-def authenticate_user_credentials(username: str, password: str) -> AuthContext | None:
-    users = _normalize_user_store()
-    normalized_username = str(username or "").strip()
-    user = users.get(normalized_username)
-    if user is None:
-        return None
-    if str(password or "") != str(user.get("password") or ""):
-        return None
-    token = issue_session_token(
-        username=normalized_username,
-        subject=str(user["subject"]),
-        role=str(user["role"]),
-        grants=tuple(user["grants"]),
-    )
-    grants = tuple(user["grants"])
-    return AuthContext(
-        token=token,
-        subject=str(user["subject"]),
-        tenant_id=grants[0].tenant_id,
-        workspace_id=grants[0].workspace_id,
-        role=str(user["role"]),
-        grants=grants,
-        auth_type="session",
-    )
-
-
 def auth_enabled() -> bool:
-    return bool(API_AUTH_REQUIRED or _normalize_token_store() or _normalize_user_store())
+    return bool(API_AUTH_REQUIRED or _normalize_token_store())
 
 
 def request_bearer_token(request: Request) -> str:
@@ -243,17 +100,15 @@ def request_bearer_token(request: Request) -> str:
 
 def authenticate_request(request: Request) -> AuthContext | JSONResponse | None:
     token_store = _normalize_token_store()
-    enabled = bool(API_AUTH_REQUIRED or token_store or _normalize_user_store())
+    enabled = bool(API_AUTH_REQUIRED or token_store)
     if not enabled:
         return None
-    if not token_store and not session_auth_enabled():
+    if not token_store:
         return JSONResponse({"error": "api auth misconfigured"}, status_code=503)
     token = request_bearer_token(request)
     if not token:
         return JSONResponse({"error": "authentication required"}, status_code=401)
     auth_context = token_store.get(token)
-    if auth_context is None:
-        auth_context = _auth_context_from_session(token)
     if auth_context is None:
         return JSONResponse({"error": "invalid api token"}, status_code=403)
     return auth_context
@@ -310,6 +165,11 @@ class ApiAuthMiddleware(BaseHTTPMiddleware):
         authenticated = authenticate_request(request)
         if isinstance(authenticated, JSONResponse):
             return authenticated
-        request.state.auth_context = authenticated
-        request.state.auth_checked = True
+        if authenticated is None:
+            # Auth is disabled - mark as not checked so require_request_role allows
+            request.state.auth_context = None
+            request.state.auth_checked = False
+        else:
+            request.state.auth_context = authenticated
+            request.state.auth_checked = True
         return await call_next(request)

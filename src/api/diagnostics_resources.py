@@ -11,7 +11,7 @@ import httpx
 from config.settings import DEERFLOW_RUNTIME_MODE, DEERFLOW_SIDECAR_URL, PROJECT_ROOT
 
 from src.api.auth import auth_enabled
-from src.api.routers.analysis_router import get_startup_recovery_status
+from src.api.services.task_flow_service import get_startup_recovery_status
 from src.blackboard import build_strict_state_report
 from src.common.llm_client import LiteLLMClient
 from src.dynamic_engine.runtime_backends import list_runtime_manifests

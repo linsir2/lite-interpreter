@@ -39,7 +39,6 @@
 - `API_ALLOW_ORIGINS`
 - `API_ENABLE_DIAGNOSTICS`
 - `API_ENABLE_POLICY_API`
-- `API_ENABLE_DEMO_TRACE`
 - `UPLOAD_MAX_FILE_BYTES`
 - `UPLOAD_MAX_REQUEST_BYTES`
 
@@ -47,14 +46,10 @@
 
 - `API_AUTH_REQUIRED`
 - `API_AUTH_TOKENS_JSON`
-- `API_AUTH_USERS_JSON`
-- `API_SESSION_SECRET`
-- `API_SESSION_TTL_SECONDS`
 
 说明：
 
 - 当前版本默认走更保守的安全姿态，建议明确设置认证配置。
-- `API_SESSION_SECRET` 必须显式提供安全值，不能留空也不能使用固定测试值。
 
 ## 3. 启动顺序
 
@@ -73,17 +68,19 @@ export DEERFLOW_SIDECAR_URL=http://127.0.0.1:8765
 conda run -n lite_interpreter python scripts/run_deerflow_sidecar.py --host 127.0.0.1 --port 8765
 ```
 
-### 3.3 启动前端
+### 3.3 启动 Web 前端
 
 ```bash
 cd /home/linsir365/projects/lite-interpreter
-PYTHONPATH=$(pwd) conda run -n lite_interpreter streamlit run src/frontend/app.py --browser.gatherUsageStats false
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm install
+npm run dev
 ```
 
 说明：
 
-- 当前前端状态流采用 polling，不再依赖浏览器 query-token `EventSource`
-- 因此前端请求必须能携带正常的 `Authorization: Bearer ...` 头
+- 当前 Web 前端通过 `/api/app/*` 读取稳定的 app-facing 合同，并通过 polling 拉取分析事件。
+- 前端开发服务器默认代理 `/api` 到后端，生产构建产物位于 `apps/web/dist`。
 
 ## 4. 推荐配置
 
@@ -107,17 +104,6 @@ export API_AUTH_TOKENS_JSON='{
   "operator-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"operator","subject":"operator-user"},
   "admin-token":{"tenant_id":"demo-tenant","workspace_id":"demo-workspace","role":"admin","subject":"admin-user"}
 }'
-export API_AUTH_USERS_JSON='{
-  "alice":{
-    "password":"alice-pass",
-    "role":"admin",
-    "subject":"alice-user",
-    "grants":[
-      {"tenant_id":"demo-tenant","workspace_id":"demo-workspace"}
-    ]
-  }
-}'
-export API_SESSION_SECRET='replace-this-with-a-real-secret'
 ```
 
 ## 5. 当前格式支持边界
@@ -140,7 +126,7 @@ export API_SESSION_SECRET='replace-this-with-a-real-secret'
 
 ### 5.1 上传接口行为
 
-当前 `/api/uploads` 行为：
+当前 `/api/app/assets` 行为：
 
 - 支持单文件上传
 - 支持多文件上传
@@ -150,9 +136,9 @@ export API_SESSION_SECRET='replace-this-with-a-real-secret'
 
 如果你要让 workspace 资产进入新任务，不是自动发生的，需要在创建任务时传：
 
-- `workspace_asset_refs`
+- `assetIds`
 
-其值是上传返回的 `file_sha256` 列表。
+其值是 `/api/app/assets` 返回的 `assetId` 列表。
 
 ### 业务文档
 
@@ -184,7 +170,7 @@ python3 scripts/check_hybrid_readiness.py
 ```bash
 make run-api
 make run-sidecar
-make run-frontend
+make run-web
 make test-stream
 make smoke-models
 ```
@@ -196,7 +182,6 @@ make smoke-models
 先看：
 
 - `API_AUTH_REQUIRED` 是否和当前 token/session 配置匹配
-- `API_SESSION_SECRET` 是否已设置
 - `POSTGRES_URI` 是否可连接
 
 ### 动态链一直 unavailable

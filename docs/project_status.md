@@ -22,8 +22,8 @@
 - DAG 静态链与 DeerFlow 动态超级节点
 - Blackboard / Event Bus / Event Journal 控制面
 - Harness 治理与本地 Sandbox 执行边界
-- API / execution resources / polling stream 主链路
-- Analysis Workspace 主工作台
+- API / app-facing analyses / polling stream 主链路
+- Web Analyses 主工作台
 
 ### Support
 
@@ -38,7 +38,7 @@
 
 这些部分仍然是外围能力，不应包装成版本核心承诺：
 
-- `Knowledge Assets / Skill Library / Audit Logs` 等辅助页面
+- `Assets / Methods / Audit` 等辅助页面
 - 更完整的 artifact 内容 API 与下载体验
 - 更强的多文件上传与 workspace 资产编排体验
 

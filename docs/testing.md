@@ -80,7 +80,7 @@ python3 scripts/check_hybrid_readiness.py
 
 重点验证：
 
-- task/result/workspace/execution 读模型
+- app-facing analyses/assets/methods/audit 合同与运行时投影
 - 事件流与回放
 - 上传与资产枚举
 - workspace 资产显式挂接 task
@@ -91,14 +91,14 @@ python3 scripts/check_hybrid_readiness.py
 
 关键文件：
 
-- `tests/test_frontend_task_console.py`
-- `tests/test_frontend_stream.py`
+- `tests/test_api_app.py`
+- `apps/web/src/*`
 
 重点验证：
 
-- Task Console 数据抽取逻辑
-- stream 组件 HTML contract
-- 前端与 API 约定是否一致
+- `/api/app/*` 的 app-facing contract
+- React Web 前端与 app-facing API 约定是否一致
+- 分析详情、资料上传、方法库与审计页的关键交互
 
 ### 3.5 验收层
 

@@ -3,35 +3,33 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from config.settings import API_ALLOW_ORIGINS
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from src.api.auth import ApiAuthMiddleware
-from src.api.routers.analysis_router import create_task, get_task_result, recover_unfinished_tasks
-from src.api.routers.audit_router import list_audit_logs
-from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
-from src.api.routers.execution_router import (
-    get_execution,
-    get_execution_artifact_content,
-    get_task_workspace,
-    list_execution_artifacts,
-    list_execution_tool_calls,
-    list_task_executions,
-    poll_execution_events,
-    stream_execution_events,
+from src.api.routers.app_router import (
+    create_app_analysis,
+    get_app_analysis_detail,
+    get_app_analysis_events,
+    get_app_analysis_output,
+    get_app_session,
+    list_app_analyses,
+    list_app_assets,
+    list_app_audit,
+    list_app_methods,
+    upload_app_assets,
 )
-from src.api.routers.knowledge_router import get_task_knowledge
-from src.api.routers.memory_router import get_task_memory
+from src.api.routers.diagnostics_router import get_conformance, get_diagnostics
 from src.api.routers.policy_router import get_harness_policy, update_harness_policy
 from src.api.routers.runtime_router import get_runtime_capabilities, list_runtimes
-from src.api.routers.session_router import get_session_me, login_session
-from src.api.routers.sse_router import poll_task_events, stream_task_events, trigger_demo_trace
-from src.api.routers.upload_router import list_knowledge_assets, list_workspace_skills, upload_asset
+from src.api.services.task_flow_service import recover_unfinished_tasks
 from src.blackboard import execution_blackboard, global_blackboard, knowledge_blackboard, memory_blackboard
 from src.common import event_bus
 from src.sandbox.docker_executor import start_zombie_cleaner_daemon
@@ -77,36 +75,26 @@ app = Starlette(
     ],
     routes=[
         Route("/health", health, methods=["GET"]),
-        Route("/api/session/login", login_session, methods=["POST"]),
-        Route("/api/session/me", get_session_me, methods=["GET"]),
+        Route("/api/app/session", get_app_session, methods=["GET"]),
+        Route("/api/app/analyses", list_app_analyses, methods=["GET"]),
+        Route("/api/app/analyses", create_app_analysis, methods=["POST"]),
+        Route("/api/app/analyses/{analysis_id}", get_app_analysis_detail, methods=["GET"]),
+        Route("/api/app/analyses/{analysis_id}/events", get_app_analysis_events, methods=["GET"]),
+        Route("/api/app/analyses/{analysis_id}/outputs/{output_id}", get_app_analysis_output, methods=["GET"]),
+        Route("/api/app/assets", list_app_assets, methods=["GET"]),
+        Route("/api/app/assets", upload_app_assets, methods=["POST"]),
+        Route("/api/app/methods", list_app_methods, methods=["GET"]),
+        Route("/api/app/audit", list_app_audit, methods=["GET"]),
         Route("/api/diagnostics", get_diagnostics, methods=["GET"]),
         Route("/api/conformance", get_conformance, methods=["GET"]),
         Route("/api/policy", get_harness_policy, methods=["GET"]),
         Route("/api/policy", update_harness_policy, methods=["POST"]),
         Route("/api/runtimes", list_runtimes, methods=["GET"]),
         Route("/api/runtimes/{runtime_id}/capabilities", get_runtime_capabilities, methods=["GET"]),
-        Route("/api/audit/logs", list_audit_logs, methods=["GET"]),
-        Route("/api/tasks", create_task, methods=["POST"]),
-        Route("/api/tasks/{task_id}/knowledge", get_task_knowledge, methods=["GET"]),
-        Route("/api/tasks/{task_id}/memory", get_task_memory, methods=["GET"]),
-        Route("/api/tasks/{task_id}/executions", list_task_executions, methods=["GET"]),
-        Route("/api/tasks/{task_id}/workspace", get_task_workspace, methods=["GET"]),
-        Route("/api/tasks/{task_id}/result", get_task_result, methods=["GET"]),
-        Route("/api/tasks/{task_id}/events", stream_task_events, methods=["GET"]),
-        Route("/api/tasks/{task_id}/events/poll", poll_task_events, methods=["GET"]),
-        Route("/api/dev/tasks/{task_id}/demo-trace", trigger_demo_trace, methods=["POST"]),
-        Route("/api/uploads", upload_asset, methods=["POST"]),
-        Route("/api/knowledge/assets", list_knowledge_assets, methods=["GET"]),
-        Route("/api/skills", list_workspace_skills, methods=["GET"]),
-        Route("/api/executions/{execution_id}", get_execution, methods=["GET"]),
-        Route("/api/executions/{execution_id}/artifacts", list_execution_artifacts, methods=["GET"]),
-        Route(
-            "/api/executions/{execution_id}/artifacts/{artifact_id}",
-            get_execution_artifact_content,
-            methods=["GET"],
+        *(
+            [Mount("/", app=StaticFiles(directory=str(Path(__file__).resolve().parents[2] / "apps/web/dist"), html=True), name="web")]
+            if (Path(__file__).resolve().parents[2] / "apps/web/dist").exists()
+            else []
         ),
-        Route("/api/executions/{execution_id}/tool-calls", list_execution_tool_calls, methods=["GET"]),
-        Route("/api/executions/{execution_id}/events", stream_execution_events, methods=["GET"]),
-        Route("/api/executions/{execution_id}/events/poll", poll_execution_events, methods=["GET"]),
     ],
 )
