@@ -16,6 +16,10 @@ from src.dag_engine.nodes.executor_node import executor_node
 from src.dag_engine.nodes.router_node import _has_business_context, router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
 from src.dag_engine.nodes.static_codegen import build_dataset_aware_code
+from src.dag_engine.nodes.static_codegen_payload import (
+    build_static_codegen_payload,
+    build_static_generation_directives,
+)
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
@@ -1133,6 +1137,133 @@ def test_build_dataset_aware_code_executes_with_compiled_signal_globals():
     assert result["status"] == "static_chain_generated"
     assert any("图谱编译摘要" in item for item in result["derived_findings"])
     assert any("编译态记录了" in item for item in result["derived_findings"])
+
+
+def test_build_static_generation_directives_prioritizes_documents_for_knowledge_reuse():
+    directives = build_static_generation_directives(
+        analysis_plan="1. 先核对规则与文档证据\n2. 再看数据",
+        analysis_brief={
+            "business_rules": ["合同必须上传"],
+            "business_metrics": ["审批时效口径"],
+            "business_filters": ["上海"],
+        },
+        compiled_knowledge={
+            "rule_specs": [{"source_text": "合同必须上传", "subject_terms": ["合同"], "required_terms": ["合同"]}],
+            "metric_specs": [
+                {
+                    "source_text": "审批时效口径",
+                    "metric_name": "审批时效口径",
+                    "measure_terms": ["duration_days"],
+                    "group_terms": ["contract_id"],
+                    "preferred_date_terms": ["biz_date"],
+                }
+            ],
+            "filter_specs": [{"source_text": "上海", "value": "上海", "preferred_date_terms": ["biz_date"]}],
+        },
+        skill_strategy_hints=[
+            {
+                "name": "historical_skill_demo",
+                "focus_areas": ["优先复用已有知识检索证据", "保留可执行验证闭环"],
+                "expected_signals": [],
+            }
+        ],
+    )
+
+    assert directives.prefer_document_evidence is True
+    assert directives.prefer_dataset_evidence is False
+    assert directives.emit_rule_checks is True
+    assert directives.emit_metric_checks is True
+    assert directives.emit_filter_checks is True
+    assert directives.focus_order[:3] == ["rules", "metrics", "filters"]
+    assert directives.focus_order[-2:] == ["documents", "datasets"]
+    assert directives.preferred_measure_terms[0] == "duration_days"
+    assert directives.preferred_group_terms[0] == "contract_id"
+    assert directives.preferred_date_terms[0] == "biz_date"
+
+
+def test_build_static_coder_payload_uses_persisted_analysis_brief_when_state_omits_it():
+    execution_data = ExecutionData(
+        task_id="task-payload",
+        tenant_id="tenant-payload",
+        workspace_id="ws-payload",
+        knowledge={
+            "analysis_brief": {
+                "question": "检查审批时效",
+                "analysis_mode": "hybrid_analysis",
+                "business_metrics": ["审批时效口径"],
+                "business_rules": ["合同必须上传"],
+                "business_filters": ["上海"],
+            },
+            "compiled": {
+                "metric_specs": [
+                    {
+                        "source_text": "审批时效口径",
+                        "metric_name": "审批时效口径",
+                        "normalized_text": "审批时效口径",
+                        "measure_terms": ["duration_days"],
+                        "group_terms": ["contract_id"],
+                        "preferred_date_terms": ["biz_date"],
+                    }
+                ]
+            },
+        },
+        static={"analysis_plan": "先看规则，再看文档和数据"},
+    )
+    payload = build_static_codegen_payload(
+        exec_data=execution_data,
+        state={"input_query": "检查审批时效", "refined_context": "审批时效需要结合合同文档。"},
+        input_mounts=[],
+        approved_skills=[
+            {
+                "name": "knowledge_first_skill",
+                "required_capabilities": ["knowledge_query"],
+                "promotion": {"status": "approved"},
+                "replay_cases": [],
+            }
+        ],
+    )
+
+    assert payload["analysis_brief"]["question"] == "检查审批时效"
+    assert payload["analysis_mode"] == "hybrid_analysis"
+    assert payload["generation_directives"]["prefer_document_evidence"] is True
+    assert payload["generation_directives"]["preferred_measure_terms"][0] == "duration_days"
+
+
+def test_build_dataset_aware_code_includes_directive_driven_sections():
+    payload = {
+        "query": "q",
+        "analysis_plan": "plan",
+        "analysis_mode": "static",
+        "analysis_brief": {},
+        "business_context": {"rules": [], "metrics": [], "filters": []},
+        "compiled_knowledge": {"rule_specs": [], "metric_specs": [], "filter_specs": [], "spec_parse_errors": [], "graph_compilation_summary": {}},
+        "approved_skills": [],
+        "skill_strategy_hints": [],
+        "refined_context_excerpt": "",
+        "input_mounts": [],
+        "structured_dataset_summaries": [],
+        "generation_directives": {
+            "focus_order": ["rules", "metrics", "filters", "documents", "datasets"],
+            "preferred_measure_terms": ["amount"],
+            "preferred_group_terms": ["contract_id"],
+            "preferred_date_terms": ["biz_date"],
+            "prefer_document_evidence": True,
+            "prefer_dataset_evidence": False,
+            "emit_rule_checks": True,
+            "emit_metric_checks": True,
+            "emit_filter_checks": True,
+            "skill_focus_hints": ["优先复用已有知识检索证据"],
+        },
+    }
+
+    code = build_dataset_aware_code(payload)
+
+    assert "generation_directives = payload.get(" in code
+    assert "DerivedFindingsCollector" in code
+    assert "finalize_derived_findings" in code
+    assert "emit_rule_checks" in code
+    assert "emit_metric_checks" in code
+    assert "emit_filter_checks" in code
 
 
 def test_build_dataset_aware_code_uses_compiled_terms_for_document_keyword_hits(tmp_path):
