@@ -19,8 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default=os.getenv("DEERFLOW_CONFIG_PATH", ""),
-        help="Optional DeerFlow config.yaml path",
+        default=os.getenv("DEERFLOW_CONFIG_PATH", str(Path(__file__).resolve().parents[1] / "config" / "deerflow_sidecar.yaml")),
+        help="Optional DeerFlow sidecar config path",
     )
     parser.add_argument(
         "--model",

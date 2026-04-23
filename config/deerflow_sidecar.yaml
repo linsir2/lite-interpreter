@@ -1,0 +1,51 @@
+# DeerFlow sidecar configuration
+# This file is required by the DeerFlow sidecar service
+
+config_version: 1
+
+# Logging level
+log_level: info
+
+# Sandbox configuration - using local sandbox for development
+sandbox:
+  use: deerflow.sandbox.local.local_sandbox_provider:LocalSandboxProvider
+  allow_host_bash: true
+
+# Model configuration - using DashScope (OpenAI-compatible API)
+models:
+  - name: fast_model
+    display_name: Fast Model
+    description: Fast model for quick tasks (Qwen Turbo)
+    use: langchain_openai.chat_models.base:ChatOpenAI
+    model: qwen-turbo
+    openai_api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+    openai_api_key: $DASHSCOPE_API_KEY
+    temperature: 0.1
+    supports_thinking: false
+
+  - name: reasoning_model
+    display_name: Reasoning Model
+    description: Reasoning model (Qwen Plus)
+    use: langchain_openai.chat_models.base:ChatOpenAI
+    model: qwen-plus
+    openai_api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+    openai_api_key: $DASHSCOPE_API_KEY
+    temperature: 0.2
+    supports_thinking: false
+
+# Tools configuration
+# Empty list means only built-in tools will be loaded
+tools: []
+
+# Skills configuration
+skills:
+  container_path: /skills
+
+# Extensions configuration
+extensions:
+  mcp_servers: []
+  skills_state: {}
+
+# Tool search configuration
+tool_search:
+  enabled: false

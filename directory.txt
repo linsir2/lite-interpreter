@@ -8,6 +8,7 @@ lite-interpreter
 ├── requirements.txt              # 运行依赖
 ├── docker-compose.yml            # 外部依赖示例编排
 ├── litellm_config.yml            # 模型 alias 配置
+├── config/deerflow_sidecar.yaml  # DeerFlow sidecar 默认配置
 ├── config/
 │   ├── settings.py               # 全局配置、路径、模型、API、安全默认值
 │   ├── harness_policy.yaml       # 动态/执行治理策略
