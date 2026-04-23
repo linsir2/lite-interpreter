@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from src.common.contracts import ArtifactRecord, ExecutionRecord, InputLease
@@ -70,13 +71,25 @@ def normalize_execution_result(
     artifacts: list[ArtifactRecord] = []
     artifacts_dir = str(result.get("artifacts_dir", "") or "").strip()
     if artifacts_dir:
-        artifacts.append(
-            ArtifactRecord(
-                path=artifacts_dir,
-                artifact_type="sandbox_output",
-                summary=artifacts_dir,
+        output_root = Path(artifacts_dir)
+        artifact_files = sorted(path for path in output_root.rglob("*") if path.is_file()) if output_root.exists() else []
+        if artifact_files:
+            artifacts.extend(
+                ArtifactRecord(
+                    path=str(path),
+                    artifact_type="sandbox_output",
+                    summary=str(path.relative_to(output_root)) if path != output_root else str(path),
+                )
+                for path in artifact_files
             )
-        )
+        else:
+            artifacts.append(
+                ArtifactRecord(
+                    path=artifacts_dir,
+                    artifact_type="sandbox_output",
+                    summary=artifacts_dir,
+                )
+            )
 
     sandbox_session = dict(result.get("sandbox_session", {}) or {})
     session_id = str(sandbox_session.get("session_id") or result.get("trace_id") or generate_uuid())

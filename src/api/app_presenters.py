@@ -19,8 +19,6 @@ from src.api.app_schemas import (
     MethodCard,
 )
 from src.api.execution_resources import (
-    build_execution_artifacts,
-    build_task_execution_summaries,
     build_task_workspace_payload,
     read_artifact_content,
     read_task_execution_data,
@@ -247,32 +245,21 @@ def build_analysis_outputs(
     execution_data: Any,
     outputs: list[dict[str, Any]],
 ) -> list[AnalysisOutputItem]:
-    executions = list(build_task_execution_summaries(execution_data)) if execution_data is not None else []
     output_items: list[AnalysisOutputItem] = []
     for index, output in enumerate(outputs, start=1):
         item = dict(output or {})
         path = str(item.get("path") or "").strip()
         preview_kind = "none"
-        suffix = Path(path).suffix.lower() if path else ""
+        resolved_path = _resolve_output_file_path(path)
+        suffix = resolved_path.suffix.lower() if resolved_path else Path(path).suffix.lower() if path else ""
         if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
             preview_kind = "image"
         elif suffix in {".txt", ".md", ".csv", ".json", ".log"}:
             preview_kind = "text"
-        download_url = None
-        for execution in executions:
-            execution_id = str(execution.get("execution_id") or "").strip()
-            if not execution_id:
-                continue
-            for artifact in build_execution_artifacts(execution_data, execution_id):
-                if str(artifact.get("path") or "").strip() != path:
-                    continue
-                download_url = (
-                    f"/api/app/analyses/{task.task_id}/outputs/output_{task.task_id}_{index}"
-                    f"?workspaceId={task.workspace_id}"
-                )
-                break
-            if download_url:
-                break
+        download_url = (
+            f"/api/app/analyses/{task.task_id}/outputs/output_{task.task_id}_{index}"
+            f"?workspaceId={task.workspace_id}"
+        ) if resolved_path is not None else None
         output_items.append(
             AnalysisOutputItem(
                 id=f"output_{task.task_id}_{index}",
@@ -322,6 +309,11 @@ def resolve_analysis_output_content(task: TaskGlobalState, output_id: str) -> tu
     path = Path(path_value).resolve()
     if not any(_path_within_root(path, root) for root in safe_root_candidates):
         return None
+    if path.is_dir():
+        candidate = _resolve_output_file_path(str(path))
+        if candidate is None:
+            return None
+        path = candidate
     return read_artifact_content({"path": str(path)})
 
 
@@ -331,6 +323,20 @@ def _path_within_root(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _resolve_output_file_path(path_value: str) -> Path | None:
+    path = Path(str(path_value or "").strip())
+    if not str(path).strip():
+        return None
+    resolved = path.resolve()
+    if resolved.is_file():
+        return resolved
+    if resolved.is_dir():
+        candidate = next((item for item in sorted(resolved.rglob("*")) if item.is_file()), None)
+        if candidate is not None:
+            return candidate.resolve()
+    return None
 
 
 def build_analysis_events(task: TaskGlobalState, *, after_event_id: str | None = None) -> tuple[list[AnalysisEventItem], str | None]:

@@ -327,6 +327,121 @@ def test_get_app_analysis_output_uses_app_facing_download_route(tmp_path):
     assert output_response.body == b"month,profit\n2026-01,10\n"
 
 
+def test_get_app_analysis_output_falls_back_from_directory_artifact_to_inner_file(tmp_path):
+    tenant_id = "tenant-app-output-dir"
+    workspace_id = "ws-app-output-dir"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "导出分析结果")
+    output_dir = Path(OUTPUT_DIR) / tenant_id / workspace_id / "trace-dir"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / "profit-report.csv"
+    report_path.write_text("month,profit\n2026-01,10\n", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={
+                "final_response": {
+                    "headline": "分析已完成",
+                    "answer": "结果已导出",
+                    "outputs": [{"name": "profit-report.csv", "type": "dataset", "summary": "利润拆解", "path": str(output_dir)}],
+                }
+            },
+            static={
+                "execution_record": {
+                    "session_id": "session-output-dir",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "task_id": task_id,
+                    "success": True,
+                    "trace_id": "trace-output-dir",
+                    "duration_seconds": 0.2,
+                    "artifacts": [{"path": str(output_dir), "artifact_type": "sandbox_output"}],
+                }
+            },
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    detail_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}",
+        path_params={"analysis_id": task_id},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    detail_response = asyncio.run(get_app_analysis_detail(detail_request))
+    detail_body = json.loads(detail_response.body.decode())
+    download_url = detail_body["outputs"][0]["downloadUrl"]
+
+    output_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1",
+        path_params={"analysis_id": task_id, "output_id": f"output_{task_id}_1"},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    output_response = asyncio.run(get_app_analysis_output(output_request))
+
+    assert detail_response.status_code == 200
+    assert download_url == f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1?workspaceId={workspace_id}"
+    assert output_response.status_code == 200
+    assert output_response.body == b"month,profit\n2026-01,10\n"
+
+
+def test_get_app_analysis_output_hides_empty_directory_artifact(tmp_path):
+    tenant_id = "tenant-app-output-empty-dir"
+    workspace_id = "ws-app-output-empty-dir"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "导出分析结果")
+    output_dir = Path(OUTPUT_DIR) / tenant_id / workspace_id / "trace-empty-dir"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={
+                "final_response": {
+                    "headline": "分析已完成",
+                    "answer": "结果已导出",
+                    "outputs": [{"name": "profit-report.csv", "type": "dataset", "summary": "利润拆解", "path": str(output_dir)}],
+                }
+            },
+            static={
+                "execution_record": {
+                    "session_id": "session-output-empty-dir",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "task_id": task_id,
+                    "success": True,
+                    "trace_id": "trace-output-empty-dir",
+                    "duration_seconds": 0.2,
+                    "artifacts": [{"path": str(output_dir), "artifact_type": "sandbox_output"}],
+                }
+            },
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    detail_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}",
+        path_params={"analysis_id": task_id},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    detail_response = asyncio.run(get_app_analysis_detail(detail_request))
+    detail_body = json.loads(detail_response.body.decode())
+
+    assert detail_response.status_code == 200
+    assert detail_body["outputs"][0]["downloadUrl"] is None
+    assert detail_body["outputs"][0]["previewKind"] == "none"
+
+
 def test_get_app_analysis_output_rejects_sibling_prefix_escape(tmp_path):
     tenant_id = "tenant-app-output-escape"
     workspace_id = "ws-app-output-escape"
