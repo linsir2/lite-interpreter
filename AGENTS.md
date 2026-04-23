@@ -1,167 +1,169 @@
-# AGENTS.md - lite-interpreter 项目知识库
+# AGENTS.md - lite-interpreter 仓库协作约束
 
-## 项目概述
+本文件是 `lite-interpreter` 仓库根目录下的协作契约，适用于整个仓库。
 
-**项目名称**: lite-interpreter（知识增强的代码解释器系统）
-**核心功能**: 结合知识图谱增强的代码解释和分析系统
-**开发阶段**: 按照 directory.txt 中的六个阶段进行开发
+它不再承担历史知识库或长期路线图的职责；那些内容统一放到：
 
-## 项目结构
+- `README.md`
+- `docs/README.md`
+- `docs/project_status.md`
+- `docs/architecture.md`
+- `项目二.md`
 
-### 目录结构
-```
-lite-interpreter/
-├── apps/web/            # 真实 Web 前端（React/Vite）
-├── config/              # 配置层：默认策略、运行时与安全配置
-├── src/                 # 核心源码层：所有业务代码
-│   ├── api/             # Starlette app-facing API 与运行时接口
-│   ├── blackboard/      # 全局黑板状态中枢
-│   ├── common/          # 契约、事件、通用工具
-│   ├── dag_engine/      # DAG 确定性执行引擎
-│   ├── dynamic_engine/  # DeerFlow sidecar 动态研究适配层
-│   ├── harness/         # 动态/执行治理层
-│   ├── kag/             # KAG 静态知识流
-│   ├── mcp_gateway/     # MCP 标准化协议网关
-│   ├── memory/          # durable memory 协调
-│   ├── privacy/         # PII 数据脱敏与隐私保护
-│   ├── sandbox/         # 安全沙箱执行边界
-│   ├── skillnet/        # SkillNet 方法沉淀与复用
-│   └── storage/         # 统一数据访问层（DAL）
-├── tests/               # 自动化测试用例
-├── docs/                # 项目文档
-└── data/                # 本地数据目录（git忽略）
-```
+## 1. 项目当前定位
 
-### 关键文件
-- `directory.txt`: 项目完整结构和文件协作关系
-- `README.md`: 当前产品面、快速开始与文档入口
-- `apps/web/src/app/App.tsx`: Web 工作台入口与主路由
-- `src/api/routers/app_router.py`: app-facing `/api/app/*` 合同
-- `src/storage/schema.py`: 统一数据架构定义
-- `src/kag/builder/classifier.py`: 文档复杂度分类器
-- `src/dag_engine/nodes/kag_retriever.py`: 调用 KAG 进行检索，kag 模块的代码必须符合该文件中的引用与设计
-- `src/kag/retriever/recall/hybrid_search.py`: 混合检索实现
+`lite-interpreter` 当前是一个面向财务、会计与经营分析场景的、受控且可观测的分析运行时原型。
 
-## kag（知识图谱增强）模块规范
+当前真实产品面已经收口为：
 
-### 技术栈
-- **文档解析**: Docling
-- **检索框架**: llama-index
-- **模型调用**: litellm
-- **图谱存储**: neo4j
-- **监控追踪**: langfuse
+- 真实 Web 前端：`apps/web`
+- app-facing API：`/api/app/*`
 
-### 数据架构
-- 预定义 `schema.py` 存储定义的数据架构
-- 参考 `src/storage/schema.py` 中的模型定义：
-  - `DocChunk`: 文本块存储模型
-  - `EntityNode`: 图谱实体节点模型
-  - `KnowledgeTriple`: 知识三元组模型
-  - `StructuredDatasetMeta`: 结构化数据表元数据
+不要再把仓库理解为：
 
-### 图谱设计 - MAGMA（多维正交图谱）
-**核心原则**: 使用强约束，不使用 openie，拆分为四张正交图：
+- Streamlit 产品原型
+- 旧 `tasks / executions / uploads` 产品接口集合
+- 多种动态 runtime 模式并存的实验场
 
-1. **语义图 (Semantic Graph)**
-   - 基于文本内容的语义关系
-   - 实体间的概念关联
+## 2. 当前必须尊重的边界
 
-2. **时序图 (Temporal Graph)**
-   - 时间序列关系
-   - 事件的时间先后顺序
+### 产品面边界
 
-3. **因果图 (Causal Graph)**
-   - 因果关系推理
-   - 条件依赖关系
+- 前端主工作台在 `apps/web`
+- 产品前端只应消费 `/api/app/*`
+- 不要恢复旧公开产品接口给前端使用
+- 不要重新引入 Streamlit 前端或相关默认值
 
-4. **实体图 (Entity Graph)**
-   - 实体识别与链接
-   - 实体属性关系
+### 编排与执行边界
 
-**优势**: 检索时先通过元数据过滤，提高检索效率
+- DAG 仍是主流程 owner
+- DeerFlow 只负责受控动态研究，不是系统 owner
+- 最终代码执行边界仍在本地 sandbox
+- Blackboard 是状态事实源，不要绕开它传隐式状态
 
-### 分块策略
-三层分块策略，防止巨型章节：
+### 输入边界
 
-1. **结构化感知 (Layout-aware)**
-   - 基于文档结构（标题、段落、列表等）进行分块
+当前静态链可靠支持的结构化输入格式是：
 
-2. **按节定父块 (Parent-child Chunking)**
-   - 父子分块关系，保持上下文连贯性
+- `csv`
+- `tsv`
+- `json`
 
-3. **长度兜底防御 (SentenceSplitter 兜底)**
-   - 当上述策略失效时，使用 SentenceSplitter 进行安全分块
+不要继续把 `xlsx / xls / parquet` 当成“稳定支持”写进产品文案或开发说明。
 
-### 向量化策略
-1. **叶子节点计算**: 只挑出 Leaf（叶子节点）计算向量
-2. **MRL 降维**: 把叶子节点的向量截断到 256 维
-3. **存储**: 降维后的向量存入 Qdrant
+## 3. 关键目录
 
-### 模型选择
-- 使用 qwen/deepseek 相关模型
-- 多个模型分工，各自负责擅长的任务
-- **轻量与复杂的取舍**: 简单任务使用轻量模型，复杂任务使用强大模型
+### 产品前端
 
-### 检索策略
-1. **文档分类**: 参照 classifier 中的 small/medium/large 分类
-2. **混合检索**: 使用 rrf（Reciprocal Rank Fusion）算法
-3. **多路召回**: BM25、SPLADE、图谱搜索等
-4. **元数据过滤**: 检索时先通过元数据过滤
+- `apps/web/src/app/App.tsx`
+- `apps/web/src/app/AppShell.tsx`
+- `apps/web/src/lib/api.ts`
+- `apps/web/src/lib/types.ts`
+- `apps/web/src/pages/*`
 
-### 监控与追踪
-- 使用 **langfuse** 监测整个 kag 模块的 pipeline
-- 追踪文档解析、分块、向量化、检索等各个环节
+### app-facing API
 
-### 文档分类标准
-参照 `src/kag/builder/classifier.py`:
-- **SMALL**: 单 chunk，直接向量化（≤ CLASSIFIER_SMALL_THRESHOLD）
-- **MEDIUM**: 分块 + 向量化（≤ CLASSIFIER_MEDIUM_THRESHOLD）
-- **LARGE**: 分块 + 向量化 + 图谱抽取（> CLASSIFIER_MEDIUM_THRESHOLD）
+- `src/api/main.py`
+- `src/api/routers/app_router.py`
+- `src/api/app_schemas.py`
+- `src/api/app_presenters.py`
+- `src/api/services/task_flow_service.py`
+- `src/api/services/asset_service.py`
 
-## 开发工作流
+### 核心运行时
 
-### 常用命令
+- `src/blackboard/*`
+- `src/dag_engine/*`
+- `src/dynamic_engine/*`
+- `src/sandbox/*`
+- `src/kag/*`
+- `src/skillnet/*`
+
+## 4. 文档真相源
+
+改动仓库时，优先遵守下面的文档职责：
+
+- `docs/project_status.md`：当前状态、测试基线、热点、非目标的唯一真相源
+- `README.md`：仓库入口，不维护大量易过期细节
+- `docs/architecture.md`：只解释结构与边界
+- `docs/deployment.md`：只讲运行、配置、排障
+- `docs/development_guide.md`：只讲改动流程与开发入口
+- `docs/testing.md`：只讲验证方法与测试分层
+- `docs/user_guide.md`：只讲业务用户操作路径
+- `directory.txt`：只做目录导览
+
+## 5. 高风险漂移点
+
+以下改动如果发生，必须同步更新文档与契约：
+
+1. 产品前端页面结构或主导航改变
+2. `/api/app/*` 字段、路径、行为改变
+3. 本地联调端口、CORS 默认值、认证方式改变
+4. 资料上传、`assetIds` 挂接、结果产物读取方式改变
+5. 动态运行时支持范围改变
+
+至少同步检查这些文件：
+
+- `README.md`
+- `docs/README.md`
+- `docs/deployment.md`
+- `docs/development_guide.md`
+- `docs/testing.md`
+- `directory.txt`
+- `.env.example`
+- `config/settings.py`
+
+## 6. 改动建议
+
+### 改前端时
+
+- 同步检查 `apps/web/src/lib/types.ts` 与 `src/api/app_schemas.py`
+- 同步检查 `apps/web/src/lib/api.ts` 与 `src/api/routers/app_router.py`
+- 不要引入第二套状态真相
+
+### 改 app-facing API 时
+
+- 优先改 schema / presenter / route / frontend consumer 四件套
+- 旧产品面路由不要悄悄“顺手恢复”
+- 涉及产品合同变化时，同步改文档和测试
+
+### 改配置时
+
+- `.env.example`
+- `config/settings.py`
+- `docs/deployment.md`
+
+这三处应当一起改
+
+## 7. 最低验证要求
+
+### 文档或配置改动
+
 ```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 运行测试
-pytest tests/
-
-# 查看项目结构
-cat directory.txt
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m pytest -q tests/test_docs_consistency.py
 ```
 
-### 代码规范
-- 遵循 Python PEP 8 规范
-- 使用类型注解
-- 模块化设计，高内聚低耦合
+### 前端改动
 
-## 需要改进的方面
+```bash
+cd /home/linsir365/projects/lite-interpreter/apps/web
+npm run lint
+npm run build
+```
 
-### 短期改进
-1. 实现 MAGMA 多维正交图谱（语义、时序、因果、实体）
-2. 集成 Docling 进行文档解析
-3. 实现 langfuse 监控集成
-4. 实现分块策略（结构化感知 + 父子分块）
-5. 优化向量化策略（叶子节点 + MRL 降维）
-6. 实现多模型分工调用
+### 后端或合同改动
 
-### 长期改进
-1. 性能优化和缓存策略
-  - 针对于检索缓存：为了在保证响应质量的同时显著降低延迟与成本，系统通常会设计一套分层、互补的缓存策略。最基础的一层是精确匹配缓存：将完整的输入 Prompt（或其哈希）作为 Key，直接映射到历史生成的回复，用于拦截大量完全相同的高频请求。更进一步是语义缓存：当新请求到达时，先用轻量级 Embedding 模型将其向量化，并在向量数据库中与历史请求计算余弦相似度；若相似度超过很高阈值（例如 0.95），即可直接返回命中的历史结果，从而跳过大模型推理。对于长文档或固定上下文的场景，还可以采用上下文预缓存（也称 prompt caching）：利用模型的显式缓存能力预先“存入”文档内容或系统提示词，使后续请求只需付出少量 token 成本即可复用这些上下文。最后，为了应对突发热点带来的并发洪峰，需要引入请求合并机制：当大量用户在极短时间内询问同一问题时，通过分布式锁将并发的相同请求挂起，只向下游模型发起一次调用，待结果返回后再统一分发给所有等待的请求，以避免缓存击穿并保护后端基础设施。
-  
-2. 分布式处理支持
-3. 更智能的检索优化
+```bash
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m pytest -q
+```
 
-## 注意事项
+## 8. 最后提醒
 
-1. **文件协作**: 重点阅读 `directory.txt`，注意文档各自的内容以及之间的协作关系
-2. **模块边界**: kag 模块专注于非结构化文档处理，结构化数据由 DAG Router 引流至 Inspector
-3. **错误处理**: 完善的异常处理和日志记录
-4. **性能考虑**: 考虑大规模文档处理时的性能和资源消耗
+当前仓库最忌讳的不是“功能少”，而是重新出现两套真相：
 
----
+- 一套写在代码里
+- 一套写在旧文档里
 
-*最后更新: 2026-03-30*
-*维护者: OpenHands Agent*
+如果你改了产品面、接口面、配置面，却没有同步文档和测试，这个仓库会很快再次失真。
