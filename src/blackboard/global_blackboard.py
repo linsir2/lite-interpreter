@@ -207,6 +207,16 @@ class GlobalBlackboard:
         with self._rw_lock:
             return self._get_task_state_locked(task_id)
 
+    def list_workspace_tasks(self, tenant_id: str, workspace_id: str) -> list[TaskGlobalState]:
+        """列出指定 workspace 下的任务，按最近更新时间倒序。"""
+        with self._rw_lock:
+            tasks = [
+                task
+                for task in self._iter_known_global_states_locked()
+                if task.tenant_id == tenant_id and task.workspace_id == workspace_id
+            ]
+        return sorted(tasks, key=lambda item: item.updated_at, reverse=True)
+
     def update_global_status(
         self, task_id: str, new_status: GlobalStatus, sub_status: str | None = None, **kwargs
     ) -> None:

@@ -64,6 +64,8 @@ def build_static_input_mounts(exec_data: Any) -> list[dict[str, Any]]:
         load_kwargs = dataset_meta.load_kwargs if hasattr(dataset_meta, "load_kwargs") else {}
         mount["encoding"] = str(load_kwargs.get("encoding") or "utf-8")
         mount["sep"] = str(load_kwargs.get("sep") or ",")
+        if load_kwargs.get("format"):
+            mount["format"] = str(load_kwargs.get("format"))
     return input_mounts
 
 
@@ -316,6 +318,23 @@ def merge_terms(*groups):
 def term_match_score(text, keywords):
     lowered = str(text).lower()
     return sum(1 for keyword in keywords if str(keyword).strip() and str(keyword).lower() in lowered)
+
+def load_structured_rows(path, item):
+    suffix = path.suffix.lower()
+    if suffix == ".json" or item.get("format") == "json":
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        if isinstance(payload, list):
+            return [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, dict):
+            items = payload.get("items")
+            if isinstance(items, list):
+                return [row for row in items if isinstance(row, dict)]
+            return [payload]
+        return []
+    with path.open("r", encoding=item.get("encoding") or "utf-8", errors="ignore", newline="") as handle:
+        reader = csv.DictReader(handle, delimiter=item.get("sep") or ",")
+        rows = list(reader)
+        return rows, list(reader.fieldnames or [])
 
 tax_signal_terms_global = merge_terms(compiled_rule_terms, business_keywords, ["税", "tax", "vat", "含税"])
 contract_signal_terms_global = merge_terms(compiled_rule_terms, business_keywords, ["合同", "contract"])
@@ -576,10 +595,12 @@ for item in payload.get("input_mounts", []):
     }}
     if path.exists() and item["kind"] == "structured_dataset":
         try:
-            with path.open("r", encoding=item.get("encoding") or "utf-8", errors="ignore", newline="") as handle:
-                reader = csv.DictReader(handle, delimiter=item.get("sep") or ",")
-                rows = list(reader)
-            columns = list(reader.fieldnames or [])
+            loaded_rows = load_structured_rows(path, item)
+            if isinstance(loaded_rows, tuple):
+                rows, columns = loaded_rows
+            else:
+                rows = loaded_rows
+                columns = list(rows[0].keys()) if rows else []
             summary["row_count"] = len(rows)
             summary["columns"] = columns
             summary["sample_rows"] = rows[:3]

@@ -6,13 +6,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 from typing import Any
 
 import uvicorn
+from dotenv import load_dotenv
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
+
+# Load .env file from project root before any other code runs
+_project_root = Path(__file__).resolve().parents[1]
+load_dotenv(_project_root / ".env")
 
 
 def build_client_kwargs(payload: dict[str, Any]) -> dict[str, Any]:

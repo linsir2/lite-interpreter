@@ -641,6 +641,45 @@ def test_data_inspector_persists_successful_schema_updates(tmp_path):
     assert restored.inputs.structured_datasets[0].load_kwargs == {}
 
 
+def test_data_inspector_handles_json_structured_dataset(tmp_path):
+    tenant_id = "tenant_inspector_json"
+    task_id = global_blackboard.create_task(tenant_id, "ws_inspector_json", "inspect dataset")
+    json_path = tmp_path / "sales.json"
+    json_path.write_text('[{"region":"sh","amount":10},{"region":"bj","amount":12}]', encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_inspector_json",
+            inputs={
+                "structured_datasets": [
+                    {
+                        "file_name": "sales.json",
+                        "path": str(json_path),
+                    }
+                ],
+            },
+        ),
+    )
+
+    result = data_inspector_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_inspector_json",
+            "input_query": "inspect dataset",
+        }
+    )
+
+    assert result["blocked"] is False
+    restored = execution_blackboard.read(tenant_id, task_id)
+    assert restored is not None
+    assert "JSON表结构" in restored.inputs.structured_datasets[0].dataset_schema
+    assert restored.inputs.structured_datasets[0].load_kwargs == {"format": "json"}
+
+
 def test_data_inspector_persists_partial_progress_before_later_failure(tmp_path, monkeypatch):
     tenant_id = "tenant_inspector_partial"
     task_id = global_blackboard.create_task(tenant_id, "ws_inspector_partial", "inspect dataset")
@@ -1199,6 +1238,40 @@ def test_build_dataset_aware_code_uses_spec_terms_for_metric_and_filter_checks(t
     assert result["filter_checks"][0]["matched_values"]
     assert any("编译态优先指标列为 duration_days" in item for item in result["derived_findings"])
     assert any("编译态优先日期列为 biz_date" in item for item in result["derived_findings"])
+
+
+def test_build_dataset_aware_code_supports_json_structured_inputs(tmp_path):
+    json_path = tmp_path / "sales.json"
+    json_path.write_text(
+        '[{"contract_id":"A","amount":100,"biz_date":"2024-01-01"},{"contract_id":"B","amount":90,"biz_date":"2024-01-03"}]',
+        encoding="utf-8",
+    )
+    payload = {
+        "query": "检查金额和日期",
+        "analysis_plan": "plan",
+        "analysis_mode": "static",
+        "analysis_brief": {},
+        "business_context": {"rules": [], "metrics": [], "filters": []},
+        "compiled_knowledge": {"rule_specs": [], "metric_specs": [], "filter_specs": [], "spec_parse_errors": [], "graph_compilation_summary": {}},
+        "approved_skills": [],
+        "skill_strategy_hints": [],
+        "refined_context_excerpt": "",
+        "input_mounts": [
+            {
+                "kind": "structured_dataset",
+                "file_name": "sales.json",
+                "container_path": str(json_path),
+                "format": "json",
+            }
+        ],
+        "structured_dataset_summaries": [],
+    }
+    code = build_dataset_aware_code(payload)
+    namespace: dict[str, object] = {}
+    exec(code, namespace)
+    result = namespace["result"]
+    assert result["datasets"][0]["row_count"] == 2
+    assert "amount" in result["datasets"][0]["columns"]
 
 
 def test_debugger_node_rewrites_safe_fallback():

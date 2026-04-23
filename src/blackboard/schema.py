@@ -161,6 +161,7 @@ class RuntimeMetadataState(StrictStateModel):
     effective_runtime_mode: str = ""
     requested_runtime_mode: str = ""
     sidecar_fallback_reason: str = ""
+    sidecar_url: str = ""
     confidence: str = ""
 
 

@@ -9,6 +9,7 @@ Data Inspector 数据嗅探节点
 """
 
 import csv
+import json
 import os
 from typing import Any
 
@@ -81,6 +82,35 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
 
         logger.info(f"正在探查新文件: {file_name}")
         inspection_result = {"schema": "", "load_kwargs": {}}
+        suffix = os.path.splitext(str(file_path))[-1].lower()
+
+        if suffix == ".json":
+            try:
+                with open(file_path, encoding="utf-8", errors="ignore") as f:
+                    payload = json.load(f)
+                if isinstance(payload, list):
+                    rows = [item for item in payload if isinstance(item, dict)]
+                elif isinstance(payload, dict):
+                    rows = [item for item in payload.get("items", []) if isinstance(item, dict)]
+                    if not rows:
+                        rows = [payload]
+                else:
+                    rows = []
+                df = pd.DataFrame(rows[:200])
+                inspection_result["schema"] = (
+                    f"【JSON表结构】\n{df.dtypes.to_markdown() if not df.empty else 'empty'}\n\n"
+                    f"【样本数据】\n{df.head(5).to_markdown() if not df.empty else 'empty'}"
+                )
+                inspection_result["load_kwargs"] = {"format": "json"}
+                dataset.dataset_schema = inspection_result["schema"]
+                dataset.load_kwargs = inspection_result["load_kwargs"]
+                execution_blackboard.write(tenant_id, task_id, exec_data)
+                execution_blackboard.persist(tenant_id, task_id)
+                inspection_count += 1
+                logger.info(f"{file_name} -> JSON 探查成功。")
+                continue
+            except Exception as json_exc:
+                logger.warning(f"{file_name} -> JSON 探查失败，降级到通用探查。报错: {json_exc}")
 
         # 第一道防线：duckdb快速探查
         try:
