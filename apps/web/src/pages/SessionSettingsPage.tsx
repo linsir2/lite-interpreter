@@ -13,16 +13,16 @@ export function SessionSettingsPage({
 }) {
   return (
     <PageCard>
-      <SectionHeader title="连接与会话" description="管理 API 地址和 Bearer Token。切换后会重新拉取当前会话信息。" />
-      <div className="grid gap-4 border-b border-border px-6 py-5 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[28px] border border-border bg-gradient-to-br from-[#143732] to-[#0f2d28] px-5 py-5 text-white">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[#dec390]">连接说明</div>
-          <div className="mt-3 space-y-2 text-sm leading-6 text-white/72">
+      <SectionHeader title="连接与会话" level="h1" description="管理 API 地址和 Bearer Token。切换后会重新拉取当前会话信息。" />
+      <div className="grid gap-4 border-b border-white/10 px-6 py-5 lg:grid-cols-[1.1fr_0.9fr] sm:px-7">
+        <div className="rounded-[28px] border border-primary/20 bg-primary/10 px-5 py-5 text-[#f1dfbd]">
+          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">连接说明</div>
+          <div className="mt-3 space-y-2 text-sm leading-6">
             <p>这里只处理环境连接和令牌，不影响当前工作区的业务数据。</p>
             <p>切换后会重新拉取会话、分析列表、资料库和方法库。</p>
           </div>
         </div>
-        <div className="rounded-[28px] border border-border bg-surface-2 px-5 py-5 text-sm text-muted">
+        <div className="rounded-[28px] border border-white/10 bg-white/5 px-5 py-5 text-sm text-muted">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-muted">连接建议</div>
           <ul className="mt-3 space-y-2 leading-6">
             <li>• 日常开发优先使用本地 API 地址。</li>
@@ -32,7 +32,7 @@ export function SessionSettingsPage({
         </div>
       </div>
       <form
-        className="grid gap-6 px-6 py-6 lg:grid-cols-2"
+        className="grid gap-6 px-6 py-6 lg:grid-cols-2 sm:px-7"
         onSubmit={(event) => {
           event.preventDefault()
           const form = new FormData(event.currentTarget)

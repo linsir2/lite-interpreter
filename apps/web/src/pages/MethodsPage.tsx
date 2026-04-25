@@ -1,24 +1,24 @@
-import { PageCard, SectionHeader } from '@/components/ui'
+import { PageCard, SectionHeader, StatusPill } from '@/components/ui'
 import type { MethodCard } from '@/lib/types'
 
 export function MethodsPage({ methods }: { methods: MethodCard[] }) {
   return (
     <PageCard>
-      <SectionHeader title="分析方法库" description="查看当前工作区可复用的分析方法、所需能力和使用情况。" />
-      <div className="grid gap-4 border-b border-border px-6 py-5 md:grid-cols-3">
+      <SectionHeader title="分析方法库" level="h1" description="查看当前工作区可复用的分析方法、所需能力和使用情况。" />
+      <div className="grid gap-4 border-b border-white/10 px-6 py-5 md:grid-cols-3 sm:px-7">
         <MethodMetric label="方法总数" value={String(methods.length)} />
         <MethodMetric label="高频方法" value={String(methods.filter((method) => method.usageCount > 0).length)} />
         <MethodMetric label="已沉淀" value={String(methods.filter((method) => method.promotionStatus === 'approved').length)} />
       </div>
-      <div className="grid gap-4 px-6 py-6 lg:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-4 px-6 py-6 lg:grid-cols-2 xl:grid-cols-3 sm:px-7">
         {methods.map((method) => (
-          <article key={method.methodId} className="rounded-[28px] border border-border bg-surface-2 p-5 transition hover:-translate-y-[1px] hover:bg-white">
-            <div className="text-xs uppercase tracking-[0.16em] text-accent">{method.promotionStatus}</div>
-            <h3 className="mt-3 text-lg font-semibold text-ink">{method.name}</h3>
+          <article key={method.methodId} className="rounded-[28px] border border-white/10 bg-white/5 p-5 transition hover:-translate-y-[1px] hover:bg-white/10">
+            <StatusPill tone={method.promotionStatus === 'approved' ? 'success' : method.promotionStatus ? 'warning' : 'neutral'}>{method.promotionStatus || 'draft'}</StatusPill>
+            <h3 className="mt-4 text-lg font-semibold text-ink">{method.name}</h3>
             <p className="mt-2 text-sm leading-6 text-muted">{method.description}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               {method.requiredCapabilities.map((capability) => (
-                <span key={capability} className="rounded-full border border-border bg-white px-3 py-1 text-xs text-muted">{capability}</span>
+                <span key={capability} className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-muted">{capability}</span>
               ))}
             </div>
             <div className="mt-5 font-mono text-sm text-muted">使用次数：{method.usageCount}</div>
@@ -32,7 +32,7 @@ export function MethodsPage({ methods }: { methods: MethodCard[] }) {
 
 function MethodMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[24px] border border-border bg-surface-2 px-4 py-4">
+    <div className="rounded-[24px] border border-white/10 bg-white/5 px-4 py-4">
       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{label}</div>
       <div className="mt-2 font-mono text-[1.65rem] font-semibold text-ink">{value}</div>
     </div>

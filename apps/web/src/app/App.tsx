@@ -21,8 +21,14 @@ const ANALYSIS_REFRESH_INTERVAL_MS = 4000
 const ANALYSIS_LIST_REFRESH_INTERVAL_MS = 10000
 const TERMINAL_ANALYSIS_STATUSES = new Set(['success', 'failed', 'waiting_for_human'])
 
+type ViewMode = 'business' | 'runtime'
+
 function loadStoredValue(key: string, fallback: string) {
   return window.localStorage.getItem(key) ?? fallback
+}
+
+function loadStoredViewMode(): ViewMode {
+  return window.localStorage.getItem('lite-interpreter:viewMode') === 'runtime' ? 'runtime' : 'business'
 }
 
 function isTerminalAnalysisStatus(status: string | null | undefined) {
@@ -44,6 +50,7 @@ function AppInner() {
   const [apiBaseUrl, setApiBaseUrl] = useState(() => loadStoredValue('lite-interpreter:apiBaseUrl', DEFAULT_API_BASE_URL))
   const [accessToken, setAccessToken] = useState(() => loadStoredValue('lite-interpreter:accessToken', ''))
   const [workspaceId, setWorkspaceId] = useState(() => window.localStorage.getItem('lite-interpreter:workspaceId') ?? '')
+  const [viewMode, setViewMode] = useState<ViewMode>(() => loadStoredViewMode())
   const [auditPage, setAuditPage] = useState(1)
 
   const config = useMemo<ApiClientConfig>(
@@ -128,6 +135,11 @@ function AppInner() {
     setAccessToken(nextAccessToken)
   }
 
+  function persistViewMode(nextViewMode: ViewMode) {
+    window.localStorage.setItem('lite-interpreter:viewMode', nextViewMode)
+    setViewMode(nextViewMode)
+  }
+
   if (!accessToken || sessionQuery.isError || session?.authenticated === false) {
     return (
       <SessionGate
@@ -158,6 +170,8 @@ function AppInner() {
               setWorkspaceId(nextWorkspaceId)
               setAuditPage(1)
             }}
+            viewMode={viewMode}
+            onViewModeChange={persistViewMode}
             onSignOut={() => {
               window.localStorage.removeItem('lite-interpreter:accessToken')
               window.localStorage.removeItem('lite-interpreter:workspaceId')
@@ -169,14 +183,24 @@ function AppInner() {
         }
       >
         <Route index element={<Navigate replace to="/analyses" />} />
-        <Route path="analyses" element={<AnalysesPage data={analysesQuery.data} />} />
+        <Route
+          path="analyses"
+          element={
+            <AnalysesPage
+              data={analysesQuery.data}
+              assets={assetsQuery.data?.items ?? []}
+              viewMode={viewMode}
+              onSubmit={(input) => createAnalysis.mutateAsync(input)}
+            />
+          }
+        />
         <Route
           path="analyses/new"
           element={<NewAnalysisPage assets={assetsQuery.data?.items ?? []} onSubmit={(input) => createAnalysis.mutateAsync(input)} />}
         />
         <Route
           path="analyses/:analysisId"
-          element={<AnalysisDetailRoute config={effectiveConfig} />}
+          element={<AnalysisDetailRoute config={effectiveConfig} viewMode={viewMode} />}
         />
         <Route path="assets" element={<AssetsPage assets={assetsQuery.data?.items ?? []} onUpload={(input) => uploadAssets.mutateAsync(input)} />} />
         <Route path="methods" element={<MethodsPage methods={methodsQuery.data?.items ?? []} />} />
@@ -202,7 +226,7 @@ function AppInner() {
   )
 }
 
-function AnalysisDetailRoute({ config }: { config: ApiClientConfig }) {
+function AnalysisDetailRoute({ config, viewMode }: { config: ApiClientConfig; viewMode: ViewMode }) {
   const { analysisId = '' } = useParams<{ analysisId: string }>()
   const [events, setEvents] = useState<AnalysisEvent[]>([])
   const [terminalSyncState, setTerminalSyncState] = useState<'idle' | 'syncing' | 'done'>('idle')
@@ -275,6 +299,7 @@ function AnalysisDetailRoute({ config }: { config: ApiClientConfig }) {
       detail={detailQuery.data}
       events={events}
       isLiveRefreshing={!isTerminalAnalysisStatus(detailQuery.data?.status)}
+      viewMode={viewMode}
     />
   )
 }

@@ -17,17 +17,23 @@ export function SessionGate({
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-12">
-      <PageCard className="w-full max-w-3xl overflow-hidden">
+      <PageCard className="w-full max-w-4xl">
         <div className="grid gap-0 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="border-b border-border bg-white px-8 py-10 lg:border-b-0 lg:border-r">
-            <div className="text-sm font-semibold uppercase tracking-[0.18em] text-accent">lite-interpreter</div>
-            <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink">连接分析平台</h1>
-            <p className="mt-4 max-w-xl text-base leading-7 text-muted">
-              输入 API 地址和 Bearer Token 后，即可进入当前工作区的分析平台。
-            </p>
+          <div className="relative border-b border-white/10 px-8 py-10 lg:border-b-0 lg:border-r lg:border-white/10">
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_0%,rgba(215,176,110,0.18),transparent_30%)]" />
+            <div className="relative">
+              <div className="text-sm font-semibold uppercase tracking-[0.24em] text-primary">lite-interpreter</div>
+              <h1 className="mt-5 text-4xl font-semibold tracking-[-0.04em] text-ink">连接分析平台</h1>
+              <p className="mt-4 max-w-xl text-base leading-8 text-muted">
+                输入 API 地址和 Bearer Token 后，即可进入当前工作区的业务分析与运行时透明度控制台。
+              </p>
+              <div className="mt-8 rounded-[28px] border border-primary/20 bg-primary/10 px-5 py-4 text-sm leading-6 text-[#f1dfbd]">
+                产品面只读取稳定的 `/api/app/*` 合同，不会直接暴露内部 DAG 合同。
+              </div>
+            </div>
           </div>
           <form
-            className="space-y-5 bg-surface-2 px-8 py-10"
+            className="space-y-5 bg-white/5 px-8 py-10"
             onSubmit={(event) => {
               event.preventDefault()
               onSubmit({ apiBaseUrl: nextApiBaseUrl, accessToken: nextAccessToken })

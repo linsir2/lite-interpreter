@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 
-import { Button, FieldLabel, PageCard, SectionHeader, Select } from '@/components/ui'
+import { Button, FieldLabel, PageCard, SectionHeader, Select, StatusPill } from '@/components/ui'
 import type { AssetListItem, AssetUploadResponse } from '@/lib/types'
 
 export function AssetsPage({
@@ -18,10 +18,13 @@ export function AssetsPage({
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
         <PageCard>
-          <SectionHeader title="上传资料" description="上传报表、台账或说明文档，为后续分析任务提供输入。" />
-          <div className="space-y-5 px-6 py-6">
+          <SectionHeader title="上传资料" level="h1" description="上传本次分析要引用的报表、台账或口径说明材料。" />
+          <div className="space-y-5 px-6 py-6 sm:px-7">
+            <div className="rounded-[28px] border border-primary/20 bg-primary/10 px-5 py-4 text-sm leading-6 text-[#f1dfbd]">
+              稳定结构化输入以 csv / tsv / json 为准；其他文件先作为业务说明材料进入资料库。
+            </div>
             <div>
               <FieldLabel htmlFor="asset-kind-select">材料类型</FieldLabel>
               <Select id="asset-kind-select" value={assetKind} onChange={(event) => setAssetKind(event.target.value)}>
@@ -31,20 +34,20 @@ export function AssetsPage({
               </Select>
             </div>
             <button
-              className="flex min-h-52 w-full flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-primary/15 bg-surface-2 px-6 text-center transition hover:border-primary/30 hover:bg-white"
+              className="flex min-h-52 w-full flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-primary/25 bg-black/20 px-6 text-center transition hover:border-primary/40 hover:bg-white/5"
               type="button"
               onClick={() => inputRef.current?.click()}
             >
               <span className="text-base font-semibold text-ink">拖入文件或点击选择</span>
-              <span className="mt-2 max-w-md text-sm leading-6 text-muted">建议优先上传本次分析真正需要引用的报表、台账或口径说明。</span>
+              <span className="mt-2 max-w-md text-sm leading-6 text-muted">建议只上传本次分析真正需要引用的材料，保证证据链清晰。</span>
             </button>
             <input ref={inputRef} className="hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             {files.length ? (
-              <div className="rounded-2xl border border-border bg-surface-2 px-4 py-4 text-sm text-muted">
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-muted">
                 已选择 {files.length} 个文件：{files.map((file) => file.name).join('，')}
               </div>
             ) : null}
-            {message ? <div className="rounded-2xl border border-border bg-surface-2 px-4 py-3 text-sm text-muted">{message}</div> : null}
+            {message ? <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-muted">{message}</div> : null}
             <Button
               disabled={!files.length || uploading}
               onClick={async () => {
@@ -60,6 +63,7 @@ export function AssetsPage({
                   setUploading(false)
                 }
               }}
+              type="button"
             >
               {uploading ? '上传中…' : '上传到当前工作区'}
             </Button>
@@ -68,12 +72,12 @@ export function AssetsPage({
 
         <PageCard>
           <SectionHeader title="当前资料库" description="查看当前工作区中的资料，以及每份材料是否已经准备好供分析使用。" />
-          <div className="grid gap-4 border-b border-border px-6 py-5 md:grid-cols-3">
+          <div className="grid gap-4 border-b border-white/10 px-6 py-5 md:grid-cols-3 sm:px-7">
             <AssetMetric label="资料总数" value={String(assets.length)} />
-            <AssetMetric label="可直接分析" value={String(assets.filter((asset) => asset.readinessLabel === '可直接分析').length)} />
-            <AssetMetric label="待处理" value={String(assets.filter((asset) => asset.readinessLabel !== '可直接分析').length)} />
+            <AssetMetric label="可直接分析" value={String(assets.filter((asset) => asset.readinessLabel === '可直接分析').length)} tone="success" />
+            <AssetMetric label="待处理" value={String(assets.filter((asset) => asset.readinessLabel !== '可直接分析').length)} tone="warning" />
           </div>
-          <div className="border-b border-border px-6 py-4 text-sm text-muted">
+          <div className="border-b border-white/10 px-6 py-4 text-sm leading-6 text-muted sm:px-7">
             优先保证报表、台账和说明材料的口径一致。准备好的资料越干净，后续分析结论越容易复核。
           </div>
           <div className="overflow-x-auto px-4 pb-4">
@@ -87,13 +91,13 @@ export function AssetsPage({
               </thead>
               <tbody>
                 {assets.map((asset) => (
-                  <tr key={asset.assetId} className="bg-surface-2">
+                  <tr key={asset.assetId} className="bg-white/5 transition hover:bg-white/10">
                     <td className="rounded-l-2xl px-3 py-4">
                       <div className="font-medium text-ink">{asset.name}</div>
                       <div className="mt-1 text-xs text-muted">{asset.filePath || '无本地路径展示'}</div>
                     </td>
                     <td className="px-3 py-4 text-muted">{asset.kind}</td>
-                    <td className="rounded-r-2xl px-3 py-4 text-muted">{asset.readinessLabel}</td>
+                    <td className="rounded-r-2xl px-3 py-4"><StatusPill tone={asset.readinessLabel === '可直接分析' ? 'success' : 'warning'}>{asset.readinessLabel}</StatusPill></td>
                   </tr>
                 ))}
                 {!assets.length ? <tr><td className="px-3 py-10 text-center text-muted" colSpan={3}>当前工作区还没有资料。</td></tr> : null}
@@ -106,9 +110,10 @@ export function AssetsPage({
   )
 }
 
-function AssetMetric({ label, value }: { label: string; value: string }) {
+function AssetMetric({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'success' | 'warning' }) {
+  const borderClass = tone === 'success' ? 'border-emerald-400/20' : tone === 'warning' ? 'border-amber-400/20' : 'border-white/10'
   return (
-    <div className="rounded-2xl border border-border bg-surface-2 px-4 py-4">
+    <div className={`rounded-2xl border ${borderClass} bg-white/5 px-4 py-4`}>
       <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted">{label}</div>
       <div className="mt-2 font-mono text-2xl font-semibold text-ink">{value}</div>
     </div>
