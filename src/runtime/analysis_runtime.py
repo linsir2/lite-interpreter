@@ -29,6 +29,7 @@ class AnalysisTaskProfile:
     """Normalized classification of one analysis task."""
 
     analysis_mode: str
+    research_mode: str
     coarse_mode: str
     final_mode: str
     evidence_strategy: str
@@ -53,6 +54,7 @@ class AnalysisTaskProfile:
     def to_metadata(self) -> dict[str, Any]:
         return {
             "analysis_mode": self.analysis_mode,
+            "research_mode": self.research_mode,
             "coarse_mode": self.coarse_mode,
             "final_mode": self.final_mode,
             "evidence_strategy": self.evidence_strategy,
@@ -83,6 +85,7 @@ class AnalysisRuntimeDecision:
     call_purpose: str
     model_alias: str
     analysis_mode: str
+    research_mode: str
     coarse_mode: str
     final_mode: str
     evidence_strategy: str
@@ -109,6 +112,7 @@ class AnalysisRuntimeDecision:
             "call_purpose": self.call_purpose,
             "effective_model_alias": self.model_alias,
             "analysis_mode": self.analysis_mode,
+            "research_mode": self.research_mode,
             "coarse_mode": self.coarse_mode,
             "final_mode": self.final_mode,
             "evidence_strategy": self.evidence_strategy,
@@ -177,6 +181,8 @@ def _default_policy() -> dict[str, Any]:
             "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
         },
         "dynamic_patterns": [],
+        "single_pass_patterns": [],
+        "iterative_patterns": [],
         "dataset_keywords": [],
         "document_keywords": [],
     }
@@ -318,6 +324,9 @@ def _score_routing_complexity(
         score += 0.15
     if requires_static_execution and ("找数据" in query or "research" in lowered_query or "benchmark" in lowered_query):
         score += 0.15
+    iterative_markers = ("自己找数据", "多来源", "benchmark", "财报", "宏观", "探索")
+    if sum(1 for marker in iterative_markers if marker in query or marker in lowered_query) >= 2:
+        score += 0.15
     if ("预测" in query or "走势" in query or "宏观" in query) and ("财报" in query or "数据" in query):
         score += 0.1
     return min(score, 1.0)
@@ -420,6 +429,7 @@ def _build_non_dynamic_profile(
     *,
     policy: Mapping[str, Any],
     analysis_mode: str,
+    research_mode: str,
     final_mode: str,
     destinations: tuple[str, ...],
     route_candidates: tuple[str, ...],
@@ -431,10 +441,12 @@ def _build_non_dynamic_profile(
     routing_reasons: tuple[str, ...],
     complexity_score: float,
     requires_static_execution: bool,
+    requires_external_research: bool = False,
 ) -> AnalysisTaskProfile:
     profile_payload = policy["profiles"][analysis_mode]
     return AnalysisTaskProfile(
         analysis_mode=analysis_mode,
+        research_mode=research_mode,
         coarse_mode=final_mode,
         final_mode=final_mode,
         evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
@@ -452,7 +464,7 @@ def _build_non_dynamic_profile(
         routing_degraded=False,
         degrade_reason="",
         requires_static_execution=requires_static_execution,
-        requires_external_research=False,
+        requires_external_research=requires_external_research,
         fine_routing_invoked=False,
         continuation="finish",
         next_static_steps=(),
@@ -480,6 +492,8 @@ def classify_analysis_task(
     policy = load_analysis_runtime_policy()
     lowered_query = str(query or "").lower()
     dynamic_patterns = _keywords_for(policy, "dynamic_patterns")
+    single_pass_patterns = _keywords_for(policy, "single_pass_patterns")
+    iterative_patterns = _keywords_for(policy, "iterative_patterns")
     dataset_keywords = _keywords_for(policy, "dataset_keywords")
     document_keywords = _keywords_for(policy, "document_keywords")
     structured_count, document_count = _execution_inputs(exec_data)
@@ -491,6 +505,10 @@ def classify_analysis_task(
     dynamic_hits = list(
         dict.fromkeys([match.canonical for match in lexical_signals.dynamic_hits] or [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query])
     )
+    single_pass_hits = list(dict.fromkeys(pattern for pattern in single_pass_patterns if pattern.lower() in lowered_query))
+    iterative_hits = list(dict.fromkeys(pattern for pattern in iterative_patterns if pattern.lower() in lowered_query))
+    if not iterative_patterns and dynamic_hits:
+        iterative_hits = list(dynamic_hits)
     dataset_signal = structured_count > 0 or bool(lexical_signals.dataset_hits) or any(
         token.lower() in lowered_query for token in dataset_keywords
     )
@@ -514,6 +532,7 @@ def classify_analysis_task(
         static_mode=static_mode,
     )
     requires_static_execution = bool(structured_count > 0 or "写代码" in query or "验证" in query or static_mode == "hybrid")
+    requires_external_research = bool(dynamic_hits or single_pass_hits)
     complexity_score = _score_routing_complexity(
         query=query,
         dynamic_hits=dynamic_hits,
@@ -522,18 +541,18 @@ def classify_analysis_task(
         requires_static_execution=requires_static_execution,
     )
 
-    if dynamic_hits:
+    if iterative_hits:
         known_gaps.extend(gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps)
         coarse_mode = "dynamic"
         coarse_analysis_mode = "dynamic_research_analysis"
         route_candidates = _unique_strings(("dynamic", static_mode))
-        coarse_reasons = [f"命中动态研究信号: {', '.join(dynamic_hits[:3])}"]
+        coarse_reasons = [f"命中动态研究信号: {', '.join(iterative_hits[:3])}"]
         coarse_confidence = _coarse_confidence(
             coarse_mode=coarse_mode,
             route_candidates=route_candidates,
             structured_count=structured_count,
             document_signal=document_signal,
-            dynamic_hits=dynamic_hits,
+            dynamic_hits=iterative_hits,
         )
         final_mode, routing_stage, fine_routing_invoked, routing_degraded, degrade_reason, routing_confidence, fine_rationale = _maybe_refine_route_with_llm(
             query=query,
@@ -558,9 +577,12 @@ def classify_analysis_task(
     elif structured_count > 0 and document_signal:
         if not rules and not metrics and not filters:
             known_gaps.append("业务规则尚未抽取完成")
+        if requires_external_research:
+            known_gaps.append("需要一次受控外部取证")
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="hybrid_analysis",
+            research_mode="single_pass" if requires_external_research else "none",
             final_mode="hybrid",
             destinations=static_destinations,
             route_candidates=("hybrid", "static"),
@@ -572,13 +594,17 @@ def classify_analysis_task(
             routing_reasons=static_reasons,
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
+            requires_external_research=requires_external_research,
         )
     elif structured_count > 0 or dataset_signal:
         if structured_count == 0:
             known_gaps.append("尚未上传结构化数据")
+        if requires_external_research:
+            known_gaps.append("需要一次受控外部取证")
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="dataset_analysis",
+            research_mode="single_pass" if requires_external_research else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
@@ -590,13 +616,17 @@ def classify_analysis_task(
             routing_reasons=static_reasons,
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
+            requires_external_research=requires_external_research,
         )
     elif document_signal:
         if document_count == 0 and not (rules or metrics or filters):
             known_gaps.append("缺少业务文档输入")
+        if requires_external_research:
+            known_gaps.append("需要一次受控外部取证")
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="document_rule_analysis",
+            research_mode="single_pass" if requires_external_research else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
@@ -608,12 +638,14 @@ def classify_analysis_task(
             routing_reasons=static_reasons,
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
+            requires_external_research=requires_external_research,
         )
     else:
         known_gaps.extend(["缺少结构化数据", "缺少业务规则文档"])
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="need_more_inputs",
+            research_mode="single_pass" if requires_external_research else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
@@ -625,11 +657,13 @@ def classify_analysis_task(
             routing_reasons=static_reasons,
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
+            requires_external_research=requires_external_research,
         )
 
     profile_payload = policy["profiles"][profile_key]
     return AnalysisTaskProfile(
         analysis_mode=analysis_mode,
+        research_mode="iterative" if final_mode == "dynamic" else "single_pass",
         coarse_mode=coarse_mode,
         final_mode=final_mode,
         evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
@@ -641,7 +675,7 @@ def classify_analysis_task(
         routing_degraded=routing_degraded,
         degrade_reason=degrade_reason,
         requires_static_execution=requires_static_execution,
-        requires_external_research=bool(dynamic_hits),
+        requires_external_research=True,
         fine_routing_invoked=fine_routing_invoked,
         continuation=continuation,
         next_static_steps=tuple(next_static_steps),
@@ -692,6 +726,7 @@ def resolve_runtime_decision(
         call_purpose=call_purpose,
         model_alias=fine_model_alias if profile.routing_stage in {"fine", "fallback"} else assess_model_alias,
         analysis_mode=profile.analysis_mode,
+        research_mode=profile.research_mode,
         coarse_mode=profile.coarse_mode,
         final_mode=profile.final_mode,
         evidence_strategy=profile.evidence_strategy,

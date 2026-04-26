@@ -171,3 +171,57 @@ class HarnessGovernor:
                 "semantic_primary_config": "src.sandbox.security_policy",
             },
         )
+
+    @staticmethod
+    def evaluate_tool_request(
+        *,
+        requested_tools: Sequence[str] | None = None,
+        profile_name: str = "static_evidence",
+        trace_ref: str | None = None,
+    ) -> GovernanceDecision:
+        profile_name, profile, policy = get_profile(profile_name)
+        mode = str(policy.get("mode", "standard"))
+        allowed_capabilities, _ = capability_registry.resolve_names(profile.get("allowed_tools"))
+        allowed_tools = [descriptor.capability_id for descriptor in allowed_capabilities]
+        requested = _normalize_tools(requested_tools)
+        requested_capabilities, unknown_tools = capability_registry.resolve_names(requested)
+        requested_capability_ids = [descriptor.capability_id for descriptor in requested_capabilities]
+        denied_known = [tool for tool in requested_capability_ids if tool not in allowed_tools]
+        denied_by_profile = [
+            descriptor.capability_id
+            for descriptor in requested_capabilities
+            if not _network_access_allowed(str(profile.get("network_access") or "none"), descriptor.network_access)
+        ]
+        reasons: list[str] = []
+        if requested:
+            reasons.append(f"请求工具数量={len(requested)}")
+        if denied_known:
+            reasons.append(f"请求未授权能力: {', '.join(denied_known)}")
+        if denied_by_profile:
+            reasons.append(f"profile.network_access={profile.get('network_access')}，无法授权: {', '.join(denied_by_profile)}")
+        if unknown_tools:
+            reasons.append(f"请求未授权工具: {', '.join(unknown_tools)}")
+        allowed = not denied_known and not denied_by_profile and not unknown_tools
+        risk_score = 0.35 if requested else 0.2
+        if any(descriptor.network_access != "none" for descriptor in requested_capabilities):
+            risk_score = max(risk_score, 0.45)
+        risk_level = "high" if risk_score >= float((policy.get("risk_thresholds", {}) or {}).get("high", 0.7)) else "medium"
+        return GovernanceDecision(
+            action="static_evidence",
+            profile=profile_name,
+            mode=mode,
+            allowed=allowed,
+            risk_level=risk_level,
+            risk_score=min(risk_score, 1.0),
+            reasons=reasons or ["静态取证使用受限工具中介联网"],
+            allowed_tools=[tool for tool in requested_capability_ids if tool in allowed_tools],
+            metadata={
+                "requested_tools": requested,
+                "requested_capabilities": requested_capability_ids,
+                "unknown_tools": unknown_tools,
+                "denied_capabilities": denied_known,
+                "denied_by_profile": denied_by_profile,
+                "profile_network_access": str(profile.get("network_access") or "none"),
+                "trace_ref": trace_ref,
+            },
+        )

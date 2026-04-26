@@ -1,23 +1,40 @@
 import { useRef, useState } from 'react'
 
-import { Button, FieldLabel, PageCard, SectionHeader, Select, StatusPill } from '@/components/ui'
+import { Button, FieldLabel, PageCard, QueryFeedback, SectionHeader, Select, StatusPill, focusRing } from '@/components/ui'
 import type { AssetListItem, AssetUploadResponse } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 export function AssetsPage({
   assets,
+  isLoading = false,
+  errorMessage,
+  onRetry,
   onUpload,
 }: {
   assets: AssetListItem[]
+  isLoading?: boolean
+  errorMessage?: string | null
+  onRetry?: () => void
   onUpload: (input: { files: File[]; assetKind: string }) => Promise<AssetUploadResponse>
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [assetKind, setAssetKind] = useState('structured_dataset')
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   return (
     <div className="space-y-6">
+      <QueryFeedback
+        errorMessage={errorMessage}
+        loading={isLoading && !assets.length}
+        loadingTitle="正在加载资料库"
+        loadingDescription="正在读取当前工作区的资料清单和可分析状态。"
+        errorTitle="资料库加载失败"
+        onRetry={onRetry}
+        retryLabel="重新加载资料"
+      />
       <div className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
         <PageCard>
           <SectionHeader title="上传资料" level="h1" description="上传本次分析要引用的报表、台账或口径说明材料。" />
@@ -34,20 +51,40 @@ export function AssetsPage({
               </Select>
             </div>
             <button
-              className="flex min-h-52 w-full flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-primary/25 bg-black/20 px-6 text-center transition hover:border-primary/40 hover:bg-white/5"
+              className={cn(
+                'flex min-h-52 w-full cursor-pointer flex-col items-center justify-center rounded-[28px] border-2 border-dashed px-6 text-center transition hover:border-primary/40 hover:bg-white/5',
+                dragActive ? 'border-primary/60 bg-primary/10' : 'border-primary/25 bg-black/20',
+                focusRing,
+              )}
               type="button"
               onClick={() => inputRef.current?.click()}
+              onDragEnter={(event) => {
+                event.preventDefault()
+                setDragActive(true)
+              }}
+              onDragLeave={(event) => {
+                event.preventDefault()
+                setDragActive(false)
+              }}
+              onDragOver={(event) => {
+                event.preventDefault()
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                setDragActive(false)
+                setFiles(Array.from(event.dataTransfer.files))
+              }}
             >
               <span className="text-base font-semibold text-ink">拖入文件或点击选择</span>
               <span className="mt-2 max-w-md text-sm leading-6 text-muted">建议只上传本次分析真正需要引用的材料，保证证据链清晰。</span>
             </button>
             <input ref={inputRef} className="hidden" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             {files.length ? (
-              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-muted">
+              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-muted" aria-live="polite">
                 已选择 {files.length} 个文件：{files.map((file) => file.name).join('，')}
               </div>
             ) : null}
-            {message ? <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-muted">{message}</div> : null}
+            {message ? <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-muted" role="status">{message}</div> : null}
             <Button
               disabled={!files.length || uploading}
               onClick={async () => {

@@ -12,12 +12,16 @@ from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import EventTopic, event_bus
 from src.common.control_plane import (
+    artifact_category_from_path,
+    ensure_artifact_verification_result,
+    ensure_execution_strategy,
     execution_intent_routing_mode,
     execution_output,
     execution_success,
     knowledge_evidence_refs,
     parser_reports_from_documents,
     sanitize_artifact_reference,
+    sort_output_entries,
     static_artifacts,
     task_governance_profile,
 )
@@ -65,10 +69,76 @@ def _preferred_temporal_summary(compiled_knowledge_payload: dict[str, Any]) -> l
     return summaries
 
 
+def _output_entry(
+    *,
+    artifact_type: str,
+    name: str,
+    path: str | None,
+    summary: str,
+    metrics: dict[str, Any] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
+    entry = {
+        "type": artifact_type,
+        "name": name,
+        "path": path,
+        "summary": summary,
+        "category": artifact_category_from_path(path, artifact_type),
+    }
+    if metrics is not None:
+        entry["metrics"] = metrics
+    if extra:
+        entry.update(extra)
+    return entry
+
+
+def _generated_artifact_outputs(
+    structured_output: dict[str, Any],
+    execution_record: Any,
+) -> list[dict[str, Any]]:
+    outputs: list[dict[str, Any]] = []
+    generated_artifacts = (
+        structured_output.get("generated_artifacts", [])
+        if isinstance(structured_output.get("generated_artifacts"), list)
+        else []
+    )
+    if generated_artifacts:
+        for artifact in generated_artifacts:
+            if not isinstance(artifact, Mapping):
+                continue
+            path = sanitize_artifact_reference(str(artifact.get("path") or ""))
+            outputs.append(
+                _output_entry(
+                    artifact_type=str(artifact.get("type") or artifact.get("category") or "artifact"),
+                    name=str(artifact.get("name") or "artifact"),
+                    path=path,
+                    summary=str(artifact.get("summary") or path or ""),
+                    artifact_key=str(artifact.get("key") or ""),
+                )
+            )
+        return outputs
+
+    for artifact in static_artifacts(execution_record):
+        artifact_path = artifact.get("path")
+        outputs.append(
+            _output_entry(
+                artifact_type=artifact.get("type", "artifact"),
+                name=os.path.basename(str(artifact_path)) if artifact_path else artifact.get("type", "artifact"),
+                path=artifact_path,
+                summary=str(artifact_path),
+            )
+        )
+    return outputs
+
+
 def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, Any]:
     output = execution_output(exec_data.static.execution_record)
     structured_output = _as_json(output)
     is_debugger_fallback = str(structured_output.get("status") or "").strip() == "debugger_fallback"
+    execution_strategy = ensure_execution_strategy(exec_data.static.execution_strategy or structured_output.get("execution_strategy") or {})
+    artifact_verification = ensure_artifact_verification_result(
+        exec_data.static.artifact_verification or {"strategy_family": execution_strategy.strategy_family}
+    )
     analysis_brief_payload = exec_data.knowledge.analysis_brief.model_dump(mode="json")
     business_context_payload = exec_data.knowledge.business_context.model_dump(mode="json")
     knowledge_snapshot_payload = exec_data.knowledge.knowledge_snapshot.model_dump(mode="json")
@@ -93,8 +163,16 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
     filter_checks = (
         structured_output.get("filter_checks", []) if isinstance(structured_output.get("filter_checks"), list) else []
     )
+    artifact_outputs = _generated_artifact_outputs(structured_output, exec_data.static.execution_record)
 
     findings = []
+    findings.extend(
+        [
+            _trim(f"交付物《{item.get('name', 'artifact')}》已生成：{item.get('summary', '')}", limit=240)
+            for item in artifact_outputs[:4]
+            if item.get("category") in {"report", "chart", "export"}
+        ]
+    )
     if dataset_items:
         findings.append(f"识别到 {len(dataset_items)} 份结构化数据输入")
     if document_items:
@@ -189,15 +267,15 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
             str(item.get("path")) for item in static_artifacts(exec_data.static.execution_record) if item.get("path")
         ]
 
-    outputs = []
+    outputs = list(artifact_outputs)
     for item in dataset_items:
         outputs.append(
-            {
-                "type": "dataset",
-                "name": item.get("file_name"),
-                "path": item.get("container_path") or item.get("file_name"),
-                "summary": _trim(f"rows={item.get('row_count', 0)}, columns={','.join(item.get('columns', [])[:6])}"),
-                "metrics": {
+            _output_entry(
+                artifact_type="diagnostic",
+                name=item.get("file_name"),
+                path=item.get("container_path") or item.get("file_name"),
+                summary=_trim(f"rows={item.get('row_count', 0)}, columns={','.join(item.get('columns', [])[:6])}"),
+                metrics={
                     "row_count": item.get("row_count", 0),
                     "numeric_profiles": item.get("numeric_profiles", []),
                     "categorical_profiles": item.get("categorical_profiles", []),
@@ -205,49 +283,42 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
                     "group_summaries": item.get("group_summaries", []),
                     "missing_counts": item.get("missing_counts", {}),
                 },
-            }
+            )
         )
     for item in document_items:
         outputs.append(
-            {
-                "type": "document",
-                "name": item.get("file_name"),
-                "path": item.get("container_path") or item.get("file_name"),
-                "summary": _trim(str(item.get("preview", ""))),
-                "metrics": {
+            _output_entry(
+                artifact_type="diagnostic",
+                name=item.get("file_name"),
+                path=item.get("container_path") or item.get("file_name"),
+                summary=_trim(str(item.get("preview", ""))),
+                metrics={
                     "char_count": item.get("char_count", 0),
                     "line_count": item.get("line_count", 0),
                     "keyword_hits": item.get("keyword_hits", []),
                 },
-            }
+            )
         )
     for report in parser_reports_from_documents(exec_data.inputs.business_documents):
         outputs.append(
-            {
-                "type": "parser_report",
-                "name": report.get("file_name"),
-                "path": None,
-                "summary": _trim(
+            _output_entry(
+                artifact_type="diagnostic",
+                name=report.get("file_name"),
+                path=None,
+                summary=_trim(
                     f"parse_mode={report.get('parse_mode', 'default')}, "
                     f"image_desc={((report.get('parser_diagnostics') or {}).get('image_description_count', 0))}"
                 ),
-                "parse_mode": report.get("parse_mode", "default"),
-            }
+                parse_mode=report.get("parse_mode", "default"),
+            )
         )
-    for artifact in static_artifacts(exec_data.static.execution_record):
-        artifact_path = artifact.get("path")
-        outputs.append(
-            {
-                "type": artifact.get("type", "artifact"),
-                "name": os.path.basename(str(artifact_path)) if artifact_path else artifact.get("type", "artifact"),
-                "path": artifact_path,
-                "summary": str(artifact_path),
-            }
-        )
+    outputs = sort_output_entries(outputs)
 
     caveats = []
     if exec_data.static.latest_error_traceback:
         caveats.append(_trim(exec_data.static.latest_error_traceback))
+    if not artifact_verification.passed and artifact_verification.failure_reasons:
+        caveats.extend(_trim(str(item), limit=240) for item in artifact_verification.failure_reasons[:4])
     if is_debugger_fallback:
         caveats.append("debugger fallback 只提供错误诊断，不代表分析成功。")
     for check in rule_checks[:5]:
@@ -279,6 +350,36 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
         "analysis_brief": analysis_brief_payload,
         "execution_success": execution_success(exec_data.static.execution_record),
         "artifacts": static_artifacts(exec_data.static.execution_record),
+        "execution_strategy": execution_strategy.model_dump(mode="json"),
+        "static_evidence_bundle": (
+            exec_data.static.static_evidence_bundle.model_dump(mode="json")
+            if getattr(exec_data.static, "static_evidence_bundle", None)
+            else None
+        ),
+        "program_spec": (
+            exec_data.static.program_spec.model_dump(mode="json")
+            if getattr(exec_data.static, "program_spec", None)
+            else execution_strategy.program_spec.model_dump(mode="json")
+            if execution_strategy.program_spec
+            else None
+        ),
+        "repair_plan": (
+            exec_data.static.repair_plan.model_dump(mode="json")
+            if getattr(exec_data.static, "repair_plan", None)
+            else None
+        ),
+        "debug_attempts": [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+            for item in list(getattr(exec_data.static, "debug_attempts", []) or [])
+        ],
+        "artifact_plan": execution_strategy.artifact_plan.model_dump(mode="json"),
+        "verification_plan": execution_strategy.verification_plan.model_dump(mode="json"),
+        "generator_manifest": (
+            exec_data.static.generator_manifest.model_dump(mode="json")
+            if exec_data.static.generator_manifest
+            else structured_output.get("generator_manifest", {})
+        ),
+        "artifact_verification": artifact_verification.model_dump(mode="json"),
         "execution_record": exec_data.static.execution_record.model_dump(mode="json")
         if exec_data.static.execution_record
         else None,
@@ -332,14 +433,15 @@ def _build_dynamic_response(task_id: str, exec_data, memory_data) -> dict[str, A
 
     answer = f"已完成动态探索。{_trim(dynamic_summary, limit=800)}"
     outputs = [
-        {
-            "type": "artifact",
-            "name": os.path.basename(str(artifact)) if artifact else "artifact",
-            "path": sanitize_artifact_reference(str(artifact)),
-            "summary": str(artifact),
-        }
+        _output_entry(
+            artifact_type="diagnostic",
+            name=os.path.basename(str(artifact)) if artifact else "artifact",
+            path=sanitize_artifact_reference(str(artifact)),
+            summary=str(artifact),
+        )
         for artifact in exec_data.dynamic.artifacts
     ]
+    outputs = sort_output_entries(outputs)
     caveats = []
     if exec_data.dynamic.status and exec_data.dynamic.status != "completed":
         caveats.append(f"动态链路最终状态为 {exec_data.dynamic.status}，请结合轨迹核实结果完整性。")
@@ -349,6 +451,9 @@ def _build_dynamic_response(task_id: str, exec_data, memory_data) -> dict[str, A
         "analysis_brief": exec_data.knowledge.analysis_brief.model_dump(mode="json"),
         "compiled_knowledge": exec_data.knowledge.compiled.model_dump(mode="json"),
         "runtime_metadata": exec_data.dynamic.runtime_metadata,
+        "resume_overlay": exec_data.dynamic.resume_overlay.model_dump(mode="json")
+        if exec_data.dynamic.resume_overlay
+        else None,
         "trace_refs": exec_data.dynamic.trace_refs,
         "artifacts": exec_data.dynamic.artifacts,
         "recommended_skill": exec_data.dynamic.recommended_static_skill,

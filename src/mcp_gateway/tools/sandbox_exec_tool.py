@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.common.contracts import ArtifactRecord, ExecutionRecord, InputLease
+from src.common.control_plane import artifact_category_from_path
 from src.common.utils import generate_uuid
 from src.sandbox import execute_in_sandbox, execute_in_sandbox_async, execute_in_sandbox_with_audit
 
@@ -77,7 +78,7 @@ def normalize_execution_result(
             artifacts.extend(
                 ArtifactRecord(
                     path=str(path),
-                    artifact_type="sandbox_output",
+                    artifact_type=artifact_category_from_path(str(path)),
                     summary=str(path.relative_to(output_root)) if path != output_root else str(path),
                 )
                 for path in artifact_files
@@ -86,7 +87,7 @@ def normalize_execution_result(
             artifacts.append(
                 ArtifactRecord(
                     path=artifacts_dir,
-                    artifact_type="sandbox_output",
+                    artifact_type=artifact_category_from_path(artifacts_dir),
                     summary=artifacts_dir,
                 )
             )

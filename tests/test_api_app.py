@@ -327,6 +327,64 @@ def test_get_app_analysis_output_uses_app_facing_download_route(tmp_path):
     assert output_response.body == b"month,profit\n2026-01,10\n"
 
 
+def test_get_app_analysis_detail_sorts_outputs_by_artifact_priority(tmp_path):
+    tenant_id = "tenant-app-output-sort"
+    workspace_id = "ws-app-output-sort"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "导出分析结果")
+    output_dir = Path(OUTPUT_DIR) / tenant_id / workspace_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostic_path = output_dir / "debug.log"
+    diagnostic_path.write_text("internal-debug", encoding="utf-8")
+    report_path = output_dir / "analysis_report.md"
+    report_path.write_text("# report", encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={
+                "final_response": {
+                    "headline": "分析已完成",
+                    "answer": "结果已导出",
+                    "outputs": [
+                        {"name": "debug.log", "type": "diagnostic", "summary": "内部调试", "path": str(diagnostic_path)},
+                        {"name": "analysis_report.md", "type": "report", "summary": "分析报告", "path": str(report_path)},
+                    ],
+                }
+            },
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    detail_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}",
+        path_params={"analysis_id": task_id},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    detail_response = asyncio.run(get_app_analysis_detail(detail_request))
+    detail_body = json.loads(detail_response.body.decode())
+
+    output_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1",
+        path_params={"analysis_id": task_id, "output_id": f"output_{task_id}_1"},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    output_response = asyncio.run(get_app_analysis_output(output_request))
+
+    assert detail_response.status_code == 200
+    assert detail_body["outputs"][0]["title"] == "analysis_report.md"
+    assert detail_body["outputs"][0]["type"] == "report"
+    assert detail_body["outputs"][1]["title"] == "debug.log"
+    assert output_response.status_code == 200
+    assert output_response.body == b"# report"
+
+
 def test_get_app_analysis_output_falls_back_from_directory_artifact_to_inner_file(tmp_path):
     tenant_id = "tenant-app-output-dir"
     workspace_id = "ws-app-output-dir"

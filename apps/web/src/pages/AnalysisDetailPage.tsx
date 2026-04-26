@@ -1,11 +1,11 @@
 import { Activity, AlertTriangle, ArrowRight, Download, ExternalLink, Eye, LoaderCircle, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 
-import { Button, PageCard, SectionHeader, StatusPill } from '@/components/ui'
+import { Button, FeedbackState, PageCard, SectionHeader, StatusPill, focusRing } from '@/components/ui'
 import { api } from '@/lib/api'
 import type { ApiClientConfig } from '@/lib/api'
 import type { AnalysisDetail, AnalysisEvent } from '@/lib/types'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 
 const TEXT_PREVIEW_BYTE_LIMIT = 20 * 1024
 const TEXT_PREVIEW_LINE_LIMIT = 200
@@ -62,12 +62,18 @@ export function AnalysisDetailPage({
   config,
   detail,
   events,
+  isLoading = false,
+  errorMessage,
+  onRetry,
   isLiveRefreshing,
   viewMode,
 }: {
   config: ApiClientConfig
   detail: AnalysisDetail | undefined
   events: AnalysisEvent[]
+  isLoading?: boolean
+  errorMessage?: string | null
+  onRetry?: () => void
   isLiveRefreshing: boolean
   viewMode: ViewMode
 }) {
@@ -90,13 +96,36 @@ export function AnalysisDetailPage({
     }
   }, [])
 
+  if (errorMessage && !detail) {
+    return (
+      <PageCard className="p-5">
+        <FeedbackState
+          title="分析详情加载失败"
+          description={errorMessage}
+          tone="error"
+          action={onRetry ? <Button variant="secondary" onClick={onRetry} type="button">重新加载详情</Button> : null}
+        />
+      </PageCard>
+    )
+  }
+
   if (!detail) {
-    return <div className="rounded-3xl border border-white/10 bg-surface px-6 py-10 text-sm text-muted">正在加载分析详情…</div>
+    return (
+      <PageCard className="p-5">
+        <FeedbackState
+          title={isLoading ? '正在加载分析详情' : '暂时没有分析详情'}
+          description={isLoading ? '正在读取结论摘要、证据索引、运行进度和产物列表。' : '当前分析记录暂时不可用，请返回工作台后重新进入。'}
+        />
+      </PageCard>
+    )
   }
 
   const analysisId = detail.analysisId
   const liveStatusTone = toneForStatus(detail.status)
   const viewLabel = viewMode === 'runtime' ? '运行时透明度' : '业务结论'
+  const viewDescription = viewMode === 'runtime'
+    ? '当前视图按真实进度、事件流、产物与风险组织，优先服务治理观察和执行复核。'
+    : '当前视图优先呈现结论、证据与可复核产物，运行细节降级为辅助信息。'
 
   async function loadPreview(output: AnalysisDetail['outputs'][number]) {
     if (!output.downloadUrl) {
@@ -219,7 +248,7 @@ export function AnalysisDetailPage({
                 ) : null}
                 {previewState.status === 'error' ? (
                   <div className="space-y-3">
-                    <div className="text-sm text-rose-200">{previewState.message}</div>
+                    <FeedbackState title="预览加载失败" description={previewState.message} tone="error" />
                     <Button className="px-3 py-1.5 text-xs" variant="secondary" onClick={() => void loadPreview(output)} type="button">
                       <RefreshCw className="h-3.5 w-3.5" />
                       重试
@@ -235,7 +264,7 @@ export function AnalysisDetailPage({
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-3 py-3 text-xs text-muted">
                         <span>预览已截断：仅显示前 20 KB 或前 200 行。</span>
                         <button
-                          className="inline-flex items-center gap-1 font-semibold text-primary hover:text-primary-hover"
+                          className={cn('inline-flex cursor-pointer items-center gap-1 rounded-lg font-semibold text-primary hover:text-primary-hover', focusRing)}
                           onClick={() => {
                             void downloadOutput(output)
                           }}
@@ -262,7 +291,12 @@ export function AnalysisDetailPage({
           </div>
         )
       })}
-      {!detail.outputs.length ? <div className="text-sm text-muted">还没有生成结果产物。</div> : null}
+      {!detail.outputs.length ? (
+        <FeedbackState
+          title="还没有生成结果产物"
+          description="分析完成后，可下载或预览的报告、表格、图像等产物会出现在这里。"
+        />
+      ) : null}
     </div>
   )
 
@@ -282,7 +316,12 @@ export function AnalysisDetailPage({
           </div>
         </div>
       ))}
-      {!events.length ? <div className="text-sm text-muted">当前还没有事件记录。</div> : null}
+      {!events.length ? (
+        <FeedbackState
+          title="当前还没有事件记录"
+          description="运行开始后，真实事件流会按时间顺序展示阶段变化、警告和产物生成记录。"
+        />
+      ) : null}
     </div>
   )
 
@@ -300,6 +339,9 @@ export function AnalysisDetailPage({
               </div>
               <h1 className="mt-5 text-3xl font-semibold tracking-[-0.04em] text-ink sm:text-4xl">{detail.title}</h1>
               <p className="mt-3 max-w-4xl text-sm leading-7 text-muted">{detail.question}</p>
+              <div className="mt-5 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-muted">
+                {viewDescription}
+              </div>
               <div className="mt-6 rounded-[28px] border border-white/10 bg-black/25 p-5">
                 <div className="flex items-center gap-2 text-sm font-semibold text-ink">
                   <Sparkles className="h-4 w-4 text-primary" />
@@ -356,16 +398,22 @@ export function AnalysisDetailPage({
             <div className="grid gap-6 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_390px] sm:px-7">
               <div className="space-y-5">
                 <InnerPanel title="关键发现" icon={<Sparkles className="h-4 w-4 text-primary" />}>
-                  <ul className="space-y-3 text-sm leading-6 text-muted">
-                    {detail.keyFindings.map((item) => <li key={item} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">{item}</li>)}
-                    {!detail.keyFindings.length ? <li>暂无关键发现。</li> : null}
-                  </ul>
+                  {detail.keyFindings.length ? (
+                    <ul className="space-y-3 text-sm leading-6 text-muted">
+                      {detail.keyFindings.map((item) => <li key={item} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">{item}</li>)}
+                    </ul>
+                  ) : (
+                    <FeedbackState title="暂无关键发现" description="当分析产出可复核结论后，关键发现会在这里以业务语言列出。" />
+                  )}
                 </InnerPanel>
                 <InnerPanel title="证据索引" icon={<ShieldCheck className="h-4 w-4 text-emerald-300" />}>
-                  <div className="flex flex-wrap gap-2">
-                    {detail.evidence.map((item) => <span key={item.id} className="rounded-full border border-sky-400/20 bg-sky-500/10 px-3 py-1 text-xs text-sky-200">{item.label}</span>)}
-                    {!detail.evidence.length ? <span className="text-sm text-muted">暂无证据索引。</span> : null}
-                  </div>
+                  {detail.evidence.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {detail.evidence.map((item) => <span key={item.id} className="rounded-full border border-sky-400/20 bg-sky-500/10 px-3 py-1 text-xs text-sky-200">{item.label}</span>)}
+                    </div>
+                  ) : (
+                    <FeedbackState title="暂无证据索引" description="证据索引用于说明结论引用了哪些资料、产物或中间记录。" />
+                  )}
                 </InnerPanel>
                 <InnerPanel title="结果产物" icon={<Download className="h-4 w-4 text-primary" />}>
                   {outputSection}
@@ -381,10 +429,13 @@ export function AnalysisDetailPage({
                   <p className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-muted">{detail.progress.activitySummary}</p>
                 </InnerPanel>
                 <InnerPanel title="风险与注意事项" icon={<AlertTriangle className="h-4 w-4 text-amber-300" />}>
-                  <ul className="space-y-2 text-sm leading-6 text-muted">
-                    {detail.warnings.map((warning) => <li key={warning} className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-amber-100">{warning}</li>)}
-                    {!detail.warnings.length ? <li>当前没有额外风险提示。</li> : null}
-                  </ul>
+                  {detail.warnings.length ? (
+                    <ul className="space-y-2 text-sm leading-6 text-muted">
+                      {detail.warnings.map((warning) => <li key={warning} className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-amber-100">{warning}</li>)}
+                    </ul>
+                  ) : (
+                    <FeedbackState title="当前没有额外风险提示" description="如果运行时发现人工介入点、资料问题或执行异常，会在这里提示。" tone="success" />
+                  )}
                 </InnerPanel>
               </div>
             </div>
@@ -438,7 +489,7 @@ export function AnalysisDetailPage({
               当前没有额外风险提示。
             </div>
           )}
-          <a className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-semibold text-primary transition hover:border-primary/25 hover:bg-primary/10 hover:text-primary-hover" href="#top">
+          <a className={cn('mt-4 inline-flex min-h-11 items-center gap-2 rounded-full border border-white/10 px-4 text-sm font-semibold text-primary transition hover:border-primary/25 hover:bg-primary/10 hover:text-primary-hover', focusRing)} href="#main-content">
             回到摘要
             <ArrowRight className="h-4 w-4" />
           </a>

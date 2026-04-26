@@ -11,6 +11,7 @@ from src.mcp_gateway.tools.knowledge_query_tool import KnowledgeQueryTool
 from src.mcp_gateway.tools.memory_sync_tool import MemorySyncTool
 from src.mcp_gateway.tools.sandbox_exec_tool import SandboxExecTool
 from src.mcp_gateway.tools.skill_auth_tool import SkillAuthTool
+from src.mcp_gateway.tools.web_fetch_tool import WebFetchTool, WebSearchTool
 
 ToolHandler = Callable[[dict[str, Any], dict[str, Any]], Any]
 
@@ -65,6 +66,32 @@ def _build_default_server() -> MCPToolServer:
                 tenant_id=str(args.get("tenant_id") or ctx.get("tenant_id") or ""),
                 workspace_id=str(args.get("workspace_id") or ctx.get("workspace_id") or "default_ws"),
                 top_k=int(args.get("top_k", 8)),
+            ),
+        )
+    )
+    server.register(
+        ToolSpec(
+            name="web_search",
+            capability_id=WebSearchTool.CAPABILITY_ID,
+            description="Run a governed public web search for static evidence collection.",
+            handler=lambda args, _ctx: WebSearchTool.run(
+                query=str(args.get("query", "")),
+                allowlist=list(args.get("allowlist") or []),
+                limit=int(args.get("limit", 3)),
+            ),
+        )
+    )
+    server.register(
+        ToolSpec(
+            name="web_fetch",
+            capability_id=WebFetchTool.CAPABILITY_ID,
+            description="Fetch one governed public URL through a GET-only allowlisted path.",
+            handler=lambda args, _ctx: WebFetchTool.run(
+                url=str(args.get("url", "")),
+                allowlist=list(args.get("allowlist") or []),
+                timeout_seconds=int(args.get("timeout_seconds", 0) or 0) or None,
+                max_bytes=int(args.get("max_bytes", 0) or 0) or None,
+                max_redirects=int(args.get("max_redirects", 0) or 0) or None,
             ),
         )
     )

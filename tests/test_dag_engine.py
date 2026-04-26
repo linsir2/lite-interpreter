@@ -20,6 +20,7 @@ from src.dag_engine.nodes.static_codegen_payload import (
     build_static_codegen_payload,
     build_static_generation_directives,
 )
+from src.dag_engine.nodes.static_evidence_node import static_evidence_node
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
@@ -1062,7 +1063,7 @@ def test_static_nodes_form_minimal_safe_chain():
     assert "validation=validated" in state["analysis_plan"]
     state.update(coder_node(state))
     assert "print(" in state["generated_code"]
-    assert "derived_findings" in state["generated_code"]
+    assert "generated_artifacts" in state["generated_code"]
     assert "rule_checks" in state["generated_code"]
     assert "metric_checks" in state["generated_code"]
     assert "filter_checks" in state["generated_code"]
@@ -1074,6 +1075,10 @@ def test_static_nodes_form_minimal_safe_chain():
     persisted_execution = execution_blackboard.read(tenant_id, task_id)
     assert persisted is not None
     assert persisted_execution is not None
+    assert persisted_execution.static.execution_strategy is not None
+    assert persisted_execution.static.execution_strategy.strategy_family == "hybrid_reconciliation"
+    assert persisted_execution.static.generator_manifest is not None
+    assert persisted_execution.static.generator_manifest.expected_artifact_keys
     assert persisted_execution.knowledge.analysis_brief.question == "总结报销规则"
     assert any(match.name == "historical_skill_demo" for match in persisted.historical_matches)
     historical_match = next(match for match in persisted.historical_matches if match.name == "historical_skill_demo")
@@ -1086,6 +1091,172 @@ def test_static_nodes_form_minimal_safe_chain():
     state.update(auditor_node(state))
     assert state["audit_result"]["safe"] is True
     assert state["next_actions"] == ["executor"]
+
+
+def test_static_evidence_node_collects_governed_external_evidence(monkeypatch):
+    tenant_id = "tenant_static_evidence"
+    task_id = global_blackboard.create_task(tenant_id, "ws_static_evidence", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_static_evidence",
+            static={
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                    "research_mode": "single_pass",
+                    "evidence_plan": {
+                        "research_mode": "single_pass",
+                        "search_queries": ["行业平均增速"],
+                        "allowed_domains": ["duckduckgo.com"],
+                        "allowed_capabilities": ["web_search"],
+                    },
+                }
+            },
+        ),
+    )
+
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.static_evidence_node.default_mcp_client.call_tool",
+        lambda name, arguments=None, context=None: {
+            "query": "行业平均增速",
+            "items": [
+                {
+                    "title": "公开报告",
+                    "url": "https://example.com/report",
+                    "snippet": "行业平均增速为 12%",
+                    "domain": "example.com",
+                }
+            ],
+        },
+    )
+
+    result = static_evidence_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_static_evidence",
+            "input_query": "对比行业平均增速",
+        }
+    )
+
+    persisted = execution_blackboard.read(tenant_id, task_id)
+    assert result["next_actions"] == ["coder"]
+    assert result["static_evidence_bundle"]["records"][0]["title"] == "公开报告"
+    assert result["input_mounts"][-1]["kind"] == "static_evidence"
+    assert persisted is not None
+    assert persisted.static.static_evidence_bundle is not None
+    assert persisted.control.decision_log[-1]["action"] == "static_evidence"
+
+
+def test_debugger_node_regenerates_with_repair_plan():
+    tenant_id = "tenant_debugger_repair"
+    task_id = global_blackboard.create_task(tenant_id, "ws_debugger_repair", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_debugger_repair",
+            static={
+                "generated_code": "print('broken')",
+                "latest_error_traceback": "missing required artifact: analysis_report.md",
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                    "strategy_family": "dataset_profile",
+                    "research_mode": "none",
+                },
+            },
+            knowledge={"analysis_brief": {"question": "分析销售数据", "analysis_mode": "dataset_analysis"}},
+        ),
+    )
+
+    result = debugger_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_debugger_repair",
+            "input_query": "分析销售数据",
+            "retry_count": 0,
+        }
+    )
+
+    persisted = execution_blackboard.read(tenant_id, task_id)
+    assert result["next_actions"] == ["auditor"]
+    assert result["repair_plan"]["action"] == "fallback_to_legacy"
+    assert "print(" in result["generated_code"]
+    assert persisted is not None
+    assert persisted.static.repair_plan is not None
+    assert persisted.static.debug_attempts
+
+
+def test_executor_node_requests_debugger_when_required_artifacts_are_missing(tmp_path, monkeypatch):
+    tenant_id = "tenant_exec_missing_artifacts"
+    task_id = global_blackboard.create_task(tenant_id, "ws_exec_missing_artifacts", "placeholder")
+    artifact_dir = tmp_path / "empty-artifacts"
+    artifact_dir.mkdir()
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws_exec_missing_artifacts",
+            static={
+                "generated_code": "print('ok')",
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                    "strategy_family": "dataset_profile",
+                    "generator_id": "dataset_profile_generator",
+                    "artifact_plan": {
+                        "strategy_family": "dataset_profile",
+                        "required_artifacts": [
+                            {
+                                "artifact_key": "analysis_report",
+                                "file_name": "analysis_report.md",
+                                "category": "report",
+                                "artifact_type": "report",
+                                "format": "md",
+                            }
+                        ],
+                    },
+                    "verification_plan": {
+                        "strategy_family": "dataset_profile",
+                        "required_artifact_keys": ["analysis_report"],
+                    },
+                },
+            },
+        ),
+    )
+
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.executor_node.SandboxExecTool.run_sync",
+        lambda **kwargs: normalize_execution_result(
+            {"success": True, "output": "{}", "artifacts_dir": str(artifact_dir)},
+            tenant_id=tenant_id,
+            workspace_id="ws_exec_missing_artifacts",
+            task_id=task_id,
+        ),
+    )
+
+    result = executor_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_exec_missing_artifacts",
+        }
+    )
+
+    persisted = execution_blackboard.read(tenant_id, task_id)
+    assert result["next_actions"] == ["debugger"]
+    assert result["artifact_verification"]["passed"] is False
+    assert "analysis_report" in result["artifact_verification"]["missing_artifact_keys"]
+    assert persisted is not None
+    assert persisted.static.artifact_verification is not None
+    assert persisted.static.artifact_verification.passed is False
 
 
 def test_build_dataset_aware_code_executes_with_compiled_signal_globals():
@@ -1468,6 +1639,33 @@ def test_summarizer_node_builds_static_final_response():
             workspace_id="ws_summary_static",
             static={
                 "analysis_plan": "plan",
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                    "strategy_family": "dataset_profile",
+                    "generator_id": "dataset_profile_generator",
+                    "artifact_plan": {
+                        "strategy_family": "dataset_profile",
+                        "required_artifacts": [
+                            {
+                                "artifact_key": "analysis_report",
+                                "file_name": "analysis_report.md",
+                                "category": "report",
+                                "artifact_type": "report",
+                                "format": "md",
+                            }
+                        ],
+                    },
+                    "verification_plan": {
+                        "strategy_family": "dataset_profile",
+                        "required_artifact_keys": ["analysis_report"],
+                    },
+                },
+                "artifact_verification": {
+                    "strategy_family": "dataset_profile",
+                    "passed": False,
+                    "missing_artifact_keys": ["analysis_report"],
+                    "failure_reasons": ["missing required artifact: analysis_report.md"],
+                },
                 "execution_record": ExecutionRecord(
                     session_id="session-summary-static",
                     tenant_id=tenant_id,
@@ -1578,12 +1776,15 @@ def test_summarizer_node_builds_static_final_response():
     assert result["final_response"]["mode"] == "static"
     assert result["final_response"]["evidence_refs"] == ["chunk-1"]
     assert result["final_response"]["answer"].startswith("已完成静态链分析")
-    assert result["final_response"]["outputs"][0]["type"] == "dataset"
-    assert result["final_response"]["outputs"][0]["path"] == "sales.csv"
-    assert result["final_response"]["outputs"][0]["metrics"]["numeric_profiles"][0]["column"] == "a"
-    assert result["final_response"]["outputs"][0]["metrics"]["date_profiles"][0]["column"] == "biz_date"
-    assert result["final_response"]["outputs"][0]["metrics"]["group_summaries"][0]["group_by"] == "contract_id"
+    dataset_output = next(item for item in result["final_response"]["outputs"] if item["name"] == "sales.csv")
+    assert dataset_output["type"] == "diagnostic"
+    assert dataset_output["path"] == "sales.csv"
+    assert dataset_output["metrics"]["numeric_profiles"][0]["column"] == "a"
+    assert dataset_output["metrics"]["date_profiles"][0]["column"] == "biz_date"
+    assert dataset_output["metrics"]["group_summaries"][0]["group_by"] == "contract_id"
     assert result["final_response"]["details"]["parser_reports"][0]["parse_mode"] == "ocr+vision"
+    assert result["final_response"]["details"]["execution_strategy"]["strategy_family"] == "dataset_profile"
+    assert result["final_response"]["details"]["artifact_verification"]["missing_artifact_keys"] == ["analysis_report"]
     assert any("数值列" in item for item in result["final_response"]["key_findings"])
     assert any("日期列" in item for item in result["final_response"]["key_findings"])
     assert any("过滤条件" in item for item in result["final_response"]["key_findings"])
@@ -1607,6 +1808,7 @@ def test_summarizer_node_builds_static_final_response():
     assert any("日期范围" in item for item in result["final_response"]["caveats"])
     assert any("编译态时间约束" in item for item in result["final_response"]["caveats"])
     assert any("检索时间约束" in item for item in result["final_response"]["caveats"])
+    assert any("missing required artifact" in item for item in result["final_response"]["caveats"])
     assert result["final_response"]["key_findings"]
     assert any("知识检索通道" in item for item in result["final_response"]["key_findings"])
     assert any("编译态规则规格" in item for item in result["final_response"]["key_findings"])

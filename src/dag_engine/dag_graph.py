@@ -158,6 +158,32 @@ def _execute_static_flow(
             )
 
     current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
+    if current_state.get("next_actions") == ["static_evidence"]:
+        static_evidence_node = nodes.get("static_evidence")
+        if static_evidence_node is None:
+            current_state["next_actions"] = ["coder"]
+        else:
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="static_evidence",
+                    node_fn=static_evidence_node,
+                    state=current_state,
+                )
+            )
+        if current_state.get("blocked"):
+            summary_state = _run_checkpointed_node(
+                node_name="summarizer",
+                node_fn=nodes["summarizer"],
+                state=current_state,
+            )
+            return {
+                **current_state,
+                **summary_state,
+                "terminal_status": "waiting_for_human",
+                "terminal_sub_status": "静态取证失败，等待人工介入",
+                "failure_type": "static_evidence",
+                "error_message": str(current_state.get("block_reason") or "static evidence blocked"),
+            }
     current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
 
     audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
@@ -190,6 +216,20 @@ def _execute_static_flow(
 
     executor_state = _run_checkpointed_node(node_name="executor", node_fn=nodes["executor"], state=current_state)
     current_state.update(executor_state)
+    if executor_state.get("next_actions") == ["debugger"]:
+        current_state.update(
+            _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
+        )
+        current_state.update(
+            _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
+        )
+        if current_state.get("next_actions") == ["executor"]:
+            executor_state = _run_checkpointed_node(
+                node_name="executor",
+                node_fn=nodes["executor"],
+                state=current_state,
+            )
+            current_state.update(executor_state)
     harvested_state = _run_checkpointed_node(
         node_name="skill_harvester",
         node_fn=nodes["skill_harvester"],

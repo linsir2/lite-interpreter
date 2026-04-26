@@ -104,6 +104,15 @@ UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
 UPLOAD_MAX_FILE_BYTES: Final[int] = _env_int("UPLOAD_MAX_FILE_BYTES", 25 * 1024 * 1024)
 UPLOAD_MAX_REQUEST_BYTES: Final[int] = _env_int("UPLOAD_MAX_REQUEST_BYTES", 50 * 1024 * 1024)
+STATIC_EVIDENCE_ALLOWED_DOMAINS: Final[list[str]] = _env_csv(
+    "STATIC_EVIDENCE_ALLOWED_DOMAINS",
+    "localhost,127.0.0.1",
+)
+STATIC_EVIDENCE_TIMEOUT_SECONDS: Final[int] = _env_int("STATIC_EVIDENCE_TIMEOUT_SECONDS", 8)
+STATIC_EVIDENCE_MAX_BYTES: Final[int] = _env_int("STATIC_EVIDENCE_MAX_BYTES", 200_000)
+STATIC_EVIDENCE_MAX_REDIRECTS: Final[int] = _env_int("STATIC_EVIDENCE_MAX_REDIRECTS", 2)
+STATIC_EVIDENCE_MAX_SEARCH_RESULTS: Final[int] = _env_int("STATIC_EVIDENCE_MAX_SEARCH_RESULTS", 3)
+TAVILY_API_KEY: Final[str] = _env_str("TAVILY_API_KEY", "")
 
 # Dynamic engine / DeerFlow integration
 # DeerFlow is expected to be installed as a Python package such as

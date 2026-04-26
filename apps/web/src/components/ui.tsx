@@ -9,6 +9,10 @@ import type {
 
 import { cn } from '@/lib/utils'
 
+const interactiveFocusClass = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas'
+
+export const focusRing = interactiveFocusClass
+
 export function PageCard({ className, children }: PropsWithChildren<{ className?: string }>) {
   return (
     <section
@@ -64,7 +68,8 @@ export function Button({
   return (
     <button
       className={cn(
-        'inline-flex min-h-11 items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition duration-150 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60',
+        'inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition duration-150 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60',
+        interactiveFocusClass,
         variant === 'primary' && 'bg-primary text-[#0a0d10] shadow-[0_12px_30px_rgba(215,176,110,0.22)] hover:-translate-y-[1px] hover:bg-primary-hover',
         variant === 'secondary' && 'border border-white/10 bg-white/5 text-ink hover:-translate-y-[1px] hover:border-white/20 hover:bg-white/10',
         variant === 'ghost' && 'text-muted hover:bg-white/5 hover:text-ink',
@@ -92,6 +97,7 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
     <input
       className={cn(
         'w-full rounded-2xl border border-white/10 bg-[rgba(10,14,19,0.88)] px-4 py-3 text-sm text-ink outline-none ring-0 transition placeholder:text-[#7f7a70] focus:border-primary/50 focus:shadow-[0_0_0_4px_rgba(215,176,110,0.08)]',
+        interactiveFocusClass,
         className,
       )}
       {...rest}
@@ -105,6 +111,7 @@ export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
     <textarea
       className={cn(
         'min-h-36 w-full rounded-2xl border border-white/10 bg-[rgba(10,14,19,0.88)] px-4 py-3 text-sm text-ink outline-none transition placeholder:text-[#7f7a70] focus:border-primary/50 focus:shadow-[0_0_0_4px_rgba(215,176,110,0.08)]',
+        interactiveFocusClass,
         className,
       )}
       {...rest}
@@ -118,6 +125,7 @@ export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       className={cn(
         'w-full rounded-2xl border border-white/10 bg-[rgba(10,14,19,0.88)] px-4 py-3 text-sm text-ink outline-none transition focus:border-primary/50 focus:shadow-[0_0_0_4px_rgba(215,176,110,0.08)]',
+        interactiveFocusClass,
         className,
       )}
       {...rest}
@@ -133,4 +141,66 @@ export function StatusPill({ tone = 'neutral', children }: PropsWithChildren<{ t
     error: 'border-rose-400/20 bg-rose-500/10 text-rose-300',
   }[tone]
   return <span className={cn('inline-flex rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.1em]', toneClass)}>{children}</span>
+}
+
+export function FeedbackState({
+  title,
+  description,
+  action,
+  tone = 'neutral',
+}: {
+  title: string
+  description: string
+  action?: ReactNode
+  tone?: 'neutral' | 'success' | 'warning' | 'error'
+}) {
+  const toneClass = {
+    neutral: 'border-white/10 bg-white/5',
+    success: 'border-emerald-400/20 bg-emerald-500/10',
+    warning: 'border-amber-400/20 bg-amber-500/10',
+    error: 'border-rose-400/20 bg-rose-500/10',
+  }[tone]
+
+  return (
+    <div className={cn('rounded-[26px] border px-5 py-5 text-sm leading-6', toneClass)} role={tone === 'error' ? 'alert' : 'status'}>
+      <div className="font-semibold text-ink">{title}</div>
+      <p className="mt-2 text-muted">{description}</p>
+      {action ? <div className="mt-4">{action}</div> : null}
+    </div>
+  )
+}
+
+export function QueryFeedback({
+  errorMessage,
+  loading,
+  loadingTitle,
+  loadingDescription,
+  errorTitle,
+  onRetry,
+  retryLabel = '重新加载',
+}: {
+  errorMessage?: string | null
+  loading?: boolean
+  loadingTitle: string
+  loadingDescription: string
+  errorTitle: string
+  onRetry?: () => void
+  retryLabel?: string
+}) {
+  if (errorMessage) {
+    return (
+      <FeedbackState
+        title={errorTitle}
+        description={errorMessage}
+        tone="error"
+        action={onRetry ? <Button variant="secondary" onClick={onRetry} type="button">{retryLabel}</Button> : null}
+      />
+    )
+  }
+
+  if (loading) {
+    return <FeedbackState title={loadingTitle} description={loadingDescription} />
+  }
+
+  return null
 }

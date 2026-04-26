@@ -9,6 +9,7 @@ from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.schema import (
     AnalysisBriefState,
     DynamicRequestState,
+    DynamicResumeOverlay,
     DynamicTraceEventState,
     ExecutionData,
     KnowledgeSnapshotState,
@@ -67,6 +68,7 @@ class ExecutionStateService:
         status: str | None = None,
         summary: str | None = None,
         continuation: str | None = None,
+        resume_overlay: Mapping[str, Any] | DynamicResumeOverlay | None = None,
         next_static_steps: list[str] | None = None,
         runtime_metadata: Mapping[str, Any] | RuntimeMetadataState | None = None,
         trace: list[Mapping[str, Any]] | None = None,
@@ -93,6 +95,12 @@ class ExecutionStateService:
             execution_data.dynamic.summary = summary
         if continuation is not None:
             execution_data.dynamic.continuation = continuation
+        if resume_overlay is not None:
+            execution_data.dynamic.resume_overlay = (
+                resume_overlay
+                if isinstance(resume_overlay, DynamicResumeOverlay)
+                else DynamicResumeOverlay.model_validate(dict(resume_overlay))
+            )
         if next_static_steps is not None:
             execution_data.dynamic.next_static_steps = list(next_static_steps)
         if runtime_metadata is not None:

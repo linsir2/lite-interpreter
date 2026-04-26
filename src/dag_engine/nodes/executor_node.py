@@ -10,8 +10,10 @@ from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import get_logger
 from src.common.contracts import ExecutionRecord
+from src.common.control_plane import ensure_execution_strategy
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.graphstate import DagGraphState
+from src.dag_engine.nodes.static_generation_registry import verify_generated_artifacts
 from src.mcp_gateway.tools.sandbox_exec_tool import SandboxExecTool, build_input_mount_manifest
 
 logger = get_logger(__name__)
@@ -96,7 +98,28 @@ def executor_node(state: DagGraphState) -> dict[str, Any]:
         result=result,
     )
 
+    execution_strategy = ensure_execution_strategy(exec_data.static.execution_strategy or {})
+    artifact_verification = verify_generated_artifacts(
+        execution_strategy=execution_strategy,
+        execution_record=execution_record,
+    )
+    exec_data.static.execution_strategy = execution_strategy
+    exec_data.static.artifact_verification = artifact_verification
+    execution_blackboard.write(tenant_id, task_id, exec_data)
+    execution_blackboard.persist(tenant_id, task_id)
+
+    if not artifact_verification.passed:
+        exec_data.static.latest_error_traceback = "; ".join(artifact_verification.failure_reasons)
+        execution_blackboard.write(tenant_id, task_id, exec_data)
+        execution_blackboard.persist(tenant_id, task_id)
+        return {
+            "execution_record": execution_record.model_dump(mode="json") if execution_record else None,
+            "artifact_verification": artifact_verification.model_dump(mode="json"),
+            "next_actions": ["debugger"],
+        }
+
     return {
         "execution_record": execution_record.model_dump(mode="json") if execution_record else None,
+        "artifact_verification": artifact_verification.model_dump(mode="json"),
         "next_actions": ["skill_harvester"],
     }

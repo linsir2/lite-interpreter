@@ -13,6 +13,7 @@ from typing import Any
 
 from src.blackboard.task_state_services import ExecutionStateService
 from src.common import EventTopic, event_bus
+from src.common.control_plane import ensure_dynamic_resume_overlay
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dynamic_engine.deerflow_bridge import DeerflowBridge, DeerflowRuntimeConfig
 from src.dynamic_engine.supervisor import DynamicSupervisor
@@ -92,10 +93,20 @@ def _make_forward_event(context: DynamicNodeContext, forwarded_events: list[dict
 
 
 def _build_dynamic_patch(result_patch: dict[str, Any]) -> dict[str, Any]:
+    resume_overlay = ensure_dynamic_resume_overlay(
+        {
+            "continuation": result_patch.get("dynamic_continuation") or "finish",
+            "next_static_steps": result_patch.get("dynamic_next_static_steps") or [],
+            "evidence_refs": result_patch.get("dynamic_evidence_refs") or [],
+            "suggested_static_actions": result_patch.get("dynamic_suggested_static_actions") or [],
+            "open_questions": result_patch.get("dynamic_open_questions") or [],
+        }
+    )
     return {
         "status": result_patch.get("dynamic_status"),
         "summary": result_patch.get("dynamic_summary"),
         "continuation": result_patch.get("dynamic_continuation") or "finish",
+        "resume_overlay": resume_overlay.model_dump(mode="json"),
         "next_static_steps": result_patch.get("dynamic_next_static_steps") or [],
         "runtime_metadata": result_patch.get("dynamic_runtime_metadata") or {},
         "trace": result_patch.get("dynamic_trace") or [],
@@ -137,6 +148,12 @@ def dynamic_swarm_node(state: Mapping[str, Any]) -> dict[str, Any]:
             status=denied_patch.get("dynamic_status"),
             summary=denied_patch.get("dynamic_summary"),
             continuation=denied_patch.get("dynamic_continuation"),
+            resume_overlay=ensure_dynamic_resume_overlay(
+                {
+                    "continuation": denied_patch.get("dynamic_continuation") or "finish",
+                    "next_static_steps": denied_patch.get("dynamic_next_static_steps") or [],
+                }
+            ).model_dump(mode="json"),
             next_static_steps=denied_patch.get("dynamic_next_static_steps") or [],
             trace_refs=denied_patch.get("dynamic_trace_refs") or [],
             runtime_metadata={"requested_runtime_mode": "sidecar", "effective_runtime_mode": "denied"},
@@ -172,6 +189,7 @@ def dynamic_swarm_node(state: Mapping[str, Any]) -> dict[str, Any]:
         status=dynamic_patch.get("status"),
         summary=dynamic_patch.get("summary"),
         continuation=dynamic_patch.get("continuation"),
+        resume_overlay=dynamic_patch.get("resume_overlay"),
         next_static_steps=dynamic_patch.get("next_static_steps") or [],
         runtime_metadata=dynamic_patch.get("runtime_metadata"),
         trace=dynamic_patch.get("trace"),
@@ -190,4 +208,5 @@ def dynamic_swarm_node(state: Mapping[str, Any]) -> dict[str, Any]:
         "dynamic_request": dynamic_request,
         "runtime_backend": "deerflow",
         **result_patch,
+        "dynamic_resume_overlay": dynamic_patch.get("resume_overlay"),
     }

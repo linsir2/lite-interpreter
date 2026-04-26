@@ -159,6 +159,20 @@ cd /home/linsir365/projects/lite-interpreter
 conda run -n lite_interpreter python -m pytest -q tests/test_dag_engine.py tests/test_dynamic_runtime.py tests/test_deerflow_bridge.py
 ```
 
+如果改动涉及新的 `ExecutionStrategy` / `ArtifactPlan` / artifact verification，再补：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m pytest -q tests/test_blackboard.py tests/test_dag_engine.py tests/test_api_app.py
+```
+
+如果改动涉及新的 `research_mode` / `static_evidence_node` / `web_search` / `web_fetch`，再补：
+
+```bash
+cd /home/linsir365/projects/lite-interpreter
+conda run -n lite_interpreter python -m pytest -q tests/test_analysis_runtime.py tests/test_mcp_gateway.py tests/test_dag_engine.py
+```
+
 ### 改前端页面或前端 API 消费
 
 至少跑：
@@ -187,3 +201,4 @@ conda run -n lite_interpreter python -m pytest -q tests/test_api_app.py tests/te
 2. skill usage / outcome 的并发计数一致性
 3. 多文件上传 / 大文件限制 / 结构化错误的更细粒度回归
 4. 对配置默认值与前端联调约定的契约测试
+5. family generator 内部实现逐步替代 legacy renderer 时的更细粒度 artifact contract 回归

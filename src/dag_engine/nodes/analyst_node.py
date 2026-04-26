@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from config.settings import STATIC_EVIDENCE_ALLOWED_DOMAINS
+
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import get_logger
+from src.common.control_plane import ensure_evidence_plan, ensure_execution_strategy
 from src.dag_engine.graphstate import DagGraphState
 from src.memory import MemoryService
 from src.runtime import build_analysis_brief, resolve_runtime_decision
@@ -158,8 +161,40 @@ def analyst_node(state: DagGraphState) -> dict[str, Any]:
         exec_data=exec_data,
         refined_context=refined_context,
     )
+    runtime_decision = resolve_runtime_decision(
+        call_purpose="analysis_summary",
+        query=state["input_query"],
+        state=state,
+        exec_data=exec_data,
+        allowed_tools=list(exec_data.control.task_envelope.allowed_tools) if exec_data.control.task_envelope else [],
+    )
+    evidence_plan = ensure_evidence_plan(
+        {
+            "research_mode": runtime_decision.research_mode,
+            "search_queries": [state["input_query"]] if runtime_decision.research_mode == "single_pass" else [],
+            "allowed_domains": list(STATIC_EVIDENCE_ALLOWED_DOMAINS),
+            "allowed_capabilities": ["web_search", "web_fetch"],
+        },
+        research_mode=runtime_decision.research_mode,
+    )
+    execution_strategy = ensure_execution_strategy(
+        exec_data.static.execution_strategy or {},
+        analysis_mode=prepared.analysis_brief.get("analysis_mode") or runtime_decision.analysis_mode,
+        research_mode=runtime_decision.research_mode,
+        evidence_plan=evidence_plan,
+        legacy_compatibility={
+            "analysis_plan": prepared.analysis_plan,
+            "next_static_steps": list(runtime_decision.next_static_steps),
+        },
+    )
     exec_data.knowledge.analysis_brief = prepared.analysis_brief
     exec_data.static.analysis_plan = prepared.analysis_plan
+    exec_data.static.execution_strategy = execution_strategy
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
-    return {"analysis_plan": prepared.analysis_plan, "next_actions": ["coder"]}
+    next_actions = ["static_evidence"] if runtime_decision.research_mode == "single_pass" else ["coder"]
+    return {
+        "analysis_plan": prepared.analysis_plan,
+        "execution_strategy": execution_strategy.model_dump(mode="json"),
+        "next_actions": next_actions,
+    }

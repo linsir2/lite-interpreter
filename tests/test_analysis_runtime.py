@@ -26,6 +26,7 @@ def test_runtime_decision_classifies_dataset_analysis():
     assert decision.routing_mode == "static"
     assert decision.model_alias == "fast_model"
     assert decision.final_mode == "static"
+    assert decision.research_mode == "none"
     assert decision.destinations == ("analyst",)
     assert decision.route_candidates == ("static",)
     assert decision.routing_stage == "coarse"
@@ -40,6 +41,7 @@ def test_runtime_decision_classifies_dynamic_research():
     )
 
     assert decision.analysis_mode == "dynamic_research_analysis"
+    assert decision.research_mode == "iterative"
     assert decision.routing_mode == "dynamic"
     assert decision.final_mode == "dynamic"
     assert decision.coarse_mode == "dynamic"
@@ -60,6 +62,7 @@ def test_runtime_decision_prefers_document_rule_analysis_for_rule_only_query():
 
     assert decision.analysis_mode == "document_rule_analysis"
     assert decision.final_mode == "static"
+    assert decision.research_mode == "none"
     assert decision.continuation == "finish"
 
 
@@ -83,6 +86,7 @@ def test_runtime_decision_marks_hybrid_mode_and_metadata():
 
     assert decision.analysis_mode == "hybrid_analysis"
     assert decision.final_mode == "hybrid"
+    assert decision.research_mode == "none"
     assert decision.destinations == ("data_inspector",)
     assert decision.route_candidates == ("hybrid", "static")
     assert decision.requires_static_execution is True
@@ -229,3 +233,25 @@ def test_build_analysis_brief_keeps_dataset_rules_and_evidence_refs():
     assert brief.dataset_summaries
     assert brief.business_rules == ("合同必须上传",)
     assert brief.evidence_refs == ("rule-1",)
+
+
+def test_runtime_decision_routes_single_pass_external_verification_to_static():
+    exec_data = ExecutionData(
+        tenant_id="tenant",
+        task_id="task",
+        inputs={
+            "structured_datasets": [{"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}]
+        },
+    )
+
+    decision = resolve_runtime_decision(
+        call_purpose="routing_assess",
+        query="查一个公开数据，对比一下我们和行业平均增速，再做计算",
+        exec_data=exec_data,
+        allowed_tools=["web_search", "web_fetch", "knowledge_query"],
+    )
+
+    assert decision.final_mode == "static"
+    assert decision.research_mode == "single_pass"
+    assert decision.destinations == ("analyst",)
+    assert decision.requires_external_research is True

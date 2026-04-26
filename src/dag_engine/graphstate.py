@@ -56,6 +56,15 @@ class DagGraphState(TypedDict, total=False):
     refined_context: str
     analysis_plan: str
     generated_code: str
+    execution_strategy: dict[str, Any]
+    static_evidence_bundle: dict[str, Any]
+    program_spec: dict[str, Any]
+    repair_plan: dict[str, Any]
+    debug_attempts: list[dict[str, Any]]
+    generator_manifest: dict[str, Any]
+    artifact_plan: dict[str, Any]
+    verification_plan: dict[str, Any]
+    artifact_verification: dict[str, Any]
     input_mounts: list[dict[str, Any]]
     audit_result: dict[str, Any]
     execution_record: dict[str, Any]
@@ -68,6 +77,7 @@ class DagGraphState(TypedDict, total=False):
     dynamic_status: str
     dynamic_summary: str
     dynamic_continuation: str
+    dynamic_resume_overlay: dict[str, Any]
     dynamic_next_static_steps: list[str]
     dynamic_trace: list[dict[str, Any]]
     dynamic_trace_refs: list[str]

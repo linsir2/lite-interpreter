@@ -25,7 +25,7 @@ from src.api.execution_resources import (
 )
 from src.blackboard import execution_blackboard, knowledge_blackboard, memory_blackboard
 from src.blackboard.schema import GlobalStatus, TaskGlobalState
-from src.common.control_plane import parser_reports_from_documents
+from src.common.control_plane import artifact_category_from_path, parser_reports_from_documents, sort_output_entries
 from src.common.event_bus import EventTopic
 from src.common.event_journal import event_journal
 from src.skillnet.preset_skills import load_preset_skills
@@ -246,7 +246,7 @@ def build_analysis_outputs(
     outputs: list[dict[str, Any]],
 ) -> list[AnalysisOutputItem]:
     output_items: list[AnalysisOutputItem] = []
-    for index, output in enumerate(outputs, start=1):
+    for index, output in enumerate(sort_output_entries(outputs), start=1):
         item = dict(output or {})
         path = str(item.get("path") or "").strip()
         preview_kind = "none"
@@ -264,7 +264,7 @@ def build_analysis_outputs(
             AnalysisOutputItem(
                 id=f"output_{task.task_id}_{index}",
                 title=str(item.get("name") or f"输出 {index}"),
-                type=str(item.get("type") or "artifact"),
+                type=str(item.get("type") or artifact_category_from_path(path, str(item.get("category") or "")) or "artifact"),
                 summary=str(item.get("summary") or ""),
                 downloadUrl=download_url,
                 previewKind=preview_kind,
@@ -288,7 +288,7 @@ def resolve_analysis_output_content(task: TaskGlobalState, output_id: str) -> tu
         task_lease=task_lease,
     )
     response = dict(payload.get("response") or {})
-    outputs = list(response.get("outputs") or [])
+    outputs = sort_output_entries(response.get("outputs") or [])
     target = next((item for item in build_analysis_outputs(task, execution_data, outputs) if item.id == output_id), None)
     if target is None:
         return None

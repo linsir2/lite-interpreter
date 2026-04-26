@@ -40,6 +40,7 @@ from src.dag_engine.nodes.executor_node import executor_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
 from src.dag_engine.nodes.router_node import router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
+from src.dag_engine.nodes.static_evidence_node import static_evidence_node
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.harness.policy import load_harness_policy
 from src.memory import MemoryService
@@ -176,6 +177,7 @@ async def _run_task_flow(
                     "kag_retriever": kag_retriever_node,
                     "context_builder": context_builder_node,
                     "analyst": analyst_node,
+                    "static_evidence": static_evidence_node,
                     "coder": coder_node,
                     "auditor": auditor_node,
                     "debugger": debugger_node,

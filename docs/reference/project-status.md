@@ -8,9 +8,9 @@
 
 ### 自动化验证
 
-- 最后复验日期：`2026-04-23`
+- 最后复验日期：`2026-04-24`
 - 验证命令：`conda run -n lite_interpreter python -m pytest -q`
-- 最新结果：`244 passed, 4 skipped`
+- 最新结果：`255 passed, 4 skipped`
 - 说明：4 个 skip 仍来自 Docker / 本地 TCP 绑定等环境能力缺失，而不是已知断言失败
 
 ### 前端构建验证
@@ -76,10 +76,13 @@
 ## 5. 当前最重要的已知热点
 
 1. `src/sandbox/docker_executor.py` 仍然偏大，后续应继续拆容器生命周期、并发控制和结果映射。
-2. `src/dag_engine/nodes/static_codegen.py` 仍然偏模板化，后续应让 `analysis_plan`、skill hints 和知识上下文更深地影响生成策略。
-3. Web 前端已经完成形态迁移，但长任务中的更细粒度进度反馈、结果预览和操作回路还可以继续增强。
-4. skill usage / outcome 在跨进程并发场景下仍需进一步做原子化持久化。
-5. 文档、配置与合同虽然再次完成了一轮同步，但未来每次产品面改动都仍有再次漂移的风险。
+2. 静态链已经补上 `ExecutionStrategy` / `ArtifactPlan` / `GeneratorManifest`，但 generator family 仍在 v1 范围内，后续还要继续拆 family 内部逻辑，降低对 legacy dataset-aware renderer 的依赖。
+3. 静态链已经补上 `research_mode=single_pass` 与 `static_evidence_node`，但外部证据目前仍偏轻量，后续还要继续增强来源选择、去重和证据摘要质量。
+4. bounded debugger 已从 JSON fallback 升级为单次 repair loop，但当前修复动作仍然偏保守，主要是降级 spec / 切 fallback。
+5. Web 前端已经完成形态迁移，但长任务中的更细粒度进度反馈、结果预览和操作回路还可以继续增强。
+6. skill usage / outcome 在跨进程并发场景下仍需进一步做原子化持久化。
+7. `summarizer_node.py` 与 `app_presenters.py` 仍承担较重的投影职责，后续需要继续把 artifact 组织、technical projection 和 app-facing copy 分层。
+8. 文档、配置与合同虽然再次完成了一轮同步，但未来每次产品面改动都仍有再次漂移的风险。
 
 ## 6. 当前明确非目标
 

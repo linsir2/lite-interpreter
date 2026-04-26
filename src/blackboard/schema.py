@@ -13,7 +13,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.common.contracts import ExecutionIntent, ExecutionRecord, TaskEnvelope
+from src.common.contracts import (
+    ArtifactPlan,
+    ArtifactVerificationResult,
+    DebugAttemptRecord,
+    DynamicResumeOverlay,
+    ExecutionIntent,
+    ExecutionRecord,
+    ExecutionStrategy,
+    GeneratorManifest,
+    StaticEvidenceBundle,
+    StaticProgramSpec,
+    StaticRepairPlan,
+    TaskEnvelope,
+    VerificationPlan,
+)
 from src.common.control_plane import parser_reports_from_documents
 from src.common.utils import get_utc_now
 from src.kag.compiler.types import CompiledKnowledgeState
@@ -419,6 +433,15 @@ class NodeOutputPatchState(StrictStateModel):
     analysis_brief: AnalysisBriefState | None = None
     analysis_plan: str = ""
     generated_code: str = ""
+    execution_strategy: ExecutionStrategy | None = None
+    static_evidence_bundle: StaticEvidenceBundle | None = None
+    program_spec: StaticProgramSpec | None = None
+    repair_plan: StaticRepairPlan | None = None
+    debug_attempts: list[DebugAttemptRecord] = Field(default_factory=list)
+    generator_manifest: GeneratorManifest | None = None
+    artifact_plan: ArtifactPlan | None = None
+    verification_plan: VerificationPlan | None = None
+    artifact_verification: ArtifactVerificationResult | None = None
     input_mounts: list[InputMountState] = Field(default_factory=list)
     audit_result: AuditResultState = Field(default_factory=AuditResultState)
     retry_count: int | None = None
@@ -430,6 +453,7 @@ class NodeOutputPatchState(StrictStateModel):
     dynamic_status: str | None = None
     dynamic_summary: str | None = None
     dynamic_continuation: str | None = None
+    dynamic_resume_overlay: DynamicResumeOverlay | None = None
     dynamic_next_static_steps: list[str] = Field(default_factory=list)
     dynamic_runtime_metadata: RuntimeMetadataState | None = None
     dynamic_trace: list[DynamicTraceEventState] = Field(default_factory=list)
@@ -456,12 +480,54 @@ class NodeOutputPatchState(StrictStateModel):
             )
         if self.analysis_brief is not None and not isinstance(self.analysis_brief, AnalysisBriefState):
             object.__setattr__(self, "analysis_brief", AnalysisBriefState.model_validate(self.analysis_brief))
+        if self.execution_strategy is not None and not isinstance(self.execution_strategy, ExecutionStrategy):
+            object.__setattr__(self, "execution_strategy", ExecutionStrategy.model_validate(self.execution_strategy))
+        if self.static_evidence_bundle is not None and not isinstance(self.static_evidence_bundle, StaticEvidenceBundle):
+            object.__setattr__(
+                self,
+                "static_evidence_bundle",
+                StaticEvidenceBundle.model_validate(self.static_evidence_bundle),
+            )
+        if self.program_spec is not None and not isinstance(self.program_spec, StaticProgramSpec):
+            object.__setattr__(self, "program_spec", StaticProgramSpec.model_validate(self.program_spec))
+        if self.repair_plan is not None and not isinstance(self.repair_plan, StaticRepairPlan):
+            object.__setattr__(self, "repair_plan", StaticRepairPlan.model_validate(self.repair_plan))
+        object.__setattr__(
+            self,
+            "debug_attempts",
+            [
+                item if isinstance(item, DebugAttemptRecord) else DebugAttemptRecord.model_validate(item)
+                for item in self.debug_attempts
+            ],
+        )
+        if self.generator_manifest is not None and not isinstance(self.generator_manifest, GeneratorManifest):
+            object.__setattr__(self, "generator_manifest", GeneratorManifest.model_validate(self.generator_manifest))
+        if self.artifact_plan is not None and not isinstance(self.artifact_plan, ArtifactPlan):
+            object.__setattr__(self, "artifact_plan", ArtifactPlan.model_validate(self.artifact_plan))
+        if self.verification_plan is not None and not isinstance(self.verification_plan, VerificationPlan):
+            object.__setattr__(self, "verification_plan", VerificationPlan.model_validate(self.verification_plan))
+        if self.artifact_verification is not None and not isinstance(
+            self.artifact_verification, ArtifactVerificationResult
+        ):
+            object.__setattr__(
+                self,
+                "artifact_verification",
+                ArtifactVerificationResult.model_validate(self.artifact_verification),
+            )
         if self.execution_record is not None and not isinstance(self.execution_record, ExecutionRecord):
             object.__setattr__(self, "execution_record", ExecutionRecord.model_validate(self.execution_record))
         if not isinstance(self.audit_result, AuditResultState):
             object.__setattr__(self, "audit_result", AuditResultState.model_validate(self.audit_result))
         if self.dynamic_request is not None and not isinstance(self.dynamic_request, DynamicRequestState):
             object.__setattr__(self, "dynamic_request", DynamicRequestState.model_validate(self.dynamic_request))
+        if self.dynamic_resume_overlay is not None and not isinstance(
+            self.dynamic_resume_overlay, DynamicResumeOverlay
+        ):
+            object.__setattr__(
+                self,
+                "dynamic_resume_overlay",
+                DynamicResumeOverlay.model_validate(self.dynamic_resume_overlay),
+            )
         if self.dynamic_runtime_metadata is not None and not isinstance(
             self.dynamic_runtime_metadata, RuntimeMetadataState
         ):
@@ -632,12 +698,55 @@ class ExecutionStaticState(StrictStateModel):
 
     analysis_plan: str | None = None
     generated_code: str | None = None
+    execution_strategy: ExecutionStrategy | None = None
+    static_evidence_bundle: StaticEvidenceBundle | None = None
+    program_spec: StaticProgramSpec | None = None
+    repair_plan: StaticRepairPlan | None = None
+    debug_attempts: list[DebugAttemptRecord] = Field(default_factory=list)
+    generator_manifest: GeneratorManifest | None = None
+    artifact_plan: ArtifactPlan | None = None
+    verification_plan: VerificationPlan | None = None
+    artifact_verification: ArtifactVerificationResult | None = None
     latest_error_traceback: str | None = None
     audit_result: AuditResultState | None = None
     execution_record: ExecutionRecord | None = None
 
     @model_validator(mode="after")
     def _coerce_typed_payloads(self) -> "ExecutionStaticState":
+        if self.execution_strategy is not None and not isinstance(self.execution_strategy, ExecutionStrategy):
+            object.__setattr__(self, "execution_strategy", ExecutionStrategy.model_validate(self.execution_strategy))
+        if self.static_evidence_bundle is not None and not isinstance(self.static_evidence_bundle, StaticEvidenceBundle):
+            object.__setattr__(
+                self,
+                "static_evidence_bundle",
+                StaticEvidenceBundle.model_validate(self.static_evidence_bundle),
+            )
+        if self.program_spec is not None and not isinstance(self.program_spec, StaticProgramSpec):
+            object.__setattr__(self, "program_spec", StaticProgramSpec.model_validate(self.program_spec))
+        if self.repair_plan is not None and not isinstance(self.repair_plan, StaticRepairPlan):
+            object.__setattr__(self, "repair_plan", StaticRepairPlan.model_validate(self.repair_plan))
+        object.__setattr__(
+            self,
+            "debug_attempts",
+            [
+                item if isinstance(item, DebugAttemptRecord) else DebugAttemptRecord.model_validate(item)
+                for item in self.debug_attempts
+            ],
+        )
+        if self.generator_manifest is not None and not isinstance(self.generator_manifest, GeneratorManifest):
+            object.__setattr__(self, "generator_manifest", GeneratorManifest.model_validate(self.generator_manifest))
+        if self.artifact_plan is not None and not isinstance(self.artifact_plan, ArtifactPlan):
+            object.__setattr__(self, "artifact_plan", ArtifactPlan.model_validate(self.artifact_plan))
+        if self.verification_plan is not None and not isinstance(self.verification_plan, VerificationPlan):
+            object.__setattr__(self, "verification_plan", VerificationPlan.model_validate(self.verification_plan))
+        if self.artifact_verification is not None and not isinstance(
+            self.artifact_verification, ArtifactVerificationResult
+        ):
+            object.__setattr__(
+                self,
+                "artifact_verification",
+                ArtifactVerificationResult.model_validate(self.artifact_verification),
+            )
         if self.audit_result is not None and not isinstance(self.audit_result, AuditResultState):
             object.__setattr__(self, "audit_result", AuditResultState.model_validate(self.audit_result))
         if self.execution_record is not None and not isinstance(self.execution_record, ExecutionRecord):
@@ -653,6 +762,7 @@ class ExecutionDynamicState(StrictStateModel):
     status: str | None = None
     summary: str | None = None
     continuation: str | None = None
+    resume_overlay: DynamicResumeOverlay | None = None
     next_static_steps: list[str] = Field(default_factory=list)
     runtime_metadata: RuntimeMetadataState = Field(default_factory=RuntimeMetadataState)
     trace: list[DynamicTraceEventState] = Field(default_factory=list)
@@ -668,6 +778,8 @@ class ExecutionDynamicState(StrictStateModel):
     def _coerce_typed_payloads(self) -> "ExecutionDynamicState":
         if self.request is not None and not isinstance(self.request, DynamicRequestState):
             object.__setattr__(self, "request", DynamicRequestState.model_validate(self.request))
+        if self.resume_overlay is not None and not isinstance(self.resume_overlay, DynamicResumeOverlay):
+            object.__setattr__(self, "resume_overlay", DynamicResumeOverlay.model_validate(self.resume_overlay))
         if not isinstance(self.runtime_metadata, RuntimeMetadataState):
             object.__setattr__(self, "runtime_metadata", RuntimeMetadataState.model_validate(self.runtime_metadata))
         object.__setattr__(

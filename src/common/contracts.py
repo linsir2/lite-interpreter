@@ -161,6 +161,238 @@ class ArtifactRecord(BaseModel):
     summary: str | None = None
 
 
+StrategyFamily = Literal[
+    "dataset_profile",
+    "document_rule_audit",
+    "hybrid_reconciliation",
+    "input_gap_report",
+    "legacy_dataset_aware_generator",
+]
+
+
+ResearchMode = Literal["none", "single_pass", "iterative"]
+
+
+ArtifactCategory = Literal["report", "chart", "export", "diagnostic"]
+
+
+class ArtifactSpec(BaseModel):
+    """One expected user-facing or diagnostic artifact within an execution strategy."""
+
+    artifact_key: str
+    file_name: str
+    category: ArtifactCategory = "diagnostic"
+    artifact_type: str = "artifact"
+    format: str = ""
+    required: bool = True
+    summary: str = ""
+    description: str = ""
+
+
+class ArtifactPlan(BaseModel):
+    """Artifact contract declared by the selected generator strategy."""
+
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    output_root: str = "/app/outputs"
+    required_artifacts: list[ArtifactSpec] = Field(default_factory=list)
+    optional_artifacts: list[ArtifactSpec] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class StaticEvidenceRequest(BaseModel):
+    """Request envelope for one static evidence collection pass."""
+
+    query: str = ""
+    research_mode: ResearchMode = "none"
+    search_queries: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    allowed_capabilities: list[str] = Field(default_factory=list)
+    max_results: int = 3
+    timeout_seconds: float = 8.0
+    max_bytes: int = 200_000
+
+
+class StaticEvidenceRecord(BaseModel):
+    """One normalized external evidence record collected for a static run."""
+
+    source_type: Literal["search_result", "fetched_document"] = "search_result"
+    title: str = ""
+    url: str = ""
+    domain: str = ""
+    snippet: str = ""
+    content_type: str = ""
+    text: str = ""
+    status: str = "ok"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StaticEvidenceBundle(BaseModel):
+    """Collected static evidence attached to one execution."""
+
+    request: StaticEvidenceRequest = Field(default_factory=StaticEvidenceRequest)
+    records: list[StaticEvidenceRecord] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=get_utc_now)
+
+
+class EvidencePlan(BaseModel):
+    """Planner-owned specification for one bounded static evidence pass."""
+
+    research_mode: ResearchMode = "none"
+    search_queries: list[str] = Field(default_factory=list)
+    urls: list[str] = Field(default_factory=list)
+    allowed_capabilities: list[str] = Field(default_factory=list)
+    allowed_domains: list[str] = Field(default_factory=list)
+    max_results: int = 3
+    timeout_seconds: float = 8.0
+    max_bytes: int = 200_000
+
+
+class VerificationPlan(BaseModel):
+    """Rules used to validate post-execution artifact delivery."""
+
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    required_artifact_keys: list[str] = Field(default_factory=list)
+    prohibited_extensions: list[str] = Field(default_factory=list)
+    allowed_output_roots: list[str] = Field(default_factory=list)
+    require_declared_filenames: bool = True
+
+
+class ComputationStep(BaseModel):
+    """One compiler-consumable step inside a static program."""
+
+    step_id: str
+    kind: Literal[
+        "load_datasets",
+        "load_documents",
+        "load_evidence",
+        "derive_rule_checks",
+        "derive_metric_checks",
+        "derive_filter_checks",
+        "emit_report",
+        "emit_json",
+        "emit_csv",
+        "emit_input_gap",
+    ]
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArtifactEmitSpec(BaseModel):
+    """One compiler-consumable artifact emission instruction."""
+
+    artifact_key: str
+    file_name: str
+    emit_kind: Literal[
+        "analysis_report",
+        "summary_json",
+        "rule_checks_json",
+        "cross_source_findings_json",
+        "comparison_csv",
+        "input_gap_report",
+        "requested_inputs_json",
+    ]
+    category: ArtifactCategory = "diagnostic"
+    required: bool = True
+
+
+class DebugHint(BaseModel):
+    """One debug hint emitted by strategy construction or verification."""
+
+    code: str
+    message: str
+
+
+class RepairHint(BaseModel):
+    """One repair hint emitted by verification or debugger analysis."""
+
+    code: str
+    message: str
+
+
+class StaticProgramSpec(BaseModel):
+    """Compiler-owned declarative representation of one static program."""
+
+    spec_id: str
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    analysis_mode: str = ""
+    research_mode: ResearchMode = "none"
+    steps: list[ComputationStep] = Field(default_factory=list)
+    artifact_emits: list[ArtifactEmitSpec] = Field(default_factory=list)
+    debug_hints: list[DebugHint] = Field(default_factory=list)
+    evidence_bundle: StaticEvidenceBundle | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class StaticRepairPlan(BaseModel):
+    """Debugger-owned bounded repair instruction for one failed static attempt."""
+
+    reason: str = ""
+    attempt_index: int = 1
+    action: Literal["fallback_to_legacy", "simplify_program", "drop_external_evidence"] = "simplify_program"
+    updates: dict[str, Any] = Field(default_factory=dict)
+
+
+class DebugAttemptRecord(BaseModel):
+    """Persistent record of one debugger attempt in the static path."""
+
+    attempt_index: int
+    reason: str
+    repair_plan: StaticRepairPlan | None = None
+    outcome: str = "pending"
+    recorded_at: datetime = Field(default_factory=get_utc_now)
+
+
+class GeneratorManifest(BaseModel):
+    """Generator metadata persisted for replay, debugging, and migration cutover."""
+
+    generator_id: str
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    renderer_id: str = "dataset_aware_renderer"
+    fallback_used: bool = False
+    expected_artifact_keys: list[str] = Field(default_factory=list)
+    generated_at: datetime = Field(default_factory=get_utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DynamicResumeOverlay(BaseModel):
+    """Dynamic-to-static handoff state captured independently from legacy metadata fields."""
+
+    continuation: Literal["finish", "resume_static"] = "finish"
+    next_static_steps: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    suggested_static_actions: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class ArtifactVerificationResult(BaseModel):
+    """Post-execution verification result for an artifact plan."""
+
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    passed: bool = False
+    verified_artifact_keys: list[str] = Field(default_factory=list)
+    missing_artifact_keys: list[str] = Field(default_factory=list)
+    unexpected_artifacts: list[str] = Field(default_factory=list)
+    failure_reasons: list[str] = Field(default_factory=list)
+    debug_hints: list[RepairHint] = Field(default_factory=list)
+
+
+class ExecutionStrategy(BaseModel):
+    """Internal execution-strategy truth source for static artifact-producing runs."""
+
+    analysis_mode: str = ""
+    research_mode: ResearchMode = "none"
+    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    generator_id: str = "legacy_dataset_aware_generator"
+    evidence_plan: EvidencePlan = Field(default_factory=EvidencePlan)
+    artifact_plan: ArtifactPlan = Field(default_factory=ArtifactPlan)
+    verification_plan: VerificationPlan = Field(default_factory=VerificationPlan)
+    program_spec: StaticProgramSpec | None = None
+    repair_plan: StaticRepairPlan | None = None
+    resume_overlay: DynamicResumeOverlay | None = None
+    legacy_compatibility: dict[str, Any] = Field(default_factory=dict)
+
+
 class ToolCallRecord(BaseModel):
     """Normalized tool-call resource derived from execution traces."""
 

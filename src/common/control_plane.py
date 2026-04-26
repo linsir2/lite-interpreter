@@ -9,11 +9,29 @@ from typing import Any
 from config.settings import OUTPUT_DIR, UPLOAD_DIR
 
 from src.common.contracts import (
+    ArtifactEmitSpec,
+    ArtifactPlan,
     ArtifactRecord,
+    ArtifactVerificationResult,
+    ComputationStep,
+    DebugAttemptRecord,
+    DebugHint,
     DecisionRecord,
+    DynamicResumeOverlay,
+    EvidencePlan,
     ExecutionIntent,
     ExecutionRecord,
+    ExecutionStrategy,
+    GeneratorManifest,
+    RepairHint,
+    ResearchMode,
+    StaticEvidenceBundle,
+    StaticEvidenceRecord,
+    StaticEvidenceRequest,
+    StaticProgramSpec,
+    StaticRepairPlan,
     TaskEnvelope,
+    VerificationPlan,
 )
 
 
@@ -137,6 +155,315 @@ def ensure_execution_intent(
         }
     )
     return ExecutionIntent.model_validate(payload)
+
+
+def ensure_dynamic_resume_overlay(
+    value: Any = None,
+    *,
+    continuation: str = "finish",
+    next_static_steps: Iterable[Any] | None = None,
+    evidence_refs: Iterable[Any] | None = None,
+    suggested_static_actions: Iterable[Any] | None = None,
+    open_questions: Iterable[Any] | None = None,
+) -> DynamicResumeOverlay:
+    if isinstance(value, DynamicResumeOverlay):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("continuation", _normalize_string(payload.get("continuation"), continuation))
+    payload["next_static_steps"] = _normalize_string_list(payload.get("next_static_steps") or next_static_steps)
+    payload["evidence_refs"] = _normalize_string_list(payload.get("evidence_refs") or evidence_refs)
+    payload["suggested_static_actions"] = _normalize_string_list(
+        payload.get("suggested_static_actions") or suggested_static_actions
+    )
+    payload["open_questions"] = _normalize_string_list(payload.get("open_questions") or open_questions)
+    return DynamicResumeOverlay.model_validate(payload)
+
+
+def ensure_artifact_plan(
+    value: Any = None,
+    *,
+    strategy_family: str = "legacy_dataset_aware_generator",
+    output_root: str = "/app/outputs",
+) -> ArtifactPlan:
+    if isinstance(value, ArtifactPlan):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload.setdefault("output_root", _normalize_string(payload.get("output_root"), output_root))
+    return ArtifactPlan.model_validate(payload)
+
+
+def ensure_evidence_plan(
+    value: Any = None,
+    *,
+    research_mode: ResearchMode = "none",
+) -> EvidencePlan:
+    if isinstance(value, EvidencePlan):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("research_mode", _normalize_string(payload.get("research_mode"), research_mode))
+    payload["search_queries"] = _normalize_string_list(payload.get("search_queries"))
+    payload["urls"] = _normalize_string_list(payload.get("urls"))
+    payload["allowed_domains"] = _normalize_string_list(payload.get("allowed_domains"))
+    payload["allowed_capabilities"] = _normalize_string_list(payload.get("allowed_capabilities"))
+    return EvidencePlan.model_validate(payload)
+
+
+def ensure_static_evidence_request(
+    value: Any = None,
+    *,
+    query: str = "",
+    research_mode: ResearchMode = "none",
+) -> StaticEvidenceRequest:
+    if isinstance(value, StaticEvidenceRequest):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("query", _normalize_string(payload.get("query"), query))
+    payload.setdefault("research_mode", _normalize_string(payload.get("research_mode"), research_mode))
+    payload["search_queries"] = _normalize_string_list(payload.get("search_queries"))
+    payload["urls"] = _normalize_string_list(payload.get("urls"))
+    payload["allowed_domains"] = _normalize_string_list(payload.get("allowed_domains"))
+    payload["allowed_capabilities"] = _normalize_string_list(payload.get("allowed_capabilities"))
+    return StaticEvidenceRequest.model_validate(payload)
+
+
+def ensure_static_evidence_bundle(
+    value: Any = None,
+    *,
+    request: StaticEvidenceRequest | Mapping[str, Any] | None = None,
+) -> StaticEvidenceBundle:
+    if isinstance(value, StaticEvidenceBundle):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload["request"] = ensure_static_evidence_request(payload.get("request") or request).model_dump(mode="json")
+    payload["records"] = [
+        item.model_dump(mode="json") if isinstance(item, StaticEvidenceRecord) else dict(item)
+        for item in payload.get("records", []) or []
+        if isinstance(item, (StaticEvidenceRecord, Mapping))
+    ]
+    payload["errors"] = _normalize_string_list(payload.get("errors"))
+    return StaticEvidenceBundle.model_validate(payload)
+
+
+def ensure_verification_plan(
+    value: Any = None,
+    *,
+    strategy_family: str = "legacy_dataset_aware_generator",
+    required_artifact_keys: Iterable[Any] | None = None,
+) -> VerificationPlan:
+    if isinstance(value, VerificationPlan):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload["required_artifact_keys"] = _normalize_string_list(
+        payload.get("required_artifact_keys") or required_artifact_keys
+    )
+    payload["prohibited_extensions"] = _normalize_string_list(payload.get("prohibited_extensions"))
+    payload["allowed_output_roots"] = _normalize_string_list(payload.get("allowed_output_roots"))
+    return VerificationPlan.model_validate(payload)
+
+
+def ensure_static_program_spec(
+    value: Any = None,
+    *,
+    spec_id: str = "",
+    strategy_family: str = "legacy_dataset_aware_generator",
+    analysis_mode: str = "",
+    research_mode: ResearchMode = "none",
+) -> StaticProgramSpec:
+    if isinstance(value, StaticProgramSpec):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("spec_id", _normalize_string(payload.get("spec_id"), spec_id))
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload.setdefault("analysis_mode", _normalize_string(payload.get("analysis_mode"), analysis_mode))
+    payload.setdefault("research_mode", _normalize_string(payload.get("research_mode"), research_mode))
+    payload["steps"] = [
+        item.model_dump(mode="json") if isinstance(item, ComputationStep) else dict(item)
+        for item in payload.get("steps", []) or []
+        if isinstance(item, (ComputationStep, Mapping))
+    ]
+    payload["artifact_emits"] = [
+        item.model_dump(mode="json") if isinstance(item, ArtifactEmitSpec) else dict(item)
+        for item in payload.get("artifact_emits", []) or []
+        if isinstance(item, (ArtifactEmitSpec, Mapping))
+    ]
+    payload["debug_hints"] = [
+        item.model_dump(mode="json") if isinstance(item, DebugHint) else dict(item)
+        for item in payload.get("debug_hints", []) or []
+        if isinstance(item, (DebugHint, Mapping))
+    ]
+    if payload.get("evidence_bundle") is not None:
+        payload["evidence_bundle"] = ensure_static_evidence_bundle(payload.get("evidence_bundle")).model_dump(mode="json")
+    return StaticProgramSpec.model_validate(payload)
+
+
+def ensure_static_repair_plan(
+    value: Any = None,
+    *,
+    reason: str = "",
+    attempt_index: int = 1,
+) -> StaticRepairPlan:
+    if isinstance(value, StaticRepairPlan):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("reason", _normalize_string(payload.get("reason"), reason))
+    payload.setdefault("attempt_index", int(payload.get("attempt_index", attempt_index) or attempt_index))
+    payload.setdefault("updates", dict(payload.get("updates") or {}))
+    return StaticRepairPlan.model_validate(payload)
+
+
+def ensure_debug_attempt_record(
+    value: Any = None,
+    *,
+    attempt_index: int = 1,
+    reason: str = "",
+) -> DebugAttemptRecord:
+    if isinstance(value, DebugAttemptRecord):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("attempt_index", int(payload.get("attempt_index", attempt_index) or attempt_index))
+    payload.setdefault("reason", _normalize_string(payload.get("reason"), reason))
+    if payload.get("repair_plan") is not None:
+        payload["repair_plan"] = ensure_static_repair_plan(payload.get("repair_plan")).model_dump(mode="json")
+    return DebugAttemptRecord.model_validate(payload)
+
+
+def ensure_generator_manifest(
+    value: Any = None,
+    *,
+    generator_id: str,
+    strategy_family: str = "legacy_dataset_aware_generator",
+    renderer_id: str = "dataset_aware_renderer",
+    fallback_used: bool = False,
+    expected_artifact_keys: Iterable[Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> GeneratorManifest:
+    if isinstance(value, GeneratorManifest):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("generator_id", _normalize_string(payload.get("generator_id"), generator_id))
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload.setdefault("renderer_id", _normalize_string(payload.get("renderer_id"), renderer_id))
+    payload.setdefault("fallback_used", bool(payload.get("fallback_used", fallback_used)))
+    payload["expected_artifact_keys"] = _normalize_string_list(
+        payload.get("expected_artifact_keys") or expected_artifact_keys
+    )
+    payload["metadata"] = dict(payload.get("metadata") or metadata or {})
+    return GeneratorManifest.model_validate(payload)
+
+
+def ensure_execution_strategy(
+    value: Any = None,
+    *,
+    analysis_mode: str = "",
+    research_mode: ResearchMode = "none",
+    strategy_family: str = "legacy_dataset_aware_generator",
+    generator_id: str = "legacy_dataset_aware_generator",
+    evidence_plan: EvidencePlan | Mapping[str, Any] | None = None,
+    artifact_plan: ArtifactPlan | Mapping[str, Any] | None = None,
+    verification_plan: VerificationPlan | Mapping[str, Any] | None = None,
+    program_spec: StaticProgramSpec | Mapping[str, Any] | None = None,
+    repair_plan: StaticRepairPlan | Mapping[str, Any] | None = None,
+    resume_overlay: DynamicResumeOverlay | Mapping[str, Any] | None = None,
+    legacy_compatibility: Mapping[str, Any] | None = None,
+) -> ExecutionStrategy:
+    if isinstance(value, ExecutionStrategy):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("analysis_mode", _normalize_string(payload.get("analysis_mode"), analysis_mode))
+    payload.setdefault("research_mode", _normalize_string(payload.get("research_mode"), research_mode))
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload.setdefault("generator_id", _normalize_string(payload.get("generator_id"), generator_id))
+    payload["evidence_plan"] = ensure_evidence_plan(
+        payload.get("evidence_plan") or evidence_plan,
+        research_mode=str(payload.get("research_mode") or research_mode),
+    ).model_dump(mode="json")
+    payload["artifact_plan"] = ensure_artifact_plan(
+        payload.get("artifact_plan") or artifact_plan,
+        strategy_family=str(payload.get("strategy_family") or strategy_family),
+    ).model_dump(mode="json")
+    payload["verification_plan"] = ensure_verification_plan(
+        payload.get("verification_plan") or verification_plan,
+        strategy_family=str(payload.get("strategy_family") or strategy_family),
+    ).model_dump(mode="json")
+    if payload.get("program_spec") is not None or program_spec is not None:
+        payload["program_spec"] = ensure_static_program_spec(
+            payload.get("program_spec") or program_spec,
+            spec_id=str((payload.get("program_spec") or {}).get("spec_id") or ""),
+            strategy_family=str(payload.get("strategy_family") or strategy_family),
+            analysis_mode=str(payload.get("analysis_mode") or analysis_mode),
+            research_mode=str(payload.get("research_mode") or research_mode),
+        ).model_dump(mode="json")
+    if payload.get("repair_plan") is not None or repair_plan is not None:
+        payload["repair_plan"] = ensure_static_repair_plan(
+            payload.get("repair_plan") or repair_plan,
+        ).model_dump(mode="json")
+    if payload.get("resume_overlay") or resume_overlay is not None:
+        payload["resume_overlay"] = ensure_dynamic_resume_overlay(
+            payload.get("resume_overlay") or resume_overlay,
+        ).model_dump(mode="json")
+    payload["legacy_compatibility"] = dict(payload.get("legacy_compatibility") or legacy_compatibility or {})
+    return ExecutionStrategy.model_validate(payload)
+
+
+def ensure_artifact_verification_result(
+    value: Any = None,
+    *,
+    strategy_family: str = "legacy_dataset_aware_generator",
+    passed: bool = False,
+) -> ArtifactVerificationResult:
+    if isinstance(value, ArtifactVerificationResult):
+        payload = value.model_dump(mode="json")
+    elif isinstance(value, Mapping):
+        payload = dict(value)
+    else:
+        payload = {}
+    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
+    payload.setdefault("passed", bool(payload.get("passed", passed)))
+    payload["verified_artifact_keys"] = _normalize_string_list(payload.get("verified_artifact_keys"))
+    payload["missing_artifact_keys"] = _normalize_string_list(payload.get("missing_artifact_keys"))
+    payload["unexpected_artifacts"] = _normalize_string_list(payload.get("unexpected_artifacts"))
+    payload["failure_reasons"] = _normalize_string_list(payload.get("failure_reasons"))
+    payload["debug_hints"] = [
+        item.model_dump(mode="json") if isinstance(item, RepairHint) else dict(item)
+        for item in payload.get("debug_hints", []) or []
+        if isinstance(item, (RepairHint, Mapping))
+    ]
+    return ArtifactVerificationResult.model_validate(payload)
 
 
 def execution_intent_destinations(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> list[str]:
@@ -307,6 +634,40 @@ def static_artifacts(execution_record: ExecutionRecord | Mapping[str, Any] | Non
             continue
         artifacts.append({"path": sanitize_artifact_reference(artifact_path), "type": artifact_type})
     return artifacts
+
+
+def artifact_category_from_path(path_value: str | None, artifact_type: str | None = None) -> str:
+    explicit = _normalize_string(artifact_type)
+    if explicit in {"report", "chart", "export", "diagnostic"}:
+        return explicit
+    suffix = Path(_normalize_string(path_value)).suffix.lower()
+    if suffix in {".md", ".pdf"}:
+        return "report"
+    if suffix in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        return "chart"
+    if suffix in {".csv", ".json", ".tsv"}:
+        return "export"
+    return "diagnostic"
+
+
+def sort_output_entries(outputs: Sequence[Any] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for item in outputs or []:
+        if not isinstance(item, Mapping):
+            continue
+        normalized.append(dict(item))
+    category_rank = {"report": 0, "chart": 1, "export": 2, "diagnostic": 3}
+
+    def _sort_key(item: Mapping[str, Any]) -> tuple[int, str, str]:
+        category = artifact_category_from_path(
+            str(item.get("path") or ""),
+            str(item.get("category") or item.get("type") or ""),
+        )
+        title = _normalize_string(item.get("name") or item.get("title") or item.get("path"))
+        path = _normalize_string(item.get("path"))
+        return category_rank.get(category, 9), title.lower(), path.lower()
+
+    return sorted(normalized, key=_sort_key)
 
 
 def sanitize_artifact_reference(value: str | None) -> str | None:

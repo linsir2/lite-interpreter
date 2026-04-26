@@ -1,14 +1,20 @@
-import { PageCard, SectionHeader, StatusPill } from '@/components/ui'
+import { FeedbackState, PageCard, QueryFeedback, SectionHeader, StatusPill, focusRing } from '@/components/ui'
 import type { AuditListResponse } from '@/lib/types'
-import { formatDate } from '@/lib/utils'
+import { cn, formatDate } from '@/lib/utils'
 
 export function AuditPage({
   data,
   page,
+  isLoading = false,
+  errorMessage,
+  onRetry,
   onPageChange,
 }: {
   data: AuditListResponse | undefined
   page: number
+  isLoading?: boolean
+  errorMessage?: string | null
+  onRetry?: () => void
   onPageChange: (page: number) => void
 }) {
   const items = data?.items ?? []
@@ -24,11 +30,24 @@ export function AuditPage({
         <AuditMetric label="当前页成功" value={String(items.filter((item) => item.outcome === 'success').length)} tone="success" />
         <AuditMetric label="当前页失败/拒绝" value={String(items.filter((item) => item.outcome !== 'success').length)} tone="warning" />
       </div>
+      {errorMessage || (isLoading && !data) ? (
+        <div className="border-b border-white/10 px-6 py-5 sm:px-7">
+          <QueryFeedback
+            errorMessage={errorMessage}
+            loading={isLoading && !data}
+            loadingTitle="正在加载审计记录"
+            loadingDescription="正在读取当前工作区的关键操作、执行人和结果。"
+            errorTitle="审计记录加载失败"
+            onRetry={onRetry}
+            retryLabel="重新加载审计记录"
+          />
+        </div>
+      ) : null}
       <div className="flex items-center justify-between border-b border-white/10 px-6 py-4 text-sm text-muted sm:px-7">
         <span>第 {page} / {totalPages} 页</span>
         <div className="flex gap-2">
           <button
-            className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 px-4 py-2 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+            className={cn('inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full border border-white/10 px-4 py-2 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50', focusRing)}
             disabled={page <= 1}
             type="button"
             onClick={() => onPageChange(page - 1)}
@@ -36,7 +55,7 @@ export function AuditPage({
             上一页
           </button>
           <button
-            className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 px-4 py-2 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+            className={cn('inline-flex min-h-11 cursor-pointer items-center justify-center rounded-full border border-white/10 px-4 py-2 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50', focusRing)}
             disabled={page >= totalPages}
             type="button"
             onClick={() => onPageChange(page + 1)}
@@ -64,7 +83,16 @@ export function AuditPage({
                 <td className="rounded-r-2xl px-3 py-4 font-mono text-xs text-muted">{formatDate(item.recordedAt)}</td>
               </tr>
             ))}
-            {!items.length ? <tr><td className="px-3 py-10 text-center text-muted" colSpan={4}>当前没有审计记录。</td></tr> : null}
+            {!items.length ? (
+              <tr>
+                <td className="px-3 py-6" colSpan={4}>
+                  <FeedbackState
+                    title="当前没有审计记录"
+                    description="当工作区发生登录、资料上传、分析创建或产物读取等关键动作后，这里会显示可追溯记录。"
+                  />
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

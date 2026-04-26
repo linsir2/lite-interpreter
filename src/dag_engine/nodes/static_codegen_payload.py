@@ -32,6 +32,7 @@ class StaticCodegenPayload:
     query: str
     analysis_plan: str
     analysis_mode: str
+    research_mode: str
     analysis_brief: dict[str, Any]
     business_context: dict[str, Any]
     compiled_knowledge: dict[str, Any]
@@ -39,6 +40,8 @@ class StaticCodegenPayload:
     skill_strategy_hints: list[dict[str, Any]]
     refined_context_excerpt: str
     input_mounts: list[dict[str, Any]]
+    execution_strategy: dict[str, Any]
+    static_evidence_bundle: dict[str, Any]
     structured_dataset_summaries: list[dict[str, Any]]
     generation_directives: dict[str, Any]
 
@@ -99,7 +102,7 @@ def build_skill_strategy_hints(approved_skills: list[dict[str, Any]]) -> list[di
     return hints
 
 
-def build_static_input_mounts(exec_data: Any) -> list[dict[str, Any]]:
+def build_static_input_mounts(exec_data: Any, extra_mounts: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     input_mounts = build_input_mount_manifest(exec_data.inputs.structured_datasets, exec_data.inputs.business_documents)
     for mount in input_mounts:
         if mount["kind"] != "structured_dataset":
@@ -113,6 +116,13 @@ def build_static_input_mounts(exec_data: Any) -> list[dict[str, Any]]:
         mount["sep"] = str(load_kwargs.get("sep") or ",")
         if load_kwargs.get("format"):
             mount["format"] = str(load_kwargs.get("format"))
+    seen = {str(item.get("host_path") or "") for item in input_mounts}
+    for mount in extra_mounts or []:
+        host_path = str(mount.get("host_path") or "").strip()
+        if not host_path or host_path in seen:
+            continue
+        seen.add(host_path)
+        input_mounts.append(dict(mount))
     return input_mounts
 
 
@@ -247,6 +257,14 @@ def build_static_codegen_payload(*, exec_data: Any, state: Mapping[str, Any], in
         query=state["input_query"],
         analysis_plan=exec_data.static.analysis_plan or "",
         analysis_mode=str(analysis_brief.get("analysis_mode") or ""),
+        research_mode=str(
+
+                exec_data.static.execution_strategy.research_mode
+                if getattr(exec_data.static, "execution_strategy", None) is not None
+                else state.get("research_mode")
+                or "none"
+
+        ),
         analysis_brief=analysis_brief,
         business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
         compiled_knowledge=exec_data.knowledge.compiled.model_dump(mode="json"),
@@ -262,6 +280,16 @@ def build_static_codegen_payload(*, exec_data: Any, state: Mapping[str, Any], in
         skill_strategy_hints=skill_strategy_hints,
         refined_context_excerpt=serialize_preview(str(state.get("refined_context", "") or ""), limit=400),
         input_mounts=input_mounts,
+        execution_strategy=(
+            exec_data.static.execution_strategy.model_dump(mode="json")
+            if getattr(exec_data.static, "execution_strategy", None) is not None
+            else {}
+        ),
+        static_evidence_bundle=(
+            exec_data.static.static_evidence_bundle.model_dump(mode="json")
+            if getattr(exec_data.static, "static_evidence_bundle", None) is not None
+            else {}
+        ),
         structured_dataset_summaries=[
             {
                 "file_name": item.file_name,
@@ -295,7 +323,7 @@ def prepare_static_codegen_payload(*, exec_data: Any, state: Mapping[str, Any]) 
         merged_skills=recall_result.merged_skills,
     )
 
-    input_mounts = build_static_input_mounts(exec_data)
+    input_mounts = build_static_input_mounts(exec_data, extra_mounts=list(state.get("input_mounts") or []))
     payload = build_static_codegen_payload(
         exec_data=exec_data,
         state=state,

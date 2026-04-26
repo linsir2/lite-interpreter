@@ -14,6 +14,10 @@
 ```text
 docs/
 ├── README.md
+├── decisions/
+│   ├── ADR-001-execution-strategy-ir.md
+│   ├── ADR-002-artifact-generation-subsystem.md
+│   └── ADR-003-legacy-static-contract-deprecation.md
 ├── tutorials/
 │   └── first-analysis.md
 ├── how-to/
@@ -21,9 +25,13 @@ docs/
 │   ├── development.md
 │   └── testing.md
 ├── reference/
+│   ├── artifact-contracts.md
+│   ├── execution-strategy.md
 │   └── project-status.md
 └── explanation/
-    └── architecture.md
+    ├── architecture.md
+    ├── from-internal-checks-to-user-deliverables.md
+    └── legacy-removal-strategy.md
 ```
 
 ## 分层职责
@@ -51,15 +59,36 @@ docs/
 - `docs/reference/project-status.md`
   - 面向所有人
   - 目标：查看当前状态、验证基线、已知热点和明确非目标
+- `docs/reference/execution-strategy.md`
+  - 面向改 DAG / runtime / summarizer 的开发者
+  - 目标：查看 `ExecutionStrategy`、`GeneratorManifest`、`DynamicResumeOverlay` 的稳定字段和职责边界
+- `docs/reference/artifact-contracts.md`
+  - 面向改 generator / executor / presenter 的开发者
+  - 目标：查看 family -> artifact contract 的固定映射和 v1 验证规则
 
 ### Explanation
 
 - `docs/explanation/architecture.md`
   - 面向开发者、架构维护者
   - 目标：理解系统为什么这样分层、主链如何协作、边界在哪里
+- `docs/explanation/from-internal-checks-to-user-deliverables.md`
+  - 面向需要理解这轮重构的人
+  - 目标：解释为什么 static chain 不再只输出内部 JSON，而要把 artifact 当作一等对象
+- `docs/explanation/legacy-removal-strategy.md`
+  - 面向后续迁移执行者
+  - 目标：解释旧字段为什么不能立刻删除，以及 reader cutover 的顺序
 - `项目二.md`
   - 面向需要理解工程判断的人
   - 目标：理解这轮收口做对了什么、还剩什么问题
+
+### Decisions
+
+- `docs/decisions/ADR-001-execution-strategy-ir.md`
+  - 目标：记录 `ExecutionStrategy` 为什么成为内部主控制真相源
+- `docs/decisions/ADR-002-artifact-generation-subsystem.md`
+  - 目标：记录 artifact generation 为什么成为 static chain 的正式子系统
+- `docs/decisions/ADR-003-legacy-static-contract-deprecation.md`
+  - 目标：记录 `analysis_plan` / `generation_directives` / `next_static_steps` 等旧字段的迁移和删除门槛
 
 ### 补充入口
 

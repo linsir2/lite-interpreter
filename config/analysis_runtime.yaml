@@ -39,15 +39,37 @@ dynamic_patterns:
   - 自己找数据
   - 自己收集
   - 自己验证
+  - 联网
+  - 外部资料
+  - 公开数据
+  - 行业平均
+  - 外部事实
+  - web
+
+single_pass_patterns:
+  - 联网查
+  - 查一个公开数据
+  - 公开数据
+  - 行业平均
+  - 外部事实
+  - 对比行业平均
+  - 查一下公开资料
+  - benchmark
+
+iterative_patterns:
   - 多步
   - 探索
   - 对比方案
-  - 联网
-  - 外部资料
   - research
-  - benchmark
-  - 宏观
+  - 自己找数据
+  - 自己收集
+  - 同时查
+  - 多来源
+  - 再深入
+  - 再查
+  - 竞品
   - 财报
+  - 宏观
 
 dataset_keywords:
   - 数据

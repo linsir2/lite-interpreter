@@ -23,6 +23,10 @@ const TERMINAL_ANALYSIS_STATUSES = new Set(['success', 'failed', 'waiting_for_hu
 
 type ViewMode = 'business' | 'runtime'
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '请求失败，请稍后重试。'
+}
+
 function loadStoredValue(key: string, fallback: string) {
   return window.localStorage.getItem(key) ?? fallback
 }
@@ -189,6 +193,12 @@ function AppInner() {
             <AnalysesPage
               data={analysesQuery.data}
               assets={assetsQuery.data?.items ?? []}
+              isLoading={analysesQuery.isLoading || assetsQuery.isLoading}
+              errorMessage={analysesQuery.isError ? errorMessage(analysesQuery.error) : assetsQuery.isError ? errorMessage(assetsQuery.error) : null}
+              onRetry={() => {
+                void analysesQuery.refetch()
+                void assetsQuery.refetch()
+              }}
               viewMode={viewMode}
               onSubmit={(input) => createAnalysis.mutateAsync(input)}
             />
@@ -196,17 +206,63 @@ function AppInner() {
         />
         <Route
           path="analyses/new"
-          element={<NewAnalysisPage assets={assetsQuery.data?.items ?? []} onSubmit={(input) => createAnalysis.mutateAsync(input)} />}
+          element={
+            <NewAnalysisPage
+              assets={assetsQuery.data?.items ?? []}
+              assetsLoading={assetsQuery.isLoading}
+              assetsErrorMessage={assetsQuery.isError ? errorMessage(assetsQuery.error) : null}
+              onRetryAssets={() => {
+                void assetsQuery.refetch()
+              }}
+              onSubmit={(input) => createAnalysis.mutateAsync(input)}
+            />
+          }
         />
         <Route
           path="analyses/:analysisId"
           element={<AnalysisDetailRoute config={effectiveConfig} viewMode={viewMode} />}
         />
-        <Route path="assets" element={<AssetsPage assets={assetsQuery.data?.items ?? []} onUpload={(input) => uploadAssets.mutateAsync(input)} />} />
-        <Route path="methods" element={<MethodsPage methods={methodsQuery.data?.items ?? []} />} />
+        <Route
+          path="assets"
+          element={
+            <AssetsPage
+              assets={assetsQuery.data?.items ?? []}
+              isLoading={assetsQuery.isLoading}
+              errorMessage={assetsQuery.isError ? errorMessage(assetsQuery.error) : null}
+              onRetry={() => {
+                void assetsQuery.refetch()
+              }}
+              onUpload={(input) => uploadAssets.mutateAsync(input)}
+            />
+          }
+        />
+        <Route
+          path="methods"
+          element={
+            <MethodsPage
+              methods={methodsQuery.data?.items ?? []}
+              isLoading={methodsQuery.isLoading}
+              errorMessage={methodsQuery.isError ? errorMessage(methodsQuery.error) : null}
+              onRetry={() => {
+                void methodsQuery.refetch()
+              }}
+            />
+          }
+        />
         <Route
           path="audit"
-          element={<AuditPage data={auditQuery.data} page={auditPage} onPageChange={setAuditPage} />}
+          element={
+            <AuditPage
+              data={auditQuery.data}
+              page={auditPage}
+              isLoading={auditQuery.isLoading}
+              errorMessage={session.uiCapabilities.canViewAudit && auditQuery.isError ? errorMessage(auditQuery.error) : null}
+              onRetry={() => {
+                void auditQuery.refetch()
+              }}
+              onPageChange={setAuditPage}
+            />
+          }
         />
         <Route
           path="settings/session"
@@ -298,6 +354,12 @@ function AnalysisDetailRoute({ config, viewMode }: { config: ApiClientConfig; vi
       config={config}
       detail={detailQuery.data}
       events={events}
+      isLoading={detailQuery.isLoading}
+      errorMessage={detailQuery.isError ? errorMessage(detailQuery.error) : eventsQuery.isError ? errorMessage(eventsQuery.error) : null}
+      onRetry={() => {
+        void detailQuery.refetch()
+        void eventsQuery.refetch()
+      }}
       isLiveRefreshing={!isTerminalAnalysisStatus(detailQuery.data?.status)}
       viewMode={viewMode}
     />

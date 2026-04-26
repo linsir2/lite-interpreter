@@ -37,9 +37,10 @@ Web frontend
 
 ### 2.2 任务执行
 
-- **静态链**：适合结构稳定、可模板化的分析任务
-- **动态链**：适合需要外部研究、多步探索的复杂问题
-- 两条链都必须回写 Blackboard，最终结果统一由 summarizer 收束
+- **静态链**：适合结构稳定、可确定性执行的分析任务
+- **静态单次取证**：适合“先查一个公开事实，再做本地计算”的任务，仍归静态链 owner
+- **动态链**：只保留给需要多步规划、反复探索、子 agent 编排的任务
+- 三条路径都必须回写 Blackboard，最终结果统一由 summarizer 收束
 
 ### 2.3 结果消费
 
@@ -138,7 +139,8 @@ Web frontend
 核心原则：
 
 1. 静态链优先
-2. 动态能力按需触发
+2. 外部取证不等于动态；单次取证优先留在静态链
+3. 动态能力只在需要迭代探索时触发
 3. 最终执行仍回到本地 sandbox
 4. summarizer 必须反映真实终态，而不是假象
 
@@ -150,6 +152,7 @@ router
   -> kag_retriever
   -> context_builder
   -> analyst
+  -> (必要时 static_evidence)
   -> coder
   -> auditor
   -> executor
@@ -207,10 +210,11 @@ router
 
 1. 输入校验
 2. AST 审计
-3. harness governance 预判
+3. tool-mediated static evidence 与 sandbox execute 的分段 governance
 4. Docker sandbox 执行
 5. `ExecutionRecord` 标准化
 6. 产物与执行事件投影
+7. artifact contract verification
 
 #### 知识与方法层
 

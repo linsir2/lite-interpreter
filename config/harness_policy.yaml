@@ -17,6 +17,15 @@ profiles:
     network_access: tool-mediated-only
     host_bash_access: forbidden
     sandbox_execute: false
+  static_evidence:
+    allowed_tools:
+      - web_search
+      - web_fetch
+      - knowledge_query
+      - state_sync
+    network_access: tool-mediated-only
+    host_bash_access: forbidden
+    sandbox_execute: false
   executor:
     allowed_tools:
       - knowledge_query

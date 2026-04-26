@@ -2,7 +2,7 @@ import { ArrowRight, Play, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
-import { Button, PageCard, Select, StatusPill, TextArea } from '@/components/ui'
+import { Button, PageCard, QueryFeedback, Select, StatusPill, TextArea, focusRing } from '@/components/ui'
 import type { AnalysisListResponse, AssetListItem, CreateAnalysisResponse } from '@/lib/types'
 import { cn, formatDate } from '@/lib/utils'
 
@@ -13,11 +13,17 @@ const RECENT_ANALYSIS_DISPLAY_LIMIT = 10
 export function AnalysesPage({
   data,
   assets,
+  isLoading = false,
+  errorMessage,
+  onRetry,
   viewMode,
   onSubmit,
 }: {
   data: AnalysisListResponse | undefined
   assets: AssetListItem[]
+  isLoading?: boolean
+  errorMessage?: string | null
+  onRetry?: () => void
   viewMode: ViewMode
   onSubmit: (input: { question: string; assetIds: string[]; analysisModePreset?: string | null }) => Promise<CreateAnalysisResponse>
 }) {
@@ -43,6 +49,7 @@ export function AnalysesPage({
 
   const selectedAssets = assets.filter((asset) => assetIds.includes(asset.assetId))
   const visibleAssetOptions = assets.slice(0, 6)
+  const reviewQueue = items.filter((item) => item.hasWarnings || item.status !== 'success').slice(0, 4)
   const heroTitle = viewMode === 'runtime' ? '运行时透明度中心' : '可复核的 AI 财务分析'
   const heroDescription = viewMode === 'runtime'
     ? '从业务任务进入真实运行事件、进度与产物状态，不在首页伪造完整 DAG。'
@@ -50,8 +57,20 @@ export function AnalysesPage({
 
   return (
     <div className="space-y-6">
+      {errorMessage || (isLoading && !data) ? (
+        <PageCard className="p-5">
+          <QueryFeedback
+            errorMessage={errorMessage}
+            loading={isLoading && !data}
+            loadingTitle="正在加载工作台"
+            loadingDescription="正在读取当前工作区的分析任务、状态和复核队列。"
+            errorTitle="分析列表加载失败"
+            onRetry={onRetry}
+          />
+        </PageCard>
+      ) : null}
       <PageCard className="overflow-hidden">
-        <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_390px]">
+        <div className="grid gap-0 xl:grid-cols-[minmax(0,1.15fr)_minmax(340px,0.85fr)]">
           <div className="relative px-6 py-7 sm:px-8 sm:py-8">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_78%_10%,rgba(215,176,110,0.16),transparent_26%),radial-gradient(circle_at_10%_90%,rgba(74,222,128,0.08),transparent_28%)]" />
             <div className="relative">
@@ -66,16 +85,10 @@ export function AnalysesPage({
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-8 text-muted">{heroDescription}</p>
 
-              <div className="mt-7 flex flex-wrap items-center gap-3 text-sm text-muted">
-                {['资料', '证据', '分析', '产物', '复核'].map((step, index) => (
-                  <div key={step} className="flex items-center gap-3">
-                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-ink">
-                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/20 text-[11px] text-primary">{index + 1}</span>
-                      {step}
-                    </span>
-                    {index < 4 ? <ArrowRight className="h-4 w-4 text-primary/70" /> : null}
-                  </div>
-                ))}
+              <div className="mt-7 grid gap-3 md:grid-cols-3">
+                <MiniStat label="任务总数" value={String(data?.pagination.totalItems ?? 0)} />
+                <MiniStat label="待跟进" value={String(activeItems.length)} />
+                <MiniStat label="风险提示" value={String(warningCount)} />
               </div>
 
               <form
@@ -107,8 +120,8 @@ export function AnalysesPage({
                   </div>
                   <div className="space-y-4">
                     <div>
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#b7b0a2]">分析模式</div>
-                      <Select value={analysisModePreset} onChange={(event) => setAnalysisModePreset(event.target.value)}>
+                      <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-[#b7b0a2]" htmlFor="quick-analysis-mode">分析模式</label>
+                      <Select id="quick-analysis-mode" value={analysisModePreset} onChange={(event) => setAnalysisModePreset(event.target.value)}>
                         <option value="researcher">深度分析（推荐）</option>
                         <option value="reviewer">规则审计</option>
                         <option value="planner">结构化拆解</option>
@@ -118,7 +131,7 @@ export function AnalysesPage({
                       <Play className="h-4 w-4" />
                       {submitting ? '创建中…' : '开始分析'}
                     </Button>
-                    {error ? <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</div> : null}
+                    {error ? <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-200" role="alert">{error}</div> : null}
                   </div>
                 </div>
 
@@ -134,7 +147,8 @@ export function AnalysesPage({
                         <button
                           key={asset.assetId}
                           className={cn(
-                            'rounded-full border px-3 py-2 text-xs transition',
+                            'cursor-pointer rounded-full border px-3 py-2 text-xs transition',
+                            focusRing,
                             selected
                               ? 'border-primary/30 bg-primary/10 text-primary'
                               : 'border-white/10 bg-white/5 text-muted hover:border-white/20 hover:text-ink',
@@ -163,14 +177,24 @@ export function AnalysesPage({
             <div className="space-y-4">
               <div className="rounded-[28px] border border-white/10 bg-white/5 p-5">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-ink">工作区状态</div>
+                  <div className="text-sm font-semibold text-ink">复核队列</div>
                   <ShieldCheck className="h-5 w-5 text-emerald-300" />
                 </div>
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  <MiniStat label="分析任务" value={String(data?.pagination.totalItems ?? 0)} />
-                  <MiniStat label="已完成" value={String(completedCount)} />
-                  <MiniStat label="待跟进" value={String(activeItems.length)} />
-                  <MiniStat label="有风险提示" value={String(warningCount)} />
+                <div className="mt-4 space-y-3">
+                  {reviewQueue.map((item) => (
+                    <Link
+                      key={item.analysisId}
+                      className={cn('block rounded-2xl border border-white/10 bg-black/20 px-4 py-3 transition hover:border-primary/25 hover:bg-white/5', focusRing)}
+                      to={`/analyses/${item.analysisId}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 font-medium text-ink">{item.title}</div>
+                        <StatusPill tone={toneForStatus(item.status)}>{item.statusLabel}</StatusPill>
+                      </div>
+                      <div className="mt-2 text-xs leading-5 text-muted">{item.hasWarnings ? '含风险提示，需要复核。' : item.summary || item.question}</div>
+                    </Link>
+                  ))}
+                  {!reviewQueue.length ? <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm leading-6 text-emerald-200">当前没有待复核风险或未完成任务。</div> : null}
                 </div>
               </div>
 
@@ -186,7 +210,7 @@ export function AnalysesPage({
                       <StatusPill tone={toneForStatus(latestItem.status)}>{latestItem.statusLabel}</StatusPill>
                     </div>
                     <p className="text-sm leading-6 text-muted">{latestItem.summary || latestItem.question}</p>
-                    <Link className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-primary hover:text-primary-hover" to={`/analyses/${latestItem.analysisId}`}>
+                    <Link className={cn('inline-flex min-h-11 items-center gap-2 rounded-full text-sm font-semibold text-primary hover:text-primary-hover', focusRing)} to={`/analyses/${latestItem.analysisId}`}>
                       查看完整结论
                       <ArrowRight className="h-4 w-4" />
                     </Link>
@@ -215,7 +239,7 @@ export function AnalysesPage({
                 <div className="text-sm font-semibold text-ink">最近分析</div>
                 <p className="mt-1 text-sm text-muted">按最近更新时间排序，首页仅展示最需要快速复核的最近记录。</p>
               </div>
-              <Link className="inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 text-sm font-semibold text-ink transition hover:-translate-y-[1px] hover:border-white/20 hover:bg-white/10" to="/analyses/new">进入完整新建流程</Link>
+              <Link className={cn('inline-flex min-h-11 items-center justify-center rounded-full border border-white/10 bg-white/5 px-4 text-sm font-semibold text-ink transition hover:-translate-y-[1px] hover:border-white/20 hover:bg-white/10', focusRing)} to="/analyses/new">进入完整新建流程</Link>
             </div>
           </div>
           <div className="overflow-x-auto px-4 pb-4">
@@ -232,7 +256,7 @@ export function AnalysesPage({
                 {visibleRecentItems.map((item) => (
                   <tr key={item.analysisId} className="rounded-2xl bg-white/5 text-ink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)] transition hover:bg-white/10">
                     <td className="rounded-l-2xl px-3 py-4 align-top">
-                      <Link className="inline-flex min-h-11 items-center font-semibold hover:text-primary" to={`/analyses/${item.analysisId}`}>
+                      <Link className={cn('inline-flex min-h-11 items-center rounded-lg font-semibold hover:text-primary', focusRing)} to={`/analyses/${item.analysisId}`}>
                         {item.title}
                       </Link>
                       <div className="mt-1 max-w-xl text-xs leading-5 text-muted">{item.question}</div>
@@ -267,7 +291,7 @@ export function AnalysesPage({
           </div>
           <div className="space-y-3 px-5 py-5">
             {activeItems.slice(0, 5).map((item) => (
-              <Link key={item.analysisId} to={`/analyses/${item.analysisId}`} className="block rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition hover:border-primary/25 hover:bg-white/10">
+              <Link key={item.analysisId} to={`/analyses/${item.analysisId}`} className={cn('block rounded-2xl border border-white/10 bg-white/5 px-4 py-3 transition hover:border-primary/25 hover:bg-white/10', focusRing)}>
                 <div className="flex items-center justify-between gap-3">
                   <div className="font-medium text-ink">{item.title}</div>
                   <StatusPill tone={toneForStatus(item.status)}>{item.statusLabel}</StatusPill>

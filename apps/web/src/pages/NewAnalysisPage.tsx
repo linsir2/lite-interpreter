@@ -2,15 +2,21 @@ import { ArrowRight, FileStack, ShieldCheck, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
-import { Button, FieldLabel, PageCard, SectionHeader, Select, StatusPill, TextArea } from '@/components/ui'
+import { Button, FeedbackState, FieldLabel, PageCard, QueryFeedback, SectionHeader, Select, StatusPill, TextArea, focusRing } from '@/components/ui'
 import type { AssetListItem, CreateAnalysisResponse } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 export function NewAnalysisPage({
   assets,
+  assetsLoading = false,
+  assetsErrorMessage,
+  onRetryAssets,
   onSubmit,
 }: {
   assets: AssetListItem[]
+  assetsLoading?: boolean
+  assetsErrorMessage?: string | null
+  onRetryAssets?: () => void
   onSubmit: (input: { question: string; assetIds: string[]; analysisModePreset?: string | null }) => Promise<CreateAnalysisResponse>
 }) {
   const navigate = useNavigate()
@@ -94,14 +100,24 @@ export function NewAnalysisPage({
               </div>
             </div>
 
-            {error ? <div className="rounded-2xl border border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</div> : null}
+            <QueryFeedback
+              errorMessage={assetsErrorMessage}
+              loading={assetsLoading && !assets.length}
+              loadingTitle="正在加载可选资料"
+              loadingDescription="正在读取当前工作区可用于本次分析的资料。"
+              errorTitle="可选资料加载失败"
+              onRetry={onRetryAssets}
+              retryLabel="重新加载资料"
+            />
+
+            {error ? <FeedbackState title="分析任务创建失败" description={error} tone="error" /> : null}
 
             <div className="flex flex-wrap items-center gap-3">
               <Button disabled={submitting || !question.trim()} type="submit">
                 {submitting ? '提交中…' : '开始分析'}
                 <ArrowRight className="h-4 w-4" />
               </Button>
-              <Link className="inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-semibold text-muted transition hover:bg-white/5 hover:text-ink" to="/analyses">
+              <Link className={cn('inline-flex min-h-11 items-center justify-center rounded-full px-4 text-sm font-semibold text-muted transition hover:bg-white/5 hover:text-ink', focusRing)} to="/analyses">
                 返回业务工作台
               </Link>
             </div>
@@ -149,7 +165,13 @@ export function NewAnalysisPage({
                   </label>
                 )
               })}
-              {!assets.length ? <div className="text-sm leading-6 text-muted">当前工作区还没有可选资料，请先到资料库上传。</div> : null}
+              {!assetsLoading && !assetsErrorMessage && !assets.length ? (
+                <FeedbackState
+                  title="还没有可选资料"
+                  description="可以先启动仅基于问题描述的分析；如需证据链更完整，请先到资料库上传 csv / tsv / json 或业务说明材料。"
+                  action={<Link className={cn('inline-flex min-h-11 items-center rounded-full text-sm font-semibold text-primary hover:text-primary-hover', focusRing)} to="/assets">前往资料库</Link>}
+                />
+              ) : null}
             </div>
           </div>
         </form>

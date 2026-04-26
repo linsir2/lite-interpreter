@@ -217,6 +217,112 @@ def test_execution_data_coerces_typed_dynamic_request():
     assert execution.dynamic.request.sandbox_backend == "docker"
 
 
+def test_execution_data_coerces_strategy_and_artifact_contract_fields():
+    execution = ExecutionData(
+        task_id="task-strategy-typed",
+        tenant_id="tenant-strategy-typed",
+        static={
+            "execution_strategy": {
+                "analysis_mode": "hybrid_analysis",
+                "research_mode": "single_pass",
+                "strategy_family": "hybrid_reconciliation",
+                "generator_id": "hybrid_reconciliation_generator",
+                "evidence_plan": {
+                    "research_mode": "single_pass",
+                    "search_queries": ["行业平均增速"],
+                    "allowed_domains": ["duckduckgo.com"],
+                    "allowed_capabilities": ["web_search"],
+                },
+                "artifact_plan": {
+                    "strategy_family": "hybrid_reconciliation",
+                    "required_artifacts": [
+                        {
+                            "artifact_key": "analysis_report",
+                            "file_name": "analysis_report.md",
+                            "category": "report",
+                            "artifact_type": "report",
+                            "format": "md",
+                        }
+                    ],
+                },
+                    "verification_plan": {
+                        "strategy_family": "hybrid_reconciliation",
+                        "required_artifact_keys": ["analysis_report"],
+                    },
+                    "program_spec": {
+                        "spec_id": "hybrid:v1",
+                        "strategy_family": "hybrid_reconciliation",
+                        "analysis_mode": "hybrid_analysis",
+                        "research_mode": "single_pass",
+                        "steps": [{"step_id": "load:1", "kind": "load_evidence"}],
+                        "artifact_emits": [
+                            {
+                                "artifact_key": "analysis_report",
+                                "file_name": "analysis_report.md",
+                                "emit_kind": "analysis_report",
+                                "category": "report",
+                            }
+                        ],
+                    },
+                    "legacy_compatibility": {"analysis_plan": "legacy plan"},
+                },
+                "static_evidence_bundle": {
+                    "request": {"query": "行业平均增速", "research_mode": "single_pass"},
+                    "records": [{"title": "公开报告", "url": "https://example.com", "domain": "example.com"}],
+                },
+                "repair_plan": {
+                    "reason": "missing required artifact",
+                    "attempt_index": 1,
+                    "action": "fallback_to_legacy",
+                },
+                "debug_attempts": [
+                    {
+                        "attempt_index": 1,
+                        "reason": "missing required artifact",
+                        "repair_plan": {
+                            "reason": "missing required artifact",
+                            "attempt_index": 1,
+                            "action": "fallback_to_legacy",
+                        },
+                    }
+                ],
+                "generator_manifest": {
+                    "generator_id": "hybrid_reconciliation_generator",
+                    "strategy_family": "hybrid_reconciliation",
+                "expected_artifact_keys": ["analysis_report"],
+            },
+            "artifact_verification": {
+                "strategy_family": "hybrid_reconciliation",
+                "passed": True,
+                "verified_artifact_keys": ["analysis_report"],
+            },
+        },
+        dynamic={
+            "resume_overlay": {
+                "continuation": "resume_static",
+                "next_static_steps": ["analyst"],
+                "evidence_refs": ["chunk-1"],
+            }
+        },
+    )
+    assert execution.static.execution_strategy is not None
+    assert execution.static.execution_strategy.strategy_family == "hybrid_reconciliation"
+    assert execution.static.execution_strategy.research_mode == "single_pass"
+    assert execution.static.execution_strategy.evidence_plan.search_queries == ["行业平均增速"]
+    assert execution.static.execution_strategy.program_spec is not None
+    assert execution.static.execution_strategy.artifact_plan.required_artifacts[0].file_name == "analysis_report.md"
+    assert execution.static.static_evidence_bundle is not None
+    assert execution.static.static_evidence_bundle.records[0].title == "公开报告"
+    assert execution.static.repair_plan is not None
+    assert execution.static.debug_attempts[0].repair_plan is not None
+    assert execution.static.generator_manifest is not None
+    assert execution.static.generator_manifest.expected_artifact_keys == ["analysis_report"]
+    assert execution.static.artifact_verification is not None
+    assert execution.static.artifact_verification.passed is True
+    assert execution.dynamic.resume_overlay is not None
+    assert execution.dynamic.resume_overlay.next_static_steps == ["analyst"]
+
+
 def test_knowledge_list_workspace_states_prefers_newer_persisted_state_over_stale_memory():
     tenant_id = "tenant_projection_refresh"
     task_id = "task_projection_refresh"

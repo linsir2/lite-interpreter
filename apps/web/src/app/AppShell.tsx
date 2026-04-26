@@ -1,7 +1,7 @@
 import { BarChart3, ChevronDown, FileStack, FlaskConical, History, Home, LayoutDashboard, Search, Settings2, Sparkles } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
-import { Button, Select, StatusPill } from '@/components/ui'
+import { Button, Select, StatusPill, focusRing } from '@/components/ui'
 import type { AppSession } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -32,14 +32,21 @@ export function AppShell({
 }) {
   const location = useLocation()
   const currentNav = NAV_ITEMS.find((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)) ?? NAV_ITEMS[0]
+  const visibleNavItems = NAV_ITEMS.filter((item) => item.to !== '/audit' || session.uiCapabilities.canViewAudit)
   const workspaceLabel = session.grants.find((grant) => grant.workspaceId === workspaceId)?.label ?? session.grants[0]?.label ?? '未选择工作区'
 
   return (
     <div className="min-h-screen overflow-x-hidden bg-canvas text-ink">
+      <a
+        className="sr-only fixed left-4 top-4 z-50 rounded-full bg-primary px-4 py-2 text-sm font-semibold text-[#0a0d10] focus:not-sr-only"
+        href="#main-content"
+      >
+        跳到主内容
+      </a>
       <div className="grid min-h-screen min-w-0 lg:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="flex min-w-0 flex-col border-b border-white/10 bg-[rgba(5,6,8,0.96)] backdrop-blur-xl lg:h-screen lg:border-b-0 lg:border-r">
           <div className="border-b border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:py-6">
-            <Link to="/analyses" className="flex items-center gap-3 sm:gap-4">
+            <Link to="/analyses" className={cn('flex items-center gap-3 rounded-2xl sm:gap-4', focusRing)}>
               <div className="flex h-10 w-10 items-center justify-center rounded-[18px] sm:h-12 sm:w-12 sm:rounded-2xl border border-primary/25 bg-primary/10 text-primary shadow-[0_0_0_1px_rgba(255,255,255,0.04)]">
                 <BarChart3 className="h-5 w-5" />
               </div>
@@ -71,10 +78,10 @@ export function AppShell({
             </div>
           </div>
 
-          <div className="px-3 py-2 sm:px-4 sm:py-3 lg:flex-1 lg:overflow-y-auto lg:px-4 lg:py-5">
+          <div className="hidden px-3 py-2 sm:px-4 sm:py-3 lg:flex lg:flex-1 lg:flex-col lg:overflow-y-auto lg:px-4 lg:py-5">
             <div className="hidden px-2 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-muted lg:block">主导航</div>
             <nav className="mt-0 flex max-w-full gap-1.5 overflow-x-auto pb-1 lg:mt-3 lg:block lg:space-y-2 lg:overflow-visible lg:pb-0">
-              {NAV_ITEMS.filter((item) => item.to !== '/audit' || session.uiCapabilities.canViewAudit).map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon
                 return (
                   <NavLink
@@ -83,6 +90,7 @@ export function AppShell({
                     className={({ isActive }) =>
                       cn(
                         'group flex min-h-11 shrink-0 items-center gap-2.5 rounded-2xl border px-3 py-2 text-sm font-medium transition sm:gap-3 sm:px-4 sm:py-3',
+                        focusRing,
                         isActive
                           ? 'border-primary/25 bg-primary/10 text-ink shadow-[0_0_0_1px_rgba(215,176,110,0.08)]'
                           : 'border-transparent text-muted hover:border-white/10 hover:bg-white/5 hover:text-ink',
@@ -138,7 +146,7 @@ export function AppShell({
 
               <Link
                 to="/analyses/new"
-                className="flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-muted transition hover:border-primary/30 hover:bg-white/10"
+                className={cn('flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-muted transition hover:border-primary/30 hover:bg-white/10', focusRing)}
               >
                 <Search className="h-4 w-4 shrink-0 text-primary" />
                 <span className="truncate">输入一个可复核的财务分析问题…</span>
@@ -148,7 +156,8 @@ export function AppShell({
               <div className="inline-flex items-center rounded-full border border-white/10 bg-white/5 p-1 shadow-subtle">
                 <button
                   className={cn(
-                    'inline-flex min-h-11 items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition',
+                    'inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition',
+                    focusRing,
                     viewMode === 'business' ? 'bg-primary text-[#0a0d10]' : 'text-muted hover:text-ink',
                   )}
                   aria-label="切换到业务视图"
@@ -162,7 +171,8 @@ export function AppShell({
                 </button>
                 <button
                   className={cn(
-                    'inline-flex min-h-11 items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition',
+                    'inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition',
+                    focusRing,
                     viewMode === 'runtime' ? 'bg-primary text-[#0a0d10]' : 'text-muted hover:text-ink',
                   )}
                   aria-label="切换到运行时视图"
@@ -180,13 +190,35 @@ export function AppShell({
             </div>
           </header>
 
-          <main className="flex-1 px-4 py-4 lg:px-8 lg:py-6">
+          <main id="main-content" className="flex-1 px-4 pb-36 pt-4 md:pb-4 lg:px-8 lg:py-6" tabIndex={-1}>
             <div className="mx-auto max-w-[1720px]">
               <Outlet />
             </div>
           </main>
         </div>
       </div>
+      <nav className="fixed inset-x-3 bottom-3 z-30 rounded-[26px] border border-white/10 bg-[rgba(5,6,8,0.92)] p-2 shadow-panel backdrop-blur-xl md:hidden" aria-label="移动端主导航">
+        <div className="grid grid-cols-5 gap-1">
+          {visibleNavItems.map((item) => {
+            const Icon = item.icon
+            const isActive = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={cn(
+                  'flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl px-2 text-[11px] font-semibold transition',
+                  focusRing,
+                  isActive ? 'bg-primary text-[#0a0d10]' : 'text-muted hover:bg-white/5 hover:text-ink',
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                <span className="max-w-full truncate">{item.label.replace('治理与审计', '审计').replace('连接与会话', '会话')}</span>
+              </NavLink>
+            )
+          })}
+        </div>
+      </nav>
     </div>
   )
 }

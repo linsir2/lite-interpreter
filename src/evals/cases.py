@@ -68,10 +68,10 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
     ),
     EvalCase(
         case_id="route_dataset_dynamic_signal",
-        description="Even with a dataset, explicit external research signals should still go dynamic.",
+        description="With a dataset, single-pass public fact checks should stay on the static path.",
         query="基于这份销售数据自己找行业公开数据做benchmark并验证趋势结论",
-        expected_analysis_mode="dynamic_research_analysis",
-        expected_route="dynamic_swarm",
+        expected_analysis_mode="dataset_analysis",
+        expected_route="analyst",
         structured_datasets=(
             {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "region,amount,biz_date"},
         ),
