@@ -202,6 +202,12 @@ class DynamicSupervisor:
                     else "finish"
                 ),
                 "next_static_steps": list((execution_intent.metadata or {}).get("next_static_steps") or []),
+                "skip_static_steps": list((execution_intent.metadata or {}).get("skip_static_steps") or []),
+                "evidence_refs": list((execution_intent.metadata or {}).get("evidence_refs") or []),
+                "suggested_static_actions": list((execution_intent.metadata or {}).get("suggested_static_actions") or []),
+                "recommended_static_action": str((execution_intent.metadata or {}).get("recommended_static_action") or ""),
+                "open_questions": list((execution_intent.metadata or {}).get("open_questions") or []),
+                "strategy_family": (execution_intent.metadata or {}).get("strategy_family"),
                 "routing_mode": task_envelope.metadata.get("routing_mode", "dynamic"),
                 "complexity_score": execution_intent.complexity_score,
                 "dynamic_reason": execution_intent_dynamic_reason(execution_intent),

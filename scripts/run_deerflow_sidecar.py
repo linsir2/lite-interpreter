@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -28,10 +29,35 @@ def build_client_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
         "plan_mode": payload.get("plan_mode", True),
     }
     if payload.get("config_path"):
-        kwargs["config_path"] = payload["config_path"]
+        candidate = Path(str(payload["config_path"])).expanduser()
+        if not candidate.is_absolute():
+            candidate = (_project_root / candidate).resolve()
+        kwargs["config_path"] = str(candidate)
     if payload.get("model_name"):
         kwargs["model_name"] = payload["model_name"]
     return kwargs
+
+
+def resolve_client_config_dir(payload: dict[str, Any]) -> Path:
+    raw_value = str(payload.get("config_path") or "").strip()
+    if raw_value:
+        candidate = Path(raw_value).expanduser().resolve()
+        if candidate.is_file():
+            return candidate.parent
+        if candidate.is_dir():
+            return candidate
+    return (_project_root / "config").resolve()
+
+
+@contextmanager
+def deerflow_config_workdir(payload: dict[str, Any]):
+    previous_cwd = Path.cwd()
+    target_dir = resolve_client_config_dir(payload)
+    os.chdir(target_dir)
+    try:
+        yield
+    finally:
+        os.chdir(previous_cwd)
 
 
 async def health(_: Request):
@@ -48,8 +74,9 @@ async def chat(request: Request):
     from deerflow.client import DeerFlowClient
 
     payload = await request.json()
-    client = DeerFlowClient(**build_client_kwargs(payload))
-    response = client.chat(payload["message"], thread_id=payload.get("thread_id"))
+    with deerflow_config_workdir(payload):
+        client = DeerFlowClient(**build_client_kwargs(payload))
+        response = client.chat(payload["message"], thread_id=payload.get("thread_id"))
     return JSONResponse({"response": response})
 
 
@@ -57,18 +84,19 @@ async def stream(request: Request):
     from deerflow.client import DeerFlowClient
 
     payload = await request.json()
-    client = DeerFlowClient(**build_client_kwargs(payload))
 
     def event_iter():
-        for event in client.stream(
-            payload["message"],
-            thread_id=payload.get("thread_id"),
-            subagent_enabled=payload.get("subagent_enabled", True),
-            plan_mode=payload.get("plan_mode", True),
-            thinking_enabled=payload.get("thinking_enabled", True),
-            recursion_limit=payload.get("recursion_limit", 32),
-        ):
-            yield json.dumps({"type": event.type, "data": event.data}, ensure_ascii=False) + "\n"
+        with deerflow_config_workdir(payload):
+            client = DeerFlowClient(**build_client_kwargs(payload))
+            for event in client.stream(
+                payload["message"],
+                thread_id=payload.get("thread_id"),
+                subagent_enabled=payload.get("subagent_enabled", True),
+                plan_mode=payload.get("plan_mode", True),
+                thinking_enabled=payload.get("thinking_enabled", True),
+                recursion_limit=payload.get("recursion_limit", 32),
+            ):
+                yield json.dumps({"type": event.type, "data": event.data}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(event_iter(), media_type="application/x-ndjson")
 

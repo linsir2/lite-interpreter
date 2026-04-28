@@ -20,6 +20,7 @@ from config.settings import (
 )
 
 from src.common.contracts import TraceEvent
+from src.common.control_plane import ensure_dynamic_resume_overlay
 from src.common.utils import generate_uuid, get_utc_now
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
 
@@ -43,12 +44,15 @@ class DeerflowTaskResult:
     summary: str
     continuation: Literal["finish", "resume_static"] = "finish"
     next_static_steps: list[str] = field(default_factory=list)
+    skip_static_steps: list[str] = field(default_factory=list)
     trace_refs: list[str] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     research_findings: list[str] = field(default_factory=list)
     evidence_refs: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     suggested_static_actions: list[str] = field(default_factory=list)
+    recommended_static_action: str = ""
+    strategy_family: str | None = None
     recommended_skill: dict[str, Any] = field(default_factory=dict)
     trace: list[dict[str, Any]] = field(default_factory=list)
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
@@ -56,10 +60,23 @@ class DeerflowTaskResult:
     def to_state_patch(self) -> dict[str, Any]:
         from src.dynamic_engine.trace_normalizer import TraceNormalizer
 
+        resume_overlay = ensure_dynamic_resume_overlay(
+            {
+                "continuation": self.continuation,
+                "next_static_steps": self.next_static_steps,
+                "skip_static_steps": self.skip_static_steps,
+                "evidence_refs": self.evidence_refs,
+                "suggested_static_actions": self.suggested_static_actions,
+                "recommended_static_action": self.recommended_static_action,
+                "open_questions": self.open_questions,
+                "strategy_family": self.strategy_family,
+            }
+        )
         return {
             "dynamic_status": self.status,
             "dynamic_summary": self.summary,
             "dynamic_continuation": self.continuation,
+            "dynamic_resume_overlay": resume_overlay.model_dump(mode="json"),
             "dynamic_next_static_steps": list(self.next_static_steps),
             "dynamic_runtime_metadata": dict(self.runtime_metadata),
             "dynamic_trace": [
@@ -202,6 +219,23 @@ class DeerflowBridge:
         return "finish", []
 
     @staticmethod
+    def _resume_overlay_payload(request: DeerflowTaskRequest) -> dict[str, Any]:
+        continuation, next_static_steps = DeerflowBridge._continuation_payload(request)
+        metadata = dict(request.metadata or {})
+        return ensure_dynamic_resume_overlay(
+            {
+                "continuation": continuation,
+                "next_static_steps": next_static_steps,
+                "skip_static_steps": metadata.get("skip_static_steps") or [],
+                "evidence_refs": metadata.get("evidence_refs") or [],
+                "suggested_static_actions": metadata.get("suggested_static_actions") or [],
+                "recommended_static_action": metadata.get("recommended_static_action") or "",
+                "open_questions": metadata.get("open_questions") or [],
+                "strategy_family": metadata.get("strategy_family"),
+            }
+        ).model_dump(mode="json")
+
+    @staticmethod
     def _extract_artifacts(trace: list[dict[str, Any]]) -> list[str]:
         artifacts: list[str] = []
         for item in trace:
@@ -309,20 +343,32 @@ class DeerflowBridge:
 
         artifacts = self._extract_artifacts(trace)
         summary = "\n".join(summary_chunks).strip() or "DeerFlow sidecar completed without emitting AI text."
-        continuation, next_static_steps = self._continuation_payload(request)
+        resume_overlay = self._resume_overlay_payload(request)
+        continuation = resume_overlay["continuation"]
+        next_static_steps = list(resume_overlay["next_static_steps"])
+        suggested_static_actions = (
+            list(resume_overlay["suggested_static_actions"])
+            or (["将动态研究结论转为静态分析计划并生成可审计代码"] if continuation == "resume_static" else [])
+        )
+        evidence_refs = [
+            *list(resume_overlay["evidence_refs"]),
+            f"deerflow-sidecar:{request.task_id}",
+            *artifacts,
+        ]
         return DeerflowTaskResult(
             status="completed",
             summary=summary,
             continuation=continuation,
             next_static_steps=next_static_steps,
+            skip_static_steps=list(resume_overlay["skip_static_steps"]),
             trace_refs=[f"deerflow-sidecar:{request.task_id}"],
             artifacts=artifacts,
             research_findings=[summary] if summary else [],
-            evidence_refs=[f"deerflow-sidecar:{request.task_id}", *artifacts],
-            open_questions=[],
-            suggested_static_actions=(
-                ["将动态研究结论转为静态分析计划并生成可审计代码"] if continuation == "resume_static" else []
-            ),
+            evidence_refs=list(dict.fromkeys(evidence_refs)),
+            open_questions=list(resume_overlay["open_questions"]),
+            suggested_static_actions=suggested_static_actions,
+            recommended_static_action=str(resume_overlay.get("recommended_static_action") or ""),
+            strategy_family=resume_overlay.get("strategy_family"),
             recommended_skill={
                 "source": "dynamic_swarm",
                 "confidence": "medium",

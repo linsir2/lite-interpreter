@@ -1,6 +1,6 @@
 import { QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Navigate, Route, Routes, useParams } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { AppShell } from '@/app/AppShell'
 import { SessionGate } from '@/app/SessionGate'
@@ -27,12 +27,61 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '请求失败，请稍后重试。'
 }
 
+function sessionGateErrorMessage(session: AppSession | undefined, sessionError: unknown, accessToken: string) {
+  if (!accessToken) {
+    return null
+  }
+  if (sessionError) {
+    return errorMessage(sessionError)
+  }
+  if (session?.authenticated === false) {
+    if (session.grants.length) {
+      return 'API 已返回工作区，但会话仍被标记为未连接。请重启后端，并确认它已加载最新的本地会话修复。'
+    }
+    return 'API 已响应，但没有建立可用会话。若你在本地联调，请检查 API_AUTH_REQUIRED、API_AUTH_TOKENS_JSON，或重启后端让本地默认 scope 生效。'
+  }
+  return null
+}
+
 function loadStoredValue(key: string, fallback: string) {
   return window.localStorage.getItem(key) ?? fallback
 }
 
 function loadStoredViewMode(): ViewMode {
   return window.localStorage.getItem('lite-interpreter:viewMode') === 'runtime' ? 'runtime' : 'business'
+}
+
+function routeViewMode(pathname: string, fallback: ViewMode): ViewMode {
+  if (pathname.startsWith('/runtime')) {
+    return 'runtime'
+  }
+  if (pathname.startsWith('/analyses')) {
+    return 'business'
+  }
+  return fallback
+}
+
+function resolveWorkbenchPath(targetViewMode: ViewMode, pathname: string): string {
+  const runtimeDetailPrefix = '/runtime/analyses/'
+  const businessDetailPrefix = '/analyses/'
+
+  if (targetViewMode === 'runtime') {
+    if (pathname.startsWith(runtimeDetailPrefix) || pathname === '/runtime') {
+      return pathname
+    }
+    if (pathname.startsWith(businessDetailPrefix) && pathname !== '/analyses/new') {
+      return `/runtime/analyses/${pathname.slice(businessDetailPrefix.length)}`
+    }
+    return '/runtime'
+  }
+
+  if (pathname.startsWith(businessDetailPrefix) || pathname === '/analyses') {
+    return pathname
+  }
+  if (pathname.startsWith(runtimeDetailPrefix)) {
+    return `/analyses/${pathname.slice(runtimeDetailPrefix.length)}`
+  }
+  return '/analyses'
 }
 
 function isTerminalAnalysisStatus(status: string | null | undefined) {
@@ -51,10 +100,12 @@ function resolveWorkspaceId(session: AppSession | undefined, storedWorkspaceId: 
 }
 
 function AppInner() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [apiBaseUrl, setApiBaseUrl] = useState(() => loadStoredValue('lite-interpreter:apiBaseUrl', DEFAULT_API_BASE_URL))
   const [accessToken, setAccessToken] = useState(() => loadStoredValue('lite-interpreter:accessToken', ''))
   const [workspaceId, setWorkspaceId] = useState(() => window.localStorage.getItem('lite-interpreter:workspaceId') ?? '')
-  const [viewMode, setViewMode] = useState<ViewMode>(() => loadStoredViewMode())
+  const [preferredViewMode, setPreferredViewMode] = useState<ViewMode>(() => loadStoredViewMode())
   const [auditPage, setAuditPage] = useState(1)
 
   const config = useMemo<ApiClientConfig>(
@@ -71,11 +122,13 @@ function AppInner() {
   })
 
   const session = sessionQuery.data as AppSession | undefined
+  const sessionGateMessage = sessionGateErrorMessage(session, sessionQuery.error, accessToken)
   const effectiveWorkspaceId = useMemo(() => resolveWorkspaceId(session, workspaceId), [session, workspaceId])
   const effectiveConfig = useMemo<ApiClientConfig>(
     () => ({ ...config, workspaceId: effectiveWorkspaceId || undefined }),
     [config, effectiveWorkspaceId],
   )
+  const shellViewMode = routeViewMode(location.pathname, preferredViewMode)
 
   useEffect(() => {
     if (effectiveWorkspaceId && effectiveWorkspaceId !== workspaceId) {
@@ -141,7 +194,8 @@ function AppInner() {
 
   function persistViewMode(nextViewMode: ViewMode) {
     window.localStorage.setItem('lite-interpreter:viewMode', nextViewMode)
-    setViewMode(nextViewMode)
+    setPreferredViewMode(nextViewMode)
+    navigate(resolveWorkbenchPath(nextViewMode, location.pathname))
   }
 
   if (!accessToken || sessionQuery.isError || session?.authenticated === false) {
@@ -149,6 +203,7 @@ function AppInner() {
       <SessionGate
         apiBaseUrl={apiBaseUrl}
         accessToken={accessToken}
+        errorMessage={sessionGateMessage}
         onSubmit={({ apiBaseUrl: nextApiBaseUrl, accessToken: nextAccessToken }) => {
           persistConnection(nextApiBaseUrl, nextAccessToken)
           client.invalidateQueries({ queryKey: ['app-session'] })
@@ -174,7 +229,7 @@ function AppInner() {
               setWorkspaceId(nextWorkspaceId)
               setAuditPage(1)
             }}
-            viewMode={viewMode}
+            viewMode={shellViewMode}
             onViewModeChange={persistViewMode}
             onSignOut={() => {
               window.localStorage.removeItem('lite-interpreter:accessToken')
@@ -186,7 +241,7 @@ function AppInner() {
           />
         }
       >
-        <Route index element={<Navigate replace to="/analyses" />} />
+        <Route index element={<Navigate replace to={preferredViewMode === 'runtime' ? '/runtime' : '/analyses'} />} />
         <Route
           path="analyses"
           element={
@@ -199,7 +254,9 @@ function AppInner() {
                 void analysesQuery.refetch()
                 void assetsQuery.refetch()
               }}
-              viewMode={viewMode}
+              viewMode="business"
+              detailBasePath="/analyses"
+              newAnalysisPath="/analyses/new"
               onSubmit={(input) => createAnalysis.mutateAsync(input)}
             />
           }
@@ -220,7 +277,30 @@ function AppInner() {
         />
         <Route
           path="analyses/:analysisId"
-          element={<AnalysisDetailRoute config={effectiveConfig} viewMode={viewMode} />}
+          element={<AnalysisDetailRoute config={effectiveConfig} viewMode="business" />}
+        />
+        <Route
+          path="runtime"
+          element={
+            <AnalysesPage
+              data={analysesQuery.data}
+              assets={assetsQuery.data?.items ?? []}
+              isLoading={analysesQuery.isLoading || assetsQuery.isLoading}
+              errorMessage={analysesQuery.isError ? errorMessage(analysesQuery.error) : assetsQuery.isError ? errorMessage(assetsQuery.error) : null}
+              onRetry={() => {
+                void analysesQuery.refetch()
+                void assetsQuery.refetch()
+              }}
+              viewMode="runtime"
+              detailBasePath="/runtime/analyses"
+              newAnalysisPath="/analyses/new"
+              onSubmit={(input) => createAnalysis.mutateAsync(input)}
+            />
+          }
+        />
+        <Route
+          path="runtime/analyses/:analysisId"
+          element={<AnalysisDetailRoute config={effectiveConfig} viewMode="runtime" />}
         />
         <Route
           path="assets"

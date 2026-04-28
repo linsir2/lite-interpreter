@@ -486,6 +486,11 @@ def build_static_generation_bundle(
     repair_plan: Mapping[str, Any] | None = None,
 ) -> tuple[str, ExecutionStrategy, GeneratorManifest]:
     existing_strategy_payload = dict(payload.get("execution_strategy") or {})
+    resume_overlay = (
+        ensure_dynamic_resume_overlay(dynamic_resume_overlay)
+        if dynamic_resume_overlay is not None
+        else None
+    )
     analysis_mode = str(payload.get("analysis_mode") or existing_strategy_payload.get("analysis_mode") or "").strip()
     research_mode = str(payload.get("research_mode") or existing_strategy_payload.get("research_mode") or "none").strip() or "none"
     structured_count = len(list(payload.get("structured_dataset_summaries") or []))
@@ -509,20 +514,17 @@ def build_static_generation_bundle(
         has_business_signals=has_business_signals,
     )
     existing_strategy_family = str(existing_strategy_payload.get("strategy_family") or "").strip()
-    strategy_family = (
-        existing_strategy_family
-        if existing_strategy_family and existing_strategy_family != "legacy_dataset_aware_generator"
-        else resolved_strategy_family
-    )
+    overlay_strategy_family = str(getattr(resume_overlay, "strategy_family", "") or "").strip()
+    if overlay_strategy_family:
+        strategy_family = overlay_strategy_family
+    elif existing_strategy_family and existing_strategy_family != "legacy_dataset_aware_generator":
+        strategy_family = existing_strategy_family
+    else:
+        strategy_family = resolved_strategy_family
     if repair_plan and str(repair_plan.get("action") or "") == "fallback_to_legacy":
         strategy_family = "legacy_dataset_aware_generator"
     artifact_plan = artifact_plan_for_family(strategy_family)
     verification_plan = verification_plan_for_family(strategy_family)
-    resume_overlay = (
-        ensure_dynamic_resume_overlay(dynamic_resume_overlay)
-        if dynamic_resume_overlay is not None
-        else None
-    )
     strategy_seed = dict(existing_strategy_payload)
     strategy_seed["analysis_mode"] = analysis_mode
     strategy_seed["research_mode"] = research_mode

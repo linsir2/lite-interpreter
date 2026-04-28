@@ -88,7 +88,16 @@ class DeerflowBridgeTests(unittest.TestCase):
             tenant_id="tenant-3",
             query="analyze something",
             system_context={"constraints": {}},
-            metadata={"continuation": "resume_static", "next_static_steps": ["analyst"]},
+            metadata={
+                "continuation": "resume_static",
+                "next_static_steps": ["analyst"],
+                "skip_static_steps": ["analyst"],
+                "evidence_refs": ["dynamic-evidence"],
+                "open_questions": ["which policy applies?"],
+                "suggested_static_actions": ["use rule audit"],
+                "recommended_static_action": "生成规则审计",
+                "strategy_family": "document_rule_audit",
+            },
         )
         sidecar_lines = [
             '{"type":"messages-tuple","data":{"type":"ai","content":"sidecar answer"}}',
@@ -103,10 +112,19 @@ class DeerflowBridgeTests(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.continuation, "resume_static")
         self.assertEqual(result.next_static_steps, ["analyst"])
+        self.assertEqual(result.skip_static_steps, ["analyst"])
+        self.assertIn("dynamic-evidence", result.evidence_refs)
+        self.assertIn("which policy applies?", result.open_questions)
+        self.assertEqual(result.suggested_static_actions, ["use rule audit"])
+        self.assertEqual(result.recommended_static_action, "生成规则审计")
+        self.assertEqual(result.strategy_family, "document_rule_audit")
         self.assertIn("sidecar answer", result.summary)
         self.assertIn("/tmp/sidecar.md", result.artifacts)
         self.assertEqual(result.trace_refs, ["deerflow-sidecar:task-3"])
         self.assertEqual(result.runtime_metadata["effective_runtime_mode"], "sidecar")
+        state_patch = result.to_state_patch()
+        self.assertEqual(state_patch["dynamic_resume_overlay"]["evidence_refs"][0], "dynamic-evidence")
+        self.assertEqual(state_patch["dynamic_resume_overlay"]["strategy_family"], "document_rule_audit")
 
     def test_run_uses_sidecar_over_real_local_http_transport(self):
         sidecar_lines = [

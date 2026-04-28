@@ -1,15 +1,17 @@
 import { Database, KeyRound } from 'lucide-react'
 import { useState } from 'react'
 
-import { Button, FieldLabel, PageCard, TextInput } from '@/components/ui'
+import { Button, FeedbackState, FieldLabel, PageCard, TextInput } from '@/components/ui'
 
 export function SessionGate({
   apiBaseUrl,
   accessToken,
+  errorMessage,
   onSubmit,
 }: {
   apiBaseUrl: string
   accessToken: string
+  errorMessage?: string | null
   onSubmit: (input: { apiBaseUrl: string; accessToken: string }) => void
 }) {
   const [nextApiBaseUrl, setNextApiBaseUrl] = useState(apiBaseUrl)
@@ -30,6 +32,15 @@ export function SessionGate({
               <div className="mt-8 rounded-[28px] border border-primary/20 bg-primary/10 px-5 py-4 text-sm leading-6 text-[#f1dfbd]">
                 产品面只读取稳定的 `/api/app/*` 合同，不会直接暴露内部 DAG 合同。
               </div>
+              {errorMessage ? (
+                <div className="mt-6">
+                  <FeedbackState
+                    title="进入失败"
+                    description={errorMessage}
+                    tone="error"
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
           <form

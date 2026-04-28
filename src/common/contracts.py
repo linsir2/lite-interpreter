@@ -360,9 +360,12 @@ class DynamicResumeOverlay(BaseModel):
 
     continuation: Literal["finish", "resume_static"] = "finish"
     next_static_steps: list[str] = Field(default_factory=list)
+    skip_static_steps: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     suggested_static_actions: list[str] = Field(default_factory=list)
+    recommended_static_action: str = ""
     open_questions: list[str] = Field(default_factory=list)
+    strategy_family: StrategyFamily | None = None
 
 
 class ArtifactVerificationResult(BaseModel):

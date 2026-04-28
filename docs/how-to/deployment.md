@@ -74,6 +74,9 @@ cp .env.example .env
 - `API_ALLOW_ORIGINS=http://127.0.0.1:5173,http://localhost:5173`
 - `API_AUTH_REQUIRED=true`
 - `API_AUTH_TOKENS_JSON=...`
+- 如果你临时设成 `API_AUTH_REQUIRED=false` 做本地联调，也要确认默认 scope：
+  - `API_LOCAL_TENANT_ID=local-tenant`
+  - `API_LOCAL_WORKSPACE_ID=local-workspace`
 
 ### 动态运行时
 

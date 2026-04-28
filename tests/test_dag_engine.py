@@ -20,6 +20,7 @@ from src.dag_engine.nodes.static_codegen_payload import (
     build_static_codegen_payload,
     build_static_generation_directives,
 )
+from src.dag_engine.nodes.static_generation_registry import build_static_generation_bundle
 from src.dag_engine.nodes.static_evidence_node import static_evidence_node
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
@@ -421,6 +422,180 @@ def test_execute_task_flow_reenters_static_path_after_dynamic_success_when_requi
     assert result["dynamic_status"] == "completed"
 
 
+def test_dynamic_resume_overlay_can_skip_analyst_and_resume_at_coder():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-skip-analyst",
+            "task_id": "task-dynamic-skip-analyst",
+            "workspace_id": "ws-dynamic-skip-analyst",
+            "input_query": "research then code",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {"intent": "dynamic_then_static_flow", "destinations": ["dynamic_swarm"]},
+            },
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_resume_overlay": {
+                    "continuation": "resume_static",
+                    "next_static_steps": ["analyst", "coder"],
+                    "skip_static_steps": ["analyst"],
+                    "strategy_family": "document_rule_audit",
+                },
+                "dynamic_summary": "researched",
+                "dynamic_research_findings": ["f1"],
+                "dynamic_evidence_refs": ["trace-1"],
+            },
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: called.append("analyst") or {},
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == ["coder"]
+
+
+def test_dynamic_resume_overlay_filters_invalid_resume_targets():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-invalid-resume-target",
+            "task_id": "task-invalid-resume-target",
+            "workspace_id": "ws-invalid-resume-target",
+            "input_query": "research then code",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {"intent": "dynamic_then_static_flow", "destinations": ["dynamic_swarm"]},
+            },
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_resume_overlay": {
+                    "continuation": "resume_static",
+                    "next_static_steps": ["data_inspector", "kag_retriever", "static_evidence", "coder"],
+                },
+                "dynamic_summary": "researched",
+            },
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: called.append("data_inspector") or {},
+            "kag_retriever": lambda state: called.append("kag_retriever") or {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: called.append("analyst") or {},
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "static_evidence": lambda state: called.append("static_evidence") or {},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == ["coder"]
+
+
+def test_dynamic_resume_does_not_follow_analyst_into_static_evidence():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-no-static-evidence",
+            "task_id": "task-dynamic-no-static-evidence",
+            "workspace_id": "ws-dynamic-no-static-evidence",
+            "input_query": "research then plan",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {"intent": "dynamic_then_static_flow", "destinations": ["dynamic_swarm"]},
+            },
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_resume_overlay": {
+                    "continuation": "resume_static",
+                    "next_static_steps": ["analyst"],
+                },
+                "dynamic_summary": "researched",
+            },
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: called.append("analyst") or {"next_actions": ["static_evidence"]},
+            "static_evidence": lambda state: called.append("static_evidence") or {"next_actions": ["coder"]},
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == ["analyst", "coder"]
+
+
+def test_dynamic_resume_overlay_wins_when_legacy_steps_conflict():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-overlay-legacy-conflict",
+            "task_id": "task-overlay-legacy-conflict",
+            "workspace_id": "ws-overlay-legacy-conflict",
+            "input_query": "research then code",
+        },
+        nodes={
+            "router": lambda state: {
+                "next_actions": ["dynamic_swarm"],
+                "execution_intent": {"intent": "dynamic_then_static_flow", "destinations": ["dynamic_swarm"]},
+            },
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_next_static_steps": ["analyst"],
+                "dynamic_resume_overlay": {
+                    "continuation": "resume_static",
+                    "next_static_steps": ["coder"],
+                    "recommended_static_action": "直接生成代码",
+                    "suggested_static_actions": ["不要覆盖 canonical action"],
+                },
+                "dynamic_summary": "researched",
+            },
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: called.append("analyst") or {},
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == ["coder"]
+    assert result["analysis_brief"]["recommended_next_step"] == "直接生成代码"
+
+
 def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(monkeypatch):
     tenant_id = "tenant-dynamic-real-merge"
     task_id = global_blackboard.create_task(tenant_id, "ws-dynamic-real-merge", "placeholder")
@@ -786,6 +961,44 @@ def test_execute_task_flow_waits_for_human_when_kag_ingestion_blocks():
 
     assert result["terminal_status"] == "waiting_for_human"
     assert result["failure_type"] == "knowledge_ingestion"
+
+
+def test_execute_task_flow_waits_for_human_for_input_gap_outputs():
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-input-gap",
+            "task_id": "task-input-gap",
+            "workspace_id": "ws-input-gap",
+            "input_query": "需要更多数据",
+        },
+        nodes={
+            "router": lambda state: {"next_actions": []},
+            "dynamic_swarm": lambda state: {},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {
+                "final_response": {
+                    "outputs": [
+                        {
+                            "name": "requested_inputs.json",
+                            "artifact_key": "requested_inputs_json",
+                        }
+                    ],
+                    "details": {"execution_strategy": {"strategy_family": "input_gap_report"}},
+                }
+            },
+            "data_inspector": lambda state: {},
+            "kag_retriever": lambda state: {},
+            "context_builder": lambda state: {},
+            "analyst": lambda state: {},
+            "coder": lambda state: {},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "waiting_for_human"
+    assert result["failure_type"] == "need_more_inputs"
 
 
 def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_denied():
@@ -1257,6 +1470,86 @@ def test_executor_node_requests_debugger_when_required_artifacts_are_missing(tmp
     assert persisted is not None
     assert persisted.static.artifact_verification is not None
     assert persisted.static.artifact_verification.passed is False
+
+
+def test_static_generation_bundle_honors_dynamic_overlay_strategy_family():
+    _code, strategy, manifest = build_static_generation_bundle(
+        {
+            "query": "分析销售数据",
+            "analysis_plan": "plan",
+            "analysis_mode": "dataset_analysis",
+            "research_mode": "none",
+            "analysis_brief": {},
+            "business_context": {},
+            "compiled_knowledge": {},
+            "structured_dataset_summaries": [{"file_name": "sales.csv"}],
+            "input_mounts": [{"kind": "structured_dataset", "container_path": "/app/inputs/sales.csv"}],
+        },
+        dynamic_resume_overlay={
+            "continuation": "resume_static",
+            "strategy_family": "document_rule_audit",
+        },
+    )
+
+    assert strategy.strategy_family == "document_rule_audit"
+    assert manifest.strategy_family == "document_rule_audit"
+
+
+def test_static_generation_bundle_falls_back_when_overlay_strategy_is_invalid():
+    _code, strategy, manifest = build_static_generation_bundle(
+        {
+            "query": "分析销售数据",
+            "analysis_plan": "plan",
+            "analysis_mode": "dataset_analysis",
+            "research_mode": "none",
+            "analysis_brief": {},
+            "business_context": {},
+            "compiled_knowledge": {},
+            "structured_dataset_summaries": [{"file_name": "sales.csv"}],
+            "input_mounts": [{"kind": "structured_dataset", "container_path": "/app/inputs/sales.csv"}],
+        },
+        dynamic_resume_overlay={
+            "continuation": "resume_static",
+            "strategy_family": "not_a_strategy",
+        },
+    )
+
+    assert strategy.strategy_family == "dataset_profile"
+    assert manifest.strategy_family == "dataset_profile"
+
+
+def test_static_generation_bundle_reads_strategy_from_metadata_fallback():
+    tenant_id = "tenant-metadata-overlay"
+    task_id = global_blackboard.create_task(tenant_id, "ws-metadata-overlay", "placeholder")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            workspace_id="ws-metadata-overlay",
+        ),
+    )
+
+    result = coder_node(
+        {
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws-metadata-overlay",
+            "input_query": "分析销售数据",
+            "dynamic_continuation": "resume_static",
+            "execution_intent": {
+                "metadata": {
+                    "next_static_steps": ["coder"],
+                    "strategy_family": "document_rule_audit",
+                    "recommended_static_action": "生成规则审计",
+                }
+            },
+        }
+    )
+
+    assert result["execution_strategy"]["strategy_family"] == "document_rule_audit"
+    assert result["execution_strategy"]["resume_overlay"]["recommended_static_action"] == "生成规则审计"
 
 
 def test_build_dataset_aware_code_executes_with_compiled_signal_globals():

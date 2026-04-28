@@ -98,6 +98,38 @@ def test_get_app_session_returns_current_workspace_and_capabilities():
     assert len(body["grants"]) == 2
 
 
+def test_list_app_analyses_uses_local_scope_when_auth_disabled(monkeypatch):
+    tenant_id = "tenant-local-analyses"
+    workspace_id = "ws-local-analyses"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "本地模式分析")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={"final_response": {"headline": "本地分析", "answer": "已完成", "outputs": []}},
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    monkeypatch.setattr("src.api.request_scope.auth_enabled", lambda: False)
+    monkeypatch.setattr("src.api.request_scope.API_LOCAL_TENANT_ID", tenant_id)
+    monkeypatch.setattr("src.api.request_scope.API_LOCAL_WORKSPACE_ID", workspace_id)
+
+    request = _make_request(
+        method="GET",
+        path="/api/app/analyses",
+    )
+    response = asyncio.run(list_app_analyses(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert body["currentWorkspaceId"] == workspace_id
+    assert any(item["analysisId"] == task_id for item in body["items"])
+
+
 def test_list_app_analyses_returns_paginated_items():
     tenant_id = "tenant-app-analyses"
     workspace_id = "ws-app-analyses"
@@ -325,6 +357,66 @@ def test_get_app_analysis_output_uses_app_facing_download_route(tmp_path):
     assert download_url == f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1?workspaceId={workspace_id}"
     assert output_response.status_code == 200
     assert output_response.body == b"month,profit\n2026-01,10\n"
+
+
+def test_get_app_analysis_output_hydrates_missing_output_path_from_execution_artifacts(tmp_path):
+    tenant_id = "tenant-app-output-hydrate"
+    workspace_id = "ws-app-output-hydrate"
+    task_id = global_blackboard.create_task(tenant_id, workspace_id, "导出输入缺口")
+    output_dir = Path(OUTPUT_DIR) / tenant_id / workspace_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    requested_inputs_path = output_dir / "requested_inputs.json"
+    requested_inputs_path.write_text('{"required": ["gdp", "cpi"]}', encoding="utf-8")
+    execution_blackboard.write(
+        tenant_id,
+        task_id,
+        ExecutionData(
+            task_id=task_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            control={
+                "final_response": {
+                    "headline": "需要补充输入",
+                    "answer": "请先补充关键输入后再继续。",
+                    "evidence_refs": [str(requested_inputs_path)],
+                    "outputs": [
+                        {
+                            "name": "requested_inputs.json",
+                            "type": "export",
+                            "summary": "requested inputs",
+                            "path": None,
+                            "artifact_key": "requested_inputs_json",
+                        }
+                    ],
+                }
+            },
+            static={
+                "execution_record": {
+                    "session_id": "session-output-hydrate",
+                    "tenant_id": tenant_id,
+                    "workspace_id": workspace_id,
+                    "task_id": task_id,
+                    "success": True,
+                    "trace_id": "trace-output-hydrate",
+                    "duration_seconds": 0.2,
+                    "artifacts": [{"path": str(requested_inputs_path), "artifact_type": "artifact"}],
+                }
+            },
+        ),
+    )
+    global_blackboard.update_global_status(task_id, GlobalStatus.SUCCESS)
+
+    output_request = _make_request(
+        method="GET",
+        path=f"/api/app/analyses/{task_id}/outputs/output_{task_id}_1",
+        path_params={"analysis_id": task_id, "output_id": f"output_{task_id}_1"},
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    output_response = asyncio.run(get_app_analysis_output(output_request))
+
+    assert output_response.status_code == 200
+    assert output_response.body == b'{"required": ["gdp", "cpi"]}'
 
 
 def test_get_app_analysis_detail_sorts_outputs_by_artifact_priority(tmp_path):
@@ -694,6 +786,35 @@ def test_list_app_assets_returns_structured_workspace_forbidden_error():
     _assert_structured_error(body, code="WORKSPACE_FORBIDDEN")
 
 
+def test_list_app_assets_degrades_gracefully_when_state_repo_unavailable(monkeypatch):
+    tenant_id = "tenant-app-assets-fallback"
+    workspace_id = "ws-app-assets-fallback"
+    upload_dir = Path(UPLOAD_DIR) / tenant_id / workspace_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    (upload_dir / "manual-upload.csv").write_text("month,profit\n2026-01,10\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "src.api.app_presenters.execution_blackboard.list_workspace_states",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("StateRepo unavailable")),
+    )
+    monkeypatch.setattr(
+        "src.api.app_presenters.knowledge_blackboard.list_workspace_states",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("StateRepo unavailable")),
+    )
+
+    request = _make_request(
+        method="GET",
+        path="/api/app/assets",
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    response = asyncio.run(list_app_assets(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert any(item["name"] == "manual-upload.csv" for item in body["items"])
+
+
 def test_upload_app_assets_returns_structured_errors_for_missing_file(monkeypatch):
     request = _make_request(
         method="POST",
@@ -751,6 +872,43 @@ def test_list_app_methods_and_audit():
     audit_body = json.loads(audit_response.body.decode())
     assert audit_response.status_code == 200
     assert audit_body["items"][0]["auditId"] == "audit-app-1"
+
+
+def test_list_app_methods_and_audit_degrade_gracefully_without_persistent_repos(monkeypatch):
+    tenant_id = "tenant-app-admin-fallback"
+    workspace_id = "ws-app-admin-fallback"
+
+    monkeypatch.setattr(
+        "src.api.app_presenters.MemoryRepo.list_approved_skills",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("MemoryRepo unavailable")),
+    )
+    monkeypatch.setattr(
+        "src.api.app_presenters.AuditRepo.query_records",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("AuditRepo unavailable")),
+    )
+
+    methods_request = _make_request(
+        method="GET",
+        path="/api/app/methods",
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id),
+    )
+    methods_response = asyncio.run(list_app_methods(methods_request))
+    methods_body = json.loads(methods_response.body.decode())
+    assert methods_response.status_code == 200
+    assert "items" in methods_body
+
+    audit_request = _make_request(
+        method="GET",
+        path="/api/app/audit",
+        query_params={"workspaceId": workspace_id},
+        auth_context=_viewer_auth(tenant_id=tenant_id, workspace_id=workspace_id, role="admin"),
+    )
+    audit_response = asyncio.run(list_app_audit(audit_request))
+    audit_body = json.loads(audit_response.body.decode())
+    assert audit_response.status_code == 200
+    assert audit_body["items"] == []
+    assert audit_body["pagination"]["totalItems"] == 0
 
 
 def test_list_app_audit_supports_real_pagination_beyond_500_records():

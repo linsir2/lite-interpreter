@@ -94,7 +94,8 @@ def _make_forward_event(context: DynamicNodeContext, forwarded_events: list[dict
 
 def _build_dynamic_patch(result_patch: dict[str, Any]) -> dict[str, Any]:
     resume_overlay = ensure_dynamic_resume_overlay(
-        {
+        result_patch.get("dynamic_resume_overlay")
+        or {
             "continuation": result_patch.get("dynamic_continuation") or "finish",
             "next_static_steps": result_patch.get("dynamic_next_static_steps") or [],
             "evidence_refs": result_patch.get("dynamic_evidence_refs") or [],
@@ -102,20 +103,21 @@ def _build_dynamic_patch(result_patch: dict[str, Any]) -> dict[str, Any]:
             "open_questions": result_patch.get("dynamic_open_questions") or [],
         }
     )
+    resume_overlay_payload = resume_overlay.model_dump(mode="json")
     return {
         "status": result_patch.get("dynamic_status"),
         "summary": result_patch.get("dynamic_summary"),
-        "continuation": result_patch.get("dynamic_continuation") or "finish",
-        "resume_overlay": resume_overlay.model_dump(mode="json"),
-        "next_static_steps": result_patch.get("dynamic_next_static_steps") or [],
+        "continuation": resume_overlay.continuation,
+        "resume_overlay": resume_overlay_payload,
+        "next_static_steps": list(resume_overlay.next_static_steps),
         "runtime_metadata": result_patch.get("dynamic_runtime_metadata") or {},
         "trace": result_patch.get("dynamic_trace") or [],
         "trace_refs": result_patch.get("dynamic_trace_refs") or [],
         "artifacts": result_patch.get("dynamic_artifacts") or [],
         "research_findings": result_patch.get("dynamic_research_findings") or [],
-        "evidence_refs": result_patch.get("dynamic_evidence_refs") or [],
-        "open_questions": result_patch.get("dynamic_open_questions") or [],
-        "suggested_static_actions": result_patch.get("dynamic_suggested_static_actions") or [],
+        "evidence_refs": list(resume_overlay.evidence_refs),
+        "open_questions": list(resume_overlay.open_questions),
+        "suggested_static_actions": list(resume_overlay.suggested_static_actions),
         "recommended_static_skill": result_patch.get("recommended_static_skill"),
     }
 

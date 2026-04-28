@@ -7,10 +7,11 @@ from pathlib import Path
 
 from config.settings import API_ALLOW_ORIGINS
 from starlette.applications import Starlette
+from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
-from starlette.routing import Mount, Route
+from starlette.responses import FileResponse, JSONResponse
+from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 
 from src.api.auth import ApiAuthMiddleware
@@ -39,6 +40,25 @@ from src.storage.repository.knowledge_repo import KnowledgeRepo
 
 async def health(_request):
     return JSONResponse({"status": "ok", "service": "lite-interpreter-api"})
+
+
+WEB_DIST_DIR = Path(__file__).resolve().parents[2] / "apps/web/dist"
+web_static = StaticFiles(directory=str(WEB_DIST_DIR), html=True) if WEB_DIST_DIR.exists() else None
+
+
+async def serve_web_app(request):
+    if web_static is None:  # pragma: no cover - guarded by route construction
+        return JSONResponse({"error": "web_dist_missing"}, status_code=404)
+    requested_path = str(request.path_params.get("path") or "").lstrip("/")
+    try:
+        response = await web_static.get_response(requested_path, request.scope)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return FileResponse(WEB_DIST_DIR / "index.html")
+    if response.status_code == 404:
+        return FileResponse(WEB_DIST_DIR / "index.html")
+    return response
 
 
 @asynccontextmanager
@@ -92,8 +112,11 @@ app = Starlette(
         Route("/api/runtimes", list_runtimes, methods=["GET"]),
         Route("/api/runtimes/{runtime_id}/capabilities", get_runtime_capabilities, methods=["GET"]),
         *(
-            [Mount("/", app=StaticFiles(directory=str(Path(__file__).resolve().parents[2] / "apps/web/dist"), html=True), name="web")]
-            if (Path(__file__).resolve().parents[2] / "apps/web/dist").exists()
+            [
+                Route("/", serve_web_app, methods=["GET", "HEAD"]),
+                Route("/{path:path}", serve_web_app, methods=["GET", "HEAD"]),
+            ]
+            if WEB_DIST_DIR.exists()
             else []
         ),
     ],

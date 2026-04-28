@@ -28,6 +28,7 @@ from src.blackboard.schema import GlobalStatus, TaskGlobalState
 from src.common.control_plane import artifact_category_from_path, parser_reports_from_documents, sort_output_entries
 from src.common.event_bus import EventTopic
 from src.common.event_journal import event_journal
+from src.common.logger import get_logger
 from src.skillnet.preset_skills import load_preset_skills
 from src.storage.repository.audit_repo import AuditRepo
 from src.storage.repository.memory_repo import MemoryRepo
@@ -69,6 +70,8 @@ _TECHNICAL_COPY_MARKERS = (
     "execution",
     "候选/接受/拒绝",
 )
+
+logger = get_logger(__name__)
 
 
 def status_label(status: str) -> str:
@@ -402,7 +405,13 @@ def build_analysis_events(task: TaskGlobalState, *, after_event_id: str | None =
 
 def list_workspace_assets_for_app(tenant_id: str, workspace_id: str) -> list[AssetListItem]:
     raw_assets: list[dict[str, Any]] = []
-    execution_states = execution_blackboard.list_workspace_states(tenant_id, workspace_id)
+    try:
+        execution_states = execution_blackboard.list_workspace_states(tenant_id, workspace_id)
+    except RuntimeError as exc:
+        logger.warning(
+            f"[app_presenters] 执行态列表不可用，资料页退化为上传目录视图 tenant={tenant_id} workspace={workspace_id}: {exc}"
+        )
+        execution_states = []
     for execution_data in execution_states:
         for dataset in execution_data.inputs.structured_datasets:
             raw_assets.append(
@@ -418,7 +427,13 @@ def list_workspace_assets_for_app(tenant_id: str, workspace_id: str) -> list[Ass
             )
 
     business_assets_by_path: dict[str, dict[str, Any]] = {}
-    knowledge_states = knowledge_blackboard.list_workspace_states(tenant_id, workspace_id)
+    try:
+        knowledge_states = knowledge_blackboard.list_workspace_states(tenant_id, workspace_id)
+    except RuntimeError as exc:
+        logger.warning(
+            f"[app_presenters] 知识态列表不可用，资料页跳过文档索引 tenant={tenant_id} workspace={workspace_id}: {exc}"
+        )
+        knowledge_states = []
     for knowledge_data in knowledge_states:
         parser_reports = {
             str(item.get("file_name") or ""): item
@@ -478,7 +493,13 @@ def list_workspace_assets_for_app(tenant_id: str, workspace_id: str) -> list[Ass
 
 
 def list_workspace_methods_for_app(tenant_id: str, workspace_id: str) -> list[MethodCard]:
-    stored_skills = MemoryRepo.list_approved_skills(tenant_id, workspace_id, limit=100)
+    try:
+        stored_skills = MemoryRepo.list_approved_skills(tenant_id, workspace_id, limit=100)
+    except RuntimeError as exc:
+        logger.warning(
+            f"[app_presenters] 方法记忆不可用，方法页仅展示预置方法 tenant={tenant_id} workspace={workspace_id}: {exc}"
+        )
+        stored_skills = []
     preset_skills = []
     for descriptor in load_preset_skills():
         payload = descriptor.to_payload()
@@ -513,4 +534,10 @@ def list_workspace_audit_items_for_app(
     workspace_id: str,
     **filters: Any,
 ) -> tuple[list[dict[str, Any]], int]:
-    return AuditRepo.query_records(tenant_id, workspace_id, **filters)
+    try:
+        return AuditRepo.query_records(tenant_id, workspace_id, **filters)
+    except RuntimeError as exc:
+        logger.warning(
+            f"[app_presenters] 审计记录不可用，审计页返回空列表 tenant={tenant_id} workspace={workspace_id}: {exc}"
+        )
+        return [], 0

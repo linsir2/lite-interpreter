@@ -97,6 +97,8 @@ API_ENABLE_POLICY_API: Final[bool] = _env_bool("API_ENABLE_POLICY_API", False)
 API_ENABLE_DIAGNOSTICS: Final[bool] = _env_bool("API_ENABLE_DIAGNOSTICS", False)
 API_AUTH_REQUIRED: Final[bool] = _env_bool("API_AUTH_REQUIRED", True)
 API_AUTH_TOKENS: Final[dict[str, object]] = _env_json_mapping("API_AUTH_TOKENS_JSON")
+API_LOCAL_TENANT_ID: Final[str] = _env_str("API_LOCAL_TENANT_ID", "local-tenant")
+API_LOCAL_WORKSPACE_ID: Final[str] = _env_str("API_LOCAL_WORKSPACE_ID", "local-workspace")
 
 # 数据与模型缓存目录 (本地沙箱执行时使用)
 DATA_DIR = PROJECT_ROOT / "data"

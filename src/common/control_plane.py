@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from config.settings import OUTPUT_DIR, UPLOAD_DIR
 
@@ -30,6 +30,7 @@ from src.common.contracts import (
     StaticEvidenceRequest,
     StaticProgramSpec,
     StaticRepairPlan,
+    StrategyFamily,
     TaskEnvelope,
     VerificationPlan,
 )
@@ -55,6 +56,13 @@ def _normalize_payload_list(values: Iterable[Any] | None) -> list[dict[str, Any]
         if isinstance(item, Mapping):
             payloads.append(dict(item))
     return payloads
+
+
+_DYNAMIC_RESUME_STATIC_STEPS = {"analyst", "coder"}
+
+
+def _normalize_resume_static_steps(values: Iterable[Any] | None) -> list[str]:
+    return [item for item in _normalize_string_list(values) if item in _DYNAMIC_RESUME_STATIC_STEPS]
 
 
 def ensure_task_envelope(
@@ -162,9 +170,12 @@ def ensure_dynamic_resume_overlay(
     *,
     continuation: str = "finish",
     next_static_steps: Iterable[Any] | None = None,
+    skip_static_steps: Iterable[Any] | None = None,
     evidence_refs: Iterable[Any] | None = None,
     suggested_static_actions: Iterable[Any] | None = None,
+    recommended_static_action: str = "",
     open_questions: Iterable[Any] | None = None,
+    strategy_family: str | None = None,
 ) -> DynamicResumeOverlay:
     if isinstance(value, DynamicResumeOverlay):
         payload = value.model_dump(mode="json")
@@ -173,12 +184,25 @@ def ensure_dynamic_resume_overlay(
     else:
         payload = {}
     payload.setdefault("continuation", _normalize_string(payload.get("continuation"), continuation))
-    payload["next_static_steps"] = _normalize_string_list(payload.get("next_static_steps") or next_static_steps)
+    payload["next_static_steps"] = _normalize_resume_static_steps(payload.get("next_static_steps") or next_static_steps)
+    payload["skip_static_steps"] = _normalize_resume_static_steps(payload.get("skip_static_steps") or skip_static_steps)
     payload["evidence_refs"] = _normalize_string_list(payload.get("evidence_refs") or evidence_refs)
     payload["suggested_static_actions"] = _normalize_string_list(
         payload.get("suggested_static_actions") or suggested_static_actions
     )
+    payload["recommended_static_action"] = _normalize_string(
+        payload.get("recommended_static_action"),
+        recommended_static_action,
+    )
+    if not payload["recommended_static_action"] and payload["suggested_static_actions"]:
+        payload["recommended_static_action"] = payload["suggested_static_actions"][0]
     payload["open_questions"] = _normalize_string_list(payload.get("open_questions") or open_questions)
+    normalized_strategy_family = _normalize_string(payload.get("strategy_family"), strategy_family or "")
+    payload["strategy_family"] = (
+        normalized_strategy_family
+        if normalized_strategy_family in set(get_args(StrategyFamily))
+        else None
+    )
     return DynamicResumeOverlay.model_validate(payload)
 
 

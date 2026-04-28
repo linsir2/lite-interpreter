@@ -9,11 +9,14 @@ from typing import Any
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.task_state_services import KnowledgeStateService
 from src.common import get_utc_now
+from src.common.control_plane import ensure_dynamic_resume_overlay
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
 from src.runtime import build_analysis_brief
 
 NodeMap = Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]]
+_WAITING_FOR_HUMAN_OUTPUT_KEYS = {"input_gap_report", "requested_inputs_json"}
+_WAITING_FOR_HUMAN_OUTPUT_NAMES = {"input_gap_report.md", "requested_inputs.json"}
 
 
 def _next_actions(state: dict[str, object]) -> list[str]:
@@ -22,12 +25,74 @@ def _next_actions(state: dict[str, object]) -> list[str]:
     return filtered or []
 
 
+def _resume_overlay_from_state(state: Mapping[str, Any], execution_data: Any | None = None) -> dict[str, Any]:
+    dynamic_state = getattr(execution_data, "dynamic", None)
+    execution_metadata = dict((state.get("execution_intent") or {}).get("metadata") or {})
+    overlay_source = (
+        state.get("dynamic_resume_overlay")
+        or (dynamic_state.resume_overlay.model_dump(mode="json") if getattr(dynamic_state, "resume_overlay", None) else None)
+        or {
+            "continuation": state.get("dynamic_continuation")
+            or getattr(dynamic_state, "continuation", None)
+            or "finish",
+            "next_static_steps": (
+                state.get("dynamic_next_static_steps")
+                or execution_metadata.get("next_static_steps")
+                or getattr(dynamic_state, "next_static_steps", None)
+                or []
+            ),
+            "skip_static_steps": execution_metadata.get("skip_static_steps") or [],
+            "evidence_refs": state.get("dynamic_evidence_refs")
+            or execution_metadata.get("evidence_refs")
+            or getattr(dynamic_state, "evidence_refs", None)
+            or [],
+            "suggested_static_actions": state.get("dynamic_suggested_static_actions")
+            or execution_metadata.get("suggested_static_actions")
+            or getattr(dynamic_state, "suggested_static_actions", None)
+            or [],
+            "recommended_static_action": execution_metadata.get("recommended_static_action") or "",
+            "open_questions": state.get("dynamic_open_questions")
+            or execution_metadata.get("open_questions")
+            or getattr(dynamic_state, "open_questions", None)
+            or [],
+            "strategy_family": execution_metadata.get("strategy_family"),
+        }
+    )
+    overlay = ensure_dynamic_resume_overlay(
+        overlay_source,
+        skip_static_steps=execution_metadata.get("skip_static_steps") or [],
+        evidence_refs=execution_metadata.get("evidence_refs") or [],
+        suggested_static_actions=execution_metadata.get("suggested_static_actions") or [],
+        recommended_static_action=str(execution_metadata.get("recommended_static_action") or ""),
+        open_questions=execution_metadata.get("open_questions") or [],
+        strategy_family=execution_metadata.get("strategy_family"),
+    )
+    return overlay.model_dump(mode="json")
+
+
 def _normalize_output_patch(value: Any) -> dict[str, Any]:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json", by_alias=True)
     if not isinstance(value, dict):
         return {}
     return json.loads(json.dumps(value, default=str, ensure_ascii=False))
+
+
+def _final_response_requires_human_follow_up(final_response: Any) -> bool:
+    if not isinstance(final_response, dict):
+        return False
+    details = dict(final_response.get("details") or {})
+    execution_strategy = dict(details.get("execution_strategy") or {})
+    if str(execution_strategy.get("strategy_family") or "").strip() == "input_gap_report":
+        return True
+    for output in list(final_response.get("outputs") or []):
+        if not isinstance(output, dict):
+            continue
+        artifact_key = str(output.get("artifact_key") or "").strip()
+        name = str(output.get("name") or "").strip().lower()
+        if artifact_key in _WAITING_FOR_HUMAN_OUTPUT_KEYS or name in _WAITING_FOR_HUMAN_OUTPUT_NAMES:
+            return True
+    return False
 
 
 def _ensure_task_lease(state: Mapping[str, Any]) -> None:
@@ -110,6 +175,10 @@ def _execute_static_flow(
     success_sub_status: str,
 ) -> dict[str, Any]:
     current_state: dict[str, Any] = {**state, "next_actions": next_actions}
+    resume_overlay = ensure_dynamic_resume_overlay(state.get("dynamic_resume_overlay") or {})
+    is_dynamic_resume = resume_overlay.continuation == "resume_static"
+    skip_static_steps = set(resume_overlay.skip_static_steps)
+    requested_static_steps = set(next_actions)
     for action in next_actions:
         if action == "data_inspector":
             current_state.update(
@@ -157,8 +226,17 @@ def _execute_static_flow(
                 )
             )
 
-    current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
-    if current_state.get("next_actions") == ["static_evidence"]:
+    should_run_analyst = "analyst" not in skip_static_steps and (
+        not is_dynamic_resume or not requested_static_steps or "analyst" in requested_static_steps
+    )
+    if should_run_analyst:
+        current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
+    should_run_static_evidence = (
+        not is_dynamic_resume
+        and "static_evidence" not in skip_static_steps
+        and current_state.get("next_actions") == ["static_evidence"]
+    )
+    if should_run_static_evidence:
         static_evidence_node = nodes.get("static_evidence")
         if static_evidence_node is None:
             current_state["next_actions"] = ["coder"]
@@ -184,7 +262,14 @@ def _execute_static_flow(
                 "failure_type": "static_evidence",
                 "error_message": str(current_state.get("block_reason") or "static evidence blocked"),
             }
-    current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
+    should_run_coder = "coder" not in skip_static_steps and (
+        not is_dynamic_resume
+        or "coder" in requested_static_steps
+        or should_run_analyst
+        or should_run_static_evidence
+    )
+    if should_run_coder:
+        current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
 
     audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
     current_state.update(audit_state)
@@ -239,6 +324,15 @@ def _execute_static_flow(
     summary_state = _run_checkpointed_node(node_name="summarizer", node_fn=nodes["summarizer"], state=current_state)
     current_state.update(summary_state)
     execution_record = executor_state.get("execution_record")
+    final_response = summary_state.get("final_response") or current_state.get("final_response") or {}
+    if execution_record and execution_record.get("success") and _final_response_requires_human_follow_up(final_response):
+        return {
+            **current_state,
+            "terminal_status": "waiting_for_human",
+            "terminal_sub_status": "已生成输入缺口报告，等待人工补充资料",
+            "failure_type": "need_more_inputs",
+            "error_message": "input gap report generated",
+        }
     if execution_record and execution_record.get("success"):
         return {
             **current_state,
@@ -265,20 +359,21 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
     try:
         execution_data = KnowledgeStateService.load(tenant_id, task_id)
     except ValueError:
+        resume_overlay = _resume_overlay_from_state(state)
         next_actions = [
-            str(item).strip()
-            for item in list(
-                state.get("dynamic_next_static_steps")
-                or ((state.get("execution_intent") or {}).get("metadata") or {}).get("next_static_steps")
-                or []
-            )
-            if str(item).strip()
-        ] or ["analyst"]
+            item
+            for item in list(resume_overlay.get("next_static_steps") or ["analyst"])
+            if item not in set(resume_overlay.get("skip_static_steps") or [])
+        ]
         refined_context = "\n".join(
             f"- 研究发现: {str(item).strip()}"
             for item in list(state.get("dynamic_research_findings") or [])[:5]
             if str(item).strip()
         ).strip()
+        recommended_next_step = (
+            str(resume_overlay.get("recommended_static_action") or "").strip()
+            or (list(resume_overlay.get("suggested_static_actions") or []) or ["生成静态分析计划"])[0]
+        )
         return {
             "knowledge_snapshot": {},
             "analysis_brief": {
@@ -288,16 +383,16 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
                 "business_rules": [],
                 "business_metrics": [],
                 "business_filters": [],
-                "evidence_refs": list(state.get("dynamic_evidence_refs") or []),
-                "known_gaps": list(state.get("dynamic_open_questions") or []),
-                "recommended_next_step": (
-                    list(state.get("dynamic_suggested_static_actions") or []) or ["生成静态分析计划"]
-                )[0],
+                "evidence_refs": list(resume_overlay.get("evidence_refs") or state.get("dynamic_evidence_refs") or []),
+                "known_gaps": list(resume_overlay.get("open_questions") or state.get("dynamic_open_questions") or []),
+                "recommended_next_step": recommended_next_step,
             },
             "refined_context": refined_context,
             "next_actions": next_actions,
+            "dynamic_resume_overlay": resume_overlay,
         }
 
+    resume_overlay = _resume_overlay_from_state(state, execution_data)
     dynamic_summary = str(state.get("dynamic_summary") or execution_data.dynamic.summary or "").strip()
     research_findings = [
         str(item).strip()
@@ -308,7 +403,7 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
         research_findings.insert(0, dynamic_summary)
     evidence_refs = [
         str(item).strip()
-        for item in list(state.get("dynamic_evidence_refs") or execution_data.dynamic.evidence_refs or [])
+        for item in list(resume_overlay.get("evidence_refs") or execution_data.dynamic.evidence_refs or [])
         if str(item).strip()
     ]
     artifact_refs = [
@@ -318,23 +413,19 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
     ]
     open_questions = [
         str(item).strip()
-        for item in list(state.get("dynamic_open_questions") or execution_data.dynamic.open_questions or [])
+        for item in list(resume_overlay.get("open_questions") or execution_data.dynamic.open_questions or [])
         if str(item).strip()
     ]
     suggested_static_actions = [
         str(item).strip()
-        for item in list(state.get("dynamic_suggested_static_actions") or execution_data.dynamic.suggested_static_actions or [])
+        for item in list(resume_overlay.get("suggested_static_actions") or execution_data.dynamic.suggested_static_actions or [])
         if str(item).strip()
     ]
     next_actions = [
-        str(item).strip()
-        for item in list(
-            state.get("dynamic_next_static_steps")
-            or ((state.get("execution_intent") or {}).get("metadata") or {}).get("next_static_steps")
-            or []
-        )
-        if str(item).strip()
-    ] or ["analyst"]
+        item
+        for item in list(resume_overlay.get("next_static_steps") or ["analyst"])
+        if item not in set(resume_overlay.get("skip_static_steps") or [])
+    ]
 
     knowledge_snapshot_payload = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json")
     existing_hits = list(knowledge_snapshot_payload.get("hits") or [])
@@ -363,11 +454,13 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
     }
     knowledge_snapshot_payload["metadata"] = metadata
 
-    recommended_next_step = (
-        suggested_static_actions[0]
-        if suggested_static_actions
-        else "基于动态研究结果生成静态分析计划并准备模板化执行代码"
-    )
+    recommended_next_step = str(resume_overlay.get("recommended_static_action") or "").strip()
+    if not recommended_next_step:
+        recommended_next_step = (
+            suggested_static_actions[0]
+            if suggested_static_actions
+            else "基于动态研究结果生成静态分析计划并准备模板化执行代码"
+        )
     brief = build_analysis_brief(
         query=query,
         exec_data=execution_data,
@@ -395,6 +488,7 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
         "analysis_brief": brief_payload,
         "refined_context": refined_context,
         "next_actions": next_actions,
+        "dynamic_resume_overlay": resume_overlay,
     }
 
 

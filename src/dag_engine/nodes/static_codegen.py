@@ -35,8 +35,12 @@ def prepare_static_codegen(
     """Recall reusable skills, assemble payloads, and render the code template."""
 
     payload, input_mounts = prepare_static_codegen_payload(exec_data=exec_data, state=state)
-    dynamic_resume_overlay = ensure_dynamic_resume_overlay(
-        {
+    persisted_overlay = getattr(getattr(exec_data, "dynamic", None), "resume_overlay", None)
+    execution_metadata = dict((state.get("execution_intent") or {}).get("metadata") or {})
+    overlay_source = (
+        state.get("dynamic_resume_overlay")
+        or (persisted_overlay.model_dump(mode="json") if persisted_overlay else None)
+        or {
             "continuation": str(
                 state.get("dynamic_continuation")
                 or getattr(getattr(exec_data, "dynamic", None), "continuation", None)
@@ -44,29 +48,45 @@ def prepare_static_codegen(
             ),
             "next_static_steps": list(
                 state.get("dynamic_next_static_steps")
+                or execution_metadata.get("next_static_steps")
                 or getattr(getattr(exec_data, "dynamic", None), "next_static_steps", None)
                 or []
             ),
+            "skip_static_steps": list(execution_metadata.get("skip_static_steps") or []),
             "evidence_refs": list(
                 state.get("dynamic_evidence_refs")
+                or execution_metadata.get("evidence_refs")
                 or getattr(getattr(exec_data, "dynamic", None), "evidence_refs", None)
                 or []
             ),
             "suggested_static_actions": list(
                 state.get("dynamic_suggested_static_actions")
+                or execution_metadata.get("suggested_static_actions")
                 or getattr(getattr(exec_data, "dynamic", None), "suggested_static_actions", None)
                 or []
             ),
+            "recommended_static_action": str(execution_metadata.get("recommended_static_action") or ""),
             "open_questions": list(
                 state.get("dynamic_open_questions")
+                or execution_metadata.get("open_questions")
                 or getattr(getattr(exec_data, "dynamic", None), "open_questions", None)
                 or []
             ),
+            "strategy_family": execution_metadata.get("strategy_family"),
         }
+    )
+    dynamic_resume_overlay = ensure_dynamic_resume_overlay(
+        overlay_source,
+        skip_static_steps=list(execution_metadata.get("skip_static_steps") or []),
+        evidence_refs=list(execution_metadata.get("evidence_refs") or []),
+        suggested_static_actions=list(execution_metadata.get("suggested_static_actions") or []),
+        recommended_static_action=str(execution_metadata.get("recommended_static_action") or ""),
+        open_questions=list(execution_metadata.get("open_questions") or []),
+        strategy_family=execution_metadata.get("strategy_family"),
     )
     generated_code, execution_strategy, generator_manifest = build_static_generation_bundle(
         payload,
-        dynamic_resume_overlay=dynamic_resume_overlay if dynamic_resume_overlay.next_static_steps else None,
+        dynamic_resume_overlay=dynamic_resume_overlay if dynamic_resume_overlay.continuation == "resume_static" else None,
         repair_plan=(
             state.get("repair_plan")
             or (exec_data.static.repair_plan.model_dump(mode="json") if getattr(exec_data.static, "repair_plan", None) else None)

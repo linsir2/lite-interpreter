@@ -70,6 +70,9 @@ iterative_patterns:
   - 竞品
   - 财报
   - 宏观
+  - 宏观经济
+  - 经济走向
+  - 美国经济
 
 dataset_keywords:
   - 数据

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from config.settings import API_LOCAL_TENANT_ID, API_LOCAL_WORKSPACE_ID
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from src.api.auth import auth_context_allows_scope, request_auth_context
+from src.api.auth import auth_context_allows_scope, auth_enabled, request_auth_context
 from src.api.schemas import api_error_response
 from src.common.utils import validate_scope_identifier
 
@@ -27,6 +28,11 @@ def request_scope(request: Request) -> tuple[str, str]:
     workspace_id = str(
         request.query_params.get("workspace_id") or request.headers.get("x-workspace-id") or default_workspace
     ).strip()
+    if not auth_enabled():
+        if not tenant_id:
+            tenant_id = API_LOCAL_TENANT_ID
+        if not workspace_id:
+            workspace_id = API_LOCAL_WORKSPACE_ID
     return tenant_id, workspace_id
 
 

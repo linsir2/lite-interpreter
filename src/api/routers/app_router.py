@@ -35,7 +35,7 @@ from src.api.app_schemas import (
     WorkspaceGrantResponse,
 )
 from src.api.audit_logging import record_api_audit
-from src.api.auth import request_auth_context, require_request_role, role_allows
+from src.api.auth import auth_enabled, request_auth_context, require_request_role, role_allows
 from src.api.request_scope import ensure_claimed_scope, require_request_scope
 from src.api.schemas import AppPaginationQuery, api_error_response, validation_error_details
 from src.api.services.asset_service import attach_workspace_assets_to_execution, upload_assets_from_request
@@ -69,10 +69,11 @@ def _resolve_app_scope(request: Request, *, requested_workspace_id: str | None =
 
 async def get_app_session(request: Request) -> JSONResponse:
     auth_context = request_auth_context(request)
+    current_auth_enabled = auth_enabled()
     if auth_context is None:
         scope = require_request_scope(request)
         if isinstance(scope, JSONResponse):
-            if API_AUTH_REQUIRED:
+            if current_auth_enabled or API_AUTH_REQUIRED:
                 return api_error_response("AUTH_REQUIRED", "Authentication required.", status_code=401)
             return JSONResponse(
                 AppSessionResponse(
@@ -85,7 +86,9 @@ async def get_app_session(request: Request) -> JSONResponse:
             )
         tenant_id, workspace_id = scope
         payload = AppSessionResponse(
-            authenticated=False,
+            authenticated=not current_auth_enabled,
+            subject="local-dev-session" if not current_auth_enabled else None,
+            role="local" if not current_auth_enabled else None,
             grants=[
                 WorkspaceGrantResponse(
                     tenantId=tenant_id,

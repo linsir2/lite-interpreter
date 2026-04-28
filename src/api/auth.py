@@ -161,13 +161,22 @@ def auth_context_allows_scope(auth_context: AuthContext | None, tenant_id: str, 
     return any(grant.tenant_id == tenant_id and grant.workspace_id == workspace_id for grant in auth_context.grants)
 
 
+def request_skips_auth(request: Request) -> bool:
+    path = request.url.path
+    if path == "/health":
+        return True
+    if request.method.upper() == "OPTIONS" and request.headers.get("origin") and request.headers.get("access-control-request-method"):
+        return True
+    return not path.startswith("/api/")
+
+
 class ApiAuthMiddleware(BaseHTTPMiddleware):
     """Optional API token authentication with request-scoped auth context."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path == "/health":
+        if request_skips_auth(request):
             request.state.auth_context = None
-            request.state.auth_checked = True
+            request.state.auth_checked = False
             return await call_next(request)
         authenticated = authenticate_request(request)
         if isinstance(authenticated, JSONResponse):

@@ -53,6 +53,18 @@ def test_runtime_decision_classifies_dynamic_research():
     assert "外部事实核验" in decision.known_gaps[0] or "联网检索" in "".join(decision.known_gaps)
 
 
+def test_runtime_decision_routes_macro_outlook_queries_to_dynamic_research():
+    decision = resolve_runtime_decision(
+        call_purpose="routing_assess",
+        query="分析当前美国的经济走向",
+        allowed_tools=["web_search", "web_fetch"],
+    )
+
+    assert decision.analysis_mode == "dynamic_research_analysis"
+    assert decision.final_mode == "dynamic"
+    assert decision.destinations == ("dynamic_swarm",)
+
+
 def test_runtime_decision_prefers_document_rule_analysis_for_rule_only_query():
     decision = resolve_runtime_decision(
         call_purpose="routing_assess",

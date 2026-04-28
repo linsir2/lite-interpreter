@@ -97,6 +97,11 @@ def _generated_artifact_outputs(
     execution_record: Any,
 ) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
+    fallback_paths_by_name = {
+        os.path.basename(str(item.get("path") or "")): str(item.get("path") or "")
+        for item in static_artifacts(execution_record)
+        if str(item.get("path") or "").strip()
+    }
     generated_artifacts = (
         structured_output.get("generated_artifacts", [])
         if isinstance(structured_output.get("generated_artifacts"), list)
@@ -106,11 +111,15 @@ def _generated_artifact_outputs(
         for artifact in generated_artifacts:
             if not isinstance(artifact, Mapping):
                 continue
+            artifact_name = str(artifact.get("name") or "artifact")
             path = sanitize_artifact_reference(str(artifact.get("path") or ""))
+            if path is None:
+                fallback_path = fallback_paths_by_name.get(artifact_name)
+                path = sanitize_artifact_reference(fallback_path) if fallback_path else None
             outputs.append(
                 _output_entry(
                     artifact_type=str(artifact.get("type") or artifact.get("category") or "artifact"),
-                    name=str(artifact.get("name") or "artifact"),
+                    name=artifact_name,
                     path=path,
                     summary=str(artifact.get("summary") or path or ""),
                     artifact_key=str(artifact.get("key") or ""),

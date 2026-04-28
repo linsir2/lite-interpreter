@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from src.api.auth import AuthContext, authenticate_request, request_bearer_token
+from src.api.auth import AuthContext, authenticate_request, request_bearer_token, request_skips_auth
 from src.api.routers.app_router import get_app_session
 from starlette.requests import Request
 
@@ -99,3 +99,57 @@ def test_get_app_session_returns_authenticated_identity():
     assert response.status_code == 200
     assert body["subject"] == "alice-user"
     assert body["role"] == "admin"
+
+
+def test_get_app_session_bootstraps_local_session_when_auth_disabled(monkeypatch):
+    monkeypatch.setattr("src.api.routers.app_router.auth_enabled", lambda: False)
+    monkeypatch.setattr("src.api.routers.app_router.API_AUTH_REQUIRED", False)
+    monkeypatch.setattr("src.api.request_scope.auth_enabled", lambda: False)
+    monkeypatch.setattr("src.api.request_scope.API_LOCAL_TENANT_ID", "tenant-local")
+    monkeypatch.setattr("src.api.request_scope.API_LOCAL_WORKSPACE_ID", "ws-local")
+
+    request = _make_request(
+        method="GET",
+        path="/api/app/session",
+    )
+    response = asyncio.run(get_app_session(request))
+    body = json.loads(response.body.decode())
+
+    assert response.status_code == 200
+    assert body["authenticated"] is True
+    assert body["subject"] == "local-dev-session"
+    assert body["role"] == "local"
+    assert body["currentTenantId"] == "tenant-local"
+    assert body["currentWorkspaceId"] == "ws-local"
+    assert body["grants"] == [
+        {
+            "tenantId": "tenant-local",
+            "workspaceId": "ws-local",
+            "label": "ws-local",
+        }
+    ]
+
+
+def test_request_skips_auth_for_cors_preflight_and_non_api_paths():
+    homepage_request = _make_request(
+        method="GET",
+        path="/",
+    )
+    assert request_skips_auth(homepage_request) is True
+
+    preflight_request = _make_request(
+        method="OPTIONS",
+        path="/api/app/session",
+        headers=[
+            (b"origin", b"http://127.0.0.1:5173"),
+            (b"access-control-request-method", b"GET"),
+            (b"access-control-request-headers", b"authorization,content-type"),
+        ],
+    )
+    assert request_skips_auth(preflight_request) is True
+
+    protected_api_request = _make_request(
+        method="GET",
+        path="/api/app/session",
+    )
+    assert request_skips_auth(protected_api_request) is False

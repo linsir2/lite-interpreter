@@ -11,7 +11,7 @@ from typing import Any
 from src.blackboard import execution_blackboard
 from src.blackboard.schema import ExecutionData
 from src.common import ToolCallRecord
-from src.common.control_plane import sanitize_artifact_reference
+from src.common.control_plane import sanitize_artifact_reference, static_artifacts
 from src.common.schema import EventTopic
 from src.storage.repository.state_repo import StateRepo
 
@@ -59,6 +59,47 @@ def read_task_execution_data(tenant_id: str, task_id: str) -> ExecutionData | No
     if execution_blackboard.restore(tenant_id, task_id):
         return execution_blackboard.read(tenant_id, task_id)
     return None
+
+
+def hydrate_response_output_paths(
+    final_response: Mapping[str, Any] | None,
+    execution_data: ExecutionData | None,
+) -> dict[str, Any]:
+    payload = dict(final_response or {})
+    raw_outputs = payload.get("outputs")
+    if not isinstance(raw_outputs, list):
+        return payload
+
+    fallback_paths_by_name = {
+        Path(str(item.get("path") or "")).name: str(item.get("path") or "")
+        for item in static_artifacts(execution_data.static.execution_record if execution_data else None)
+        if str(item.get("path") or "").strip()
+    }
+    evidence_refs = [
+        str(item).strip()
+        for item in list(payload.get("evidence_refs") or [])
+        if str(item).strip()
+    ]
+
+    hydrated_outputs: list[dict[str, Any]] = []
+    for item in raw_outputs:
+        if not isinstance(item, Mapping):
+            hydrated_outputs.append(dict(item) if isinstance(item, dict) else {"value": item})
+            continue
+        normalized = dict(item)
+        if str(normalized.get("path") or "").strip():
+            hydrated_outputs.append(normalized)
+            continue
+        artifact_name = str(normalized.get("name") or "").strip()
+        candidate_path = fallback_paths_by_name.get(artifact_name)
+        if candidate_path is None and artifact_name:
+            candidate_path = next((ref for ref in evidence_refs if Path(ref).name == artifact_name), None)
+        if candidate_path is not None:
+            normalized["path"] = candidate_path
+        hydrated_outputs.append(normalized)
+
+    payload["outputs"] = hydrated_outputs
+    return payload
 
 
 def serialize_execution_record(execution_record: Any) -> dict[str, Any] | None:
@@ -363,7 +404,10 @@ def build_task_workspace_payload(
     memory_data: Any | None,
     task_lease: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    final_response = execution_data.control.final_response if execution_data else None
+    final_response = hydrate_response_output_paths(
+        execution_data.control.final_response if execution_data else None,
+        execution_data,
+    )
     knowledge_snapshot = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json") if execution_data else {}
     analysis_brief = execution_data.knowledge.analysis_brief.model_dump(mode="json") if execution_data else {}
     compiled_knowledge = execution_data.knowledge.compiled.model_dump(mode="json") if execution_data else {}

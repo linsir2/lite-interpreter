@@ -314,6 +314,7 @@ class SkillRecommendedState(StrictStateModel):
 
     source: str = ""
     source_task_type: str = ""
+    confidence: str = ""
 
 
 class SkillMetadataState(StrictStateModel):

@@ -1,4 +1,4 @@
-import { BarChart3, ChevronDown, FileStack, FlaskConical, History, Home, LayoutDashboard, Search, Settings2, Sparkles } from 'lucide-react'
+import { Activity, BarChart3, ChevronDown, FileStack, FlaskConical, History, Home, LayoutDashboard, Search, Settings2, Sparkles } from 'lucide-react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 
 import { Button, Select, StatusPill, focusRing } from '@/components/ui'
@@ -9,6 +9,7 @@ type ViewMode = 'business' | 'runtime'
 
 const NAV_ITEMS = [
   { to: '/analyses', label: '业务工作台', icon: LayoutDashboard },
+  { to: '/runtime', label: '运行时中心', icon: Activity },
   { to: '/assets', label: '资料库', icon: FileStack },
   { to: '/methods', label: '方法库', icon: FlaskConical },
   { to: '/audit', label: '治理与审计', icon: History },
@@ -46,7 +47,7 @@ export function AppShell({
       <div className="grid min-h-screen min-w-0 lg:grid-cols-[300px_minmax(0,1fr)]">
         <aside className="flex min-w-0 flex-col border-b border-white/10 bg-[rgba(5,6,8,0.96)] backdrop-blur-xl lg:h-screen lg:border-b-0 lg:border-r">
           <div className="border-b border-white/10 px-4 py-3 sm:px-6 sm:py-4 lg:py-6">
-            <Link to="/analyses" className={cn('flex items-center gap-3 rounded-2xl sm:gap-4', focusRing)}>
+            <Link to={viewMode === 'runtime' ? '/runtime' : '/analyses'} className={cn('flex items-center gap-3 rounded-2xl sm:gap-4', focusRing)}>
               <div className="flex h-10 w-10 items-center justify-center rounded-[18px] sm:h-12 sm:w-12 sm:rounded-2xl border border-primary/25 bg-primary/10 text-primary shadow-[0_0_0_1px_rgba(255,255,255,0.04)]">
                 <BarChart3 className="h-5 w-5" />
               </div>
@@ -149,8 +150,8 @@ export function AppShell({
                 className={cn('flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm text-muted transition hover:border-primary/30 hover:bg-white/10', focusRing)}
               >
                 <Search className="h-4 w-4 shrink-0 text-primary" />
-                <span className="truncate">输入一个可复核的财务分析问题…</span>
-                <span className="ml-auto hidden rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.18em] text-muted md:inline-flex">新建流程</span>
+                <span className="truncate">{viewMode === 'runtime' ? '切回业务工作台发起新的分析任务…' : '输入一个可复核的财务分析问题…'}</span>
+                <span className="ml-auto hidden rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.18em] text-muted md:inline-flex">{viewMode === 'runtime' ? '业务入口' : '新建流程'}</span>
               </Link>
 
               <div className="inline-flex items-center rounded-full border border-white/10 bg-white/5 p-1 shadow-subtle">
@@ -198,7 +199,7 @@ export function AppShell({
         </div>
       </div>
       <nav className="fixed inset-x-3 bottom-3 z-30 rounded-[26px] border border-white/10 bg-[rgba(5,6,8,0.92)] p-2 shadow-panel backdrop-blur-xl md:hidden" aria-label="移动端主导航">
-        <div className="grid grid-cols-5 gap-1">
+        <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${visibleNavItems.length}, minmax(0, 1fr))` }}>
           {visibleNavItems.map((item) => {
             const Icon = item.icon
             const isActive = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)
