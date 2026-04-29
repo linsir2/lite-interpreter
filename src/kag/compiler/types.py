@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.common.contracts import StaticEvidenceRecord
 from src.storage.schema import KnowledgeTriple
 
 
@@ -143,3 +144,23 @@ class LLMHealthStatus(CompilerStateModel):
     smoke_ok: bool
     is_embedding: bool = False
     error: str = ""
+
+
+class BusinessContextDelta(CompilerStateModel):
+    rules: list[str] = Field(default_factory=list)
+    metrics: list[str] = Field(default_factory=list)
+    filters: list[str] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class EvidenceCompilationInput(CompilerStateModel):
+    source: Literal["static_evidence", "dynamic_resume"]
+    query: str = ""
+    tenant_id: str
+    workspace_id: str = "default_ws"
+    task_id: str
+    records: list[StaticEvidenceRecord] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+    artifact_refs: list[str] = Field(default_factory=list)
+    max_rows: int = 50
+    max_text_chars: int = 4_000

@@ -44,16 +44,6 @@ class ExecutionBlackboard(BaseSubBlackboard):
             return True
         return candidate.control.updated_at > current.control.updated_at
 
-    def _load_persisted_execution_data(self, tenant_id: str, task_id: str) -> ExecutionData | None:
-        full_state = StateRepo.load_blackboard_state(tenant_id, task_id) or {}
-        payload = full_state.get(self.board_name)
-        if not isinstance(payload, dict):
-            return None
-        try:
-            return ExecutionData(**payload)
-        except Exception:
-            return None
-
     def write(
         self,
         tenant_id: str,
@@ -88,7 +78,7 @@ class ExecutionBlackboard(BaseSubBlackboard):
 
     def delete(self, tenant_id: str, task_id: str) -> bool:
         with self._lock:
-            if tenant_id and self._storage and task_id in self._storage[tenant_id]:
+            if tenant_id in self._storage and task_id in self._storage[tenant_id]:
                 del self._storage[tenant_id][task_id]
                 logger.info(f"执行数据删除成功 tenant_id={tenant_id} task_id={task_id}", extra={"trace_id": task_id})
                 return True

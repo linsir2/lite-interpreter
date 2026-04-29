@@ -111,14 +111,21 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
         )
         if not persisted:
             logger.warning("[ContextBuilder] 编译态图谱三元组写入失败，保留任务态结果继续执行。")
+    brief_decision = resolve_runtime_decision(
+        call_purpose="context_compress",
+        query=query,
+        state=state,
+        exec_data=exec_data,
+        allowed_tools=list(state.get("allowed_tools") or []),
+    )
     analysis_brief = build_analysis_brief(
         query=query,
         exec_data=exec_data,
         knowledge_snapshot=knowledge_snapshot
         or {"evidence_refs": [item.get("chunk_id") for item in compressed if item.get("chunk_id")]},
         business_context=business_context_state.model_dump(mode="json"),
-        analysis_mode=runtime_decision.analysis_mode,
-        known_gaps=runtime_decision.known_gaps,
+        analysis_mode=brief_decision.analysis_mode,
+        known_gaps=brief_decision.known_gaps,
         recommended_next_step="先核对证据与规则，再生成模板化数据分析代码",
     )
 
@@ -132,8 +139,8 @@ def context_builder_node(state: DagGraphState) -> dict[str, Any]:
             "compression_strategy": "extractive_ranked_sentences",
             "pinned_evidence_refs": list(analysis_brief.evidence_refs),
             "dropped_candidate_count": max(0, len(raw_candidates) - len(compressed)),
-            "analysis_mode": runtime_decision.analysis_mode,
-            "evidence_strategy": runtime_decision.evidence_strategy,
+            "analysis_mode": brief_decision.analysis_mode,
+            "evidence_strategy": brief_decision.evidence_strategy,
             "preferred_date_terms": list(
                 dict.fromkeys(
                     str(value).strip()

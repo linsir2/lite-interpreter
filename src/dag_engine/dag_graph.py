@@ -30,7 +30,11 @@ def _resume_overlay_from_state(state: Mapping[str, Any], execution_data: Any | N
     execution_metadata = dict((state.get("execution_intent") or {}).get("metadata") or {})
     overlay_source = (
         state.get("dynamic_resume_overlay")
-        or (dynamic_state.resume_overlay.model_dump(mode="json") if getattr(dynamic_state, "resume_overlay", None) else None)
+        or (
+            dynamic_state.resume_overlay.model_dump(mode="json")
+            if getattr(dynamic_state, "resume_overlay", None)
+            else None
+        )
         or {
             "continuation": state.get("dynamic_continuation")
             or getattr(dynamic_state, "continuation", None)
@@ -167,6 +171,120 @@ def _run_checkpointed_node(
     return normalized_output_patch
 
 
+def _run_evidence_compiler_if_needed(
+    *,
+    current_state: dict[str, Any],
+    nodes: NodeMap,
+    source: str,
+) -> dict[str, Any]:
+    """Compile raw static/dynamic evidence into existing material models once."""
+
+    compiled_sources = [
+        str(item).strip() for item in list(current_state.get("compiled_evidence_sources") or []) if str(item).strip()
+    ]
+    if source in compiled_sources:
+        return current_state
+    evidence_compiler_node = nodes.get("evidence_compiler")
+    if evidence_compiler_node is None:
+        return current_state
+    current_state.update(
+        _run_checkpointed_node(
+            node_name=f"evidence_compiler:{source}",
+            node_fn=evidence_compiler_node,
+            state={**current_state, "evidence_compiler_source": source},
+        )
+    )
+    current_state["compiled_evidence_sources"] = [*compiled_sources, source]
+    current_state["evidence_material_compiled"] = True
+    current_state["material_refresh_done"] = False
+    return current_state
+
+
+def _run_material_refresh_actions(
+    *,
+    current_state: dict[str, Any],
+    nodes: NodeMap,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Refresh canonical material owners after evidence compilation.
+
+    The compiler may append existing material-model records. This bounded
+    refresh sends those materials through their canonical owners before coder.
+    """
+
+    if current_state.get("material_refresh_done"):
+        return current_state, None
+    refresh_actions = [
+        str(item).strip() for item in list(current_state.get("material_refresh_actions") or []) if str(item).strip()
+    ]
+    if not refresh_actions:
+        return current_state, None
+
+    current_state["material_refresh_done"] = True
+    for action in list(dict.fromkeys(refresh_actions)):
+        if action == "data_inspector":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="data_inspector:material_refresh",
+                    node_fn=nodes["data_inspector"],
+                    state=current_state,
+                )
+            )
+            if current_state.get("blocked"):
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer",
+                    node_fn=nodes["summarizer"],
+                    state=current_state,
+                )
+                return current_state, {
+                    **current_state,
+                    **summary_state,
+                    "terminal_status": "waiting_for_human",
+                    "terminal_sub_status": "结构化数据探查失败，等待人工介入",
+                    "failure_type": "data_inspection",
+                    "error_message": str(current_state.get("block_reason") or "data inspection blocked"),
+                }
+        elif action == "kag_retriever":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="kag_retriever:material_refresh",
+                    node_fn=nodes["kag_retriever"],
+                    state=current_state,
+                )
+            )
+            if current_state.get("blocked"):
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer",
+                    node_fn=nodes["summarizer"],
+                    state=current_state,
+                )
+                return current_state, {
+                    **current_state,
+                    **summary_state,
+                    "terminal_status": "waiting_for_human",
+                    "terminal_sub_status": "知识构建失败，等待人工介入",
+                    "failure_type": "knowledge_ingestion",
+                    "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                }
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="context_builder:material_refresh",
+                    node_fn=nodes["context_builder"],
+                    state=current_state,
+                )
+            )
+        elif action == "context_builder":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="context_builder:material_refresh",
+                    node_fn=nodes["context_builder"],
+                    state=current_state,
+                )
+            )
+    if refresh_actions:
+        current_state["force_analyst_after_material_refresh"] = True
+    return current_state, None
+
+
 def _execute_static_flow(
     *,
     state: dict[str, Any],
@@ -179,12 +297,22 @@ def _execute_static_flow(
     is_dynamic_resume = resume_overlay.continuation == "resume_static"
     skip_static_steps = set(resume_overlay.skip_static_steps)
     requested_static_steps = set(next_actions)
+    if is_dynamic_resume:
+        current_state = _run_evidence_compiler_if_needed(
+            current_state=current_state,
+            nodes=nodes,
+            source="dynamic_resume",
+        )
+        current_state, terminal_result = _run_material_refresh_actions(
+            current_state=current_state,
+            nodes=nodes,
+        )
+        if terminal_result is not None:
+            return terminal_result
     for action in next_actions:
         if action == "data_inspector":
             current_state.update(
-                _run_checkpointed_node(
-                    node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state
-                )
+                _run_checkpointed_node(node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state)
             )
             if current_state.get("blocked"):
                 summary_state = _run_checkpointed_node(
@@ -202,9 +330,7 @@ def _execute_static_flow(
                 }
         elif action == "kag_retriever":
             current_state.update(
-                _run_checkpointed_node(
-                    node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state
-                )
+                _run_checkpointed_node(node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state)
             )
             if current_state.get("blocked"):
                 summary_state = _run_checkpointed_node(
@@ -227,7 +353,10 @@ def _execute_static_flow(
             )
 
     should_run_analyst = "analyst" not in skip_static_steps and (
-        not is_dynamic_resume or not requested_static_steps or "analyst" in requested_static_steps
+        not is_dynamic_resume
+        or not requested_static_steps
+        or "analyst" in requested_static_steps
+        or current_state.get("force_analyst_after_material_refresh")
     )
     if should_run_analyst:
         current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
@@ -262,11 +391,27 @@ def _execute_static_flow(
                 "failure_type": "static_evidence",
                 "error_message": str(current_state.get("block_reason") or "static evidence blocked"),
             }
+        current_state = _run_evidence_compiler_if_needed(
+            current_state=current_state,
+            nodes=nodes,
+            source="static_evidence",
+        )
+        current_state, terminal_result = _run_material_refresh_actions(
+            current_state=current_state,
+            nodes=nodes,
+        )
+        if terminal_result is not None:
+            return terminal_result
+        if current_state.get("force_analyst_after_material_refresh") and "analyst" not in skip_static_steps:
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name="analyst:material_refresh",
+                    node_fn=nodes["analyst"],
+                    state=current_state,
+                )
+            )
     should_run_coder = "coder" not in skip_static_steps and (
-        not is_dynamic_resume
-        or "coder" in requested_static_steps
-        or should_run_analyst
-        or should_run_static_evidence
+        not is_dynamic_resume or "coder" in requested_static_steps or should_run_analyst or should_run_static_evidence
     )
     if should_run_coder:
         current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
@@ -277,9 +422,7 @@ def _execute_static_flow(
         current_state.update(
             _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
         )
-        current_state.update(
-            _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
-        )
+        current_state.update(_run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state))
     if current_state.get("next_actions") == ["skill_harvester"]:
         harvested_state = _run_checkpointed_node(
             node_name="skill_harvester",
@@ -305,9 +448,7 @@ def _execute_static_flow(
         current_state.update(
             _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
         )
-        current_state.update(
-            _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
-        )
+        current_state.update(_run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state))
         if current_state.get("next_actions") == ["executor"]:
             executor_state = _run_checkpointed_node(
                 node_name="executor",
@@ -325,7 +466,11 @@ def _execute_static_flow(
     current_state.update(summary_state)
     execution_record = executor_state.get("execution_record")
     final_response = summary_state.get("final_response") or current_state.get("final_response") or {}
-    if execution_record and execution_record.get("success") and _final_response_requires_human_follow_up(final_response):
+    if (
+        execution_record
+        and execution_record.get("success")
+        and _final_response_requires_human_follow_up(final_response)
+    ):
         return {
             **current_state,
             "terminal_status": "waiting_for_human",
@@ -418,7 +563,9 @@ def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str
     ]
     suggested_static_actions = [
         str(item).strip()
-        for item in list(resume_overlay.get("suggested_static_actions") or execution_data.dynamic.suggested_static_actions or [])
+        for item in list(
+            resume_overlay.get("suggested_static_actions") or execution_data.dynamic.suggested_static_actions or []
+        )
         if str(item).strip()
     ]
     next_actions = [
@@ -512,9 +659,7 @@ def execute_task_flow(
             continuation = str(dynamic_state.get("dynamic_continuation") or "finish")
             if dynamic_status == "completed":
                 if continuation == "resume_static":
-                    merged_state = _merge_dynamic_research_into_static_state(
-                        {**state, **route_result, **dynamic_state}
-                    )
+                    merged_state = _merge_dynamic_research_into_static_state({**state, **route_result, **dynamic_state})
                     static_result = _execute_static_flow(
                         state={**state, **route_result, **dynamic_state, **merged_state},
                         next_actions=list(merged_state.get("next_actions") or []),

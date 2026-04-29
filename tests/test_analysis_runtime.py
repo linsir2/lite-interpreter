@@ -66,19 +66,43 @@ def test_runtime_decision_routes_macro_outlook_queries_to_dynamic_research():
 
 
 def test_runtime_decision_prefers_document_rule_analysis_for_rule_only_query():
+    exec_data = ExecutionData(
+        tenant_id="tenant",
+        task_id="task",
+        inputs={
+            "business_documents": [{"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"}],
+        },
+    )
+
     decision = resolve_runtime_decision(
         call_purpose="routing_assess",
         query="请解释审批口径和合同上传规则",
+        exec_data=exec_data,
         allowed_tools=[],
     )
 
     assert decision.analysis_mode == "document_rule_analysis"
     assert decision.final_mode == "static"
     assert decision.research_mode == "none"
+    assert decision.destinations == ("kag_retriever",)
     assert decision.continuation == "finish"
 
 
-def test_runtime_decision_marks_hybrid_mode_and_metadata():
+def test_runtime_decision_keeps_rule_keywords_as_hints_without_document_material():
+    decision = resolve_runtime_decision(
+        call_purpose="routing_assess",
+        query="请解释审批口径和合同上传规则",
+        allowed_tools=[],
+    )
+
+    assert decision.analysis_mode == "need_more_inputs"
+    assert decision.final_mode == "static"
+    assert decision.research_mode == "none"
+    assert decision.destinations == ("analyst",)
+    assert "缺少业务规则文档" in decision.known_gaps
+
+
+def test_runtime_decision_keeps_mixed_material_requests_dataset_first():
     exec_data = ExecutionData(
         tenant_id="tenant",
         task_id="task",
@@ -96,11 +120,11 @@ def test_runtime_decision_marks_hybrid_mode_and_metadata():
         allowed_tools=["knowledge_query"],
     )
 
-    assert decision.analysis_mode == "hybrid_analysis"
-    assert decision.final_mode == "hybrid"
+    assert decision.analysis_mode == "dataset_analysis"
+    assert decision.final_mode == "static"
     assert decision.research_mode == "none"
     assert decision.destinations == ("data_inspector",)
-    assert decision.route_candidates == ("hybrid", "static")
+    assert decision.route_candidates == ("static",)
     assert decision.requires_static_execution is True
 
 
@@ -113,12 +137,12 @@ def test_runtime_decision_uses_refine_model_alias_from_runtime_boundary():
         "profiles": {
             "dataset_analysis": {"evidence_strategy": "dataset_first", "routing_mode": "static"},
             "document_rule_analysis": {"evidence_strategy": "rules_first", "routing_mode": "static"},
-            "hybrid_analysis": {"evidence_strategy": "dataset_and_rules", "routing_mode": "static"},
             "dynamic_research_analysis": {"evidence_strategy": "external_research", "routing_mode": "dynamic"},
             "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
         },
         "fine_routing": {"enabled": True, "ambiguity_threshold": 0.1, "min_candidate_count": 2},
         "dynamic_patterns": ["财报", "宏观", "自己找数据"],
+        "open_exploration_patterns": ["财报", "宏观", "自己找数据"],
         "dataset_keywords": [],
         "document_keywords": [],
     }
@@ -158,12 +182,12 @@ def test_runtime_decision_marks_fallback_when_refine_unavailable():
         "profiles": {
             "dataset_analysis": {"evidence_strategy": "dataset_first", "routing_mode": "static"},
             "document_rule_analysis": {"evidence_strategy": "rules_first", "routing_mode": "static"},
-            "hybrid_analysis": {"evidence_strategy": "dataset_and_rules", "routing_mode": "static"},
             "dynamic_research_analysis": {"evidence_strategy": "external_research", "routing_mode": "dynamic"},
             "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
         },
         "fine_routing": {"enabled": True, "ambiguity_threshold": 0.1, "min_candidate_count": 2},
         "dynamic_patterns": ["财报", "宏观", "自己找数据"],
+        "open_exploration_patterns": ["财报", "宏观", "自己找数据"],
         "dataset_keywords": [],
         "document_keywords": [],
     }
@@ -192,12 +216,12 @@ def test_runtime_decision_keeps_coarse_when_fine_routing_lacks_credentials():
         "profiles": {
             "dataset_analysis": {"evidence_strategy": "dataset_first", "routing_mode": "static"},
             "document_rule_analysis": {"evidence_strategy": "rules_first", "routing_mode": "static"},
-            "hybrid_analysis": {"evidence_strategy": "dataset_and_rules", "routing_mode": "static"},
             "dynamic_research_analysis": {"evidence_strategy": "external_research", "routing_mode": "dynamic"},
             "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
         },
         "fine_routing": {"enabled": True, "ambiguity_threshold": 0.1, "min_candidate_count": 2},
         "dynamic_patterns": ["财报", "宏观", "自己找数据"],
+        "open_exploration_patterns": ["财报", "宏观", "自己找数据"],
         "dataset_keywords": [],
         "document_keywords": [],
     }
@@ -213,6 +237,63 @@ def test_runtime_decision_keeps_coarse_when_fine_routing_lacks_credentials():
     assert decision.routing_stage == "coarse"
     assert decision.fine_routing_invoked is False
     assert decision.model_alias == "fast_model"
+
+
+def test_open_exploration_refined_to_static_does_not_leave_external_metadata():
+    policy = {
+        "call_purposes": {
+            "routing_assess": {"model_alias": "fast_model"},
+            "routing_refine": {"model_alias": "reasoning_model"},
+        },
+        "profiles": {
+            "dataset_analysis": {"evidence_strategy": "dataset_first", "routing_mode": "static"},
+            "document_rule_analysis": {"evidence_strategy": "rules_first", "routing_mode": "static"},
+            "dynamic_research_analysis": {"evidence_strategy": "external_research", "routing_mode": "dynamic"},
+            "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
+        },
+        "fine_routing": {"enabled": True, "ambiguity_threshold": 0.1, "min_candidate_count": 2},
+        "single_pass_patterns": ["公开数据"],
+        "open_exploration_patterns": ["自己找数据"],
+        "dynamic_patterns": ["自己找数据"],
+        "dataset_keywords": [],
+        "document_keywords": [],
+    }
+    exec_data = ExecutionData(
+        tenant_id="tenant",
+        task_id="task",
+        inputs={
+            "structured_datasets": [
+                {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}
+            ]
+        },
+    )
+
+    with patch("src.runtime.analysis_runtime.load_analysis_runtime_policy", return_value=policy):
+        with patch("src.runtime.analysis_runtime._fine_routing_runtime_enabled", return_value=True):
+            with patch(
+                "src.runtime.analysis_runtime.run_route_selection",
+                return_value=type(
+                    "RouteResult",
+                    (),
+                    {
+                        "payload": {"final_mode": "static", "confidence": 0.91, "rationale": "local data is enough"},
+                        "degraded": False,
+                        "degrade_reason": "",
+                    },
+                )(),
+            ):
+                decision = resolve_runtime_decision(
+                    call_purpose="routing_assess",
+                    query="基于这份销售数据自己找数据验证一下",
+                    exec_data=exec_data,
+                    allowed_tools=["web_search"],
+                )
+
+    assert decision.final_mode == "static"
+    assert decision.analysis_mode == "dataset_analysis"
+    assert decision.research_mode == "none"
+    assert decision.requires_external_research is False
+    assert "外部事实核验" not in "".join(decision.known_gaps)
 
 
 def test_build_analysis_brief_keeps_dataset_rules_and_evidence_refs():
@@ -237,11 +318,11 @@ def test_build_analysis_brief_keeps_dataset_rules_and_evidence_refs():
         query="结合费用数据和规则检查合同缺失",
         exec_data=exec_data,
         knowledge_snapshot={"evidence_refs": ["rule-1"]},
-        analysis_mode="hybrid_analysis",
+        analysis_mode="dataset_analysis",
         known_gaps=[],
     )
 
-    assert brief.analysis_mode == "hybrid_analysis"
+    assert brief.analysis_mode == "dataset_analysis"
     assert brief.dataset_summaries
     assert brief.business_rules == ("合同必须上传",)
     assert brief.evidence_refs == ("rule-1",)
@@ -252,7 +333,9 @@ def test_runtime_decision_routes_single_pass_external_verification_to_static():
         tenant_id="tenant",
         task_id="task",
         inputs={
-            "structured_datasets": [{"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}]
+            "structured_datasets": [
+                {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}
+            ]
         },
     )
 
@@ -267,3 +350,53 @@ def test_runtime_decision_routes_single_pass_external_verification_to_static():
     assert decision.research_mode == "single_pass"
     assert decision.destinations == ("analyst",)
     assert decision.requires_external_research is True
+
+
+def test_runtime_decision_respects_no_network_negation_over_external_keywords():
+    exec_data = ExecutionData(
+        tenant_id="tenant",
+        task_id="task",
+        inputs={
+            "structured_datasets": [
+                {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}
+            ]
+        },
+    )
+
+    decision = resolve_runtime_decision(
+        call_purpose="routing_assess",
+        query="不要联网，基于这份销售数据查一个公开数据对比行业平均增速后再判断",
+        exec_data=exec_data,
+        allowed_tools=["web_search", "web_fetch", "knowledge_query"],
+    )
+
+    assert decision.analysis_mode == "dataset_analysis"
+    assert decision.final_mode == "static"
+    assert decision.research_mode == "none"
+    assert decision.destinations == ("analyst",)
+    assert decision.requires_external_research is False
+    assert "用户禁止联网" in "".join(decision.known_gaps)
+
+
+def test_runtime_decision_ignores_legacy_dynamic_bucket_for_single_pass_control():
+    exec_data = ExecutionData(
+        tenant_id="tenant",
+        task_id="task",
+        inputs={
+            "structured_datasets": [
+                {"file_name": "sales.csv", "path": "/tmp/sales.csv", "dataset_schema": "month,revenue"}
+            ]
+        },
+    )
+
+    decision = resolve_runtime_decision(
+        call_purpose="routing_assess",
+        query="基于这份销售数据联网对比增速",
+        exec_data=exec_data,
+        allowed_tools=["web_search", "web_fetch"],
+    )
+
+    assert decision.analysis_mode == "dataset_analysis"
+    assert decision.final_mode == "static"
+    assert decision.research_mode == "none"
+    assert decision.requires_external_research is False

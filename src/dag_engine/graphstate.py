@@ -58,6 +58,11 @@ class DagGraphState(TypedDict, total=False):
     generated_code: str
     execution_strategy: dict[str, Any]
     static_evidence_bundle: dict[str, Any]
+    evidence_compiler_source: str
+    compiled_evidence_sources: list[str]
+    evidence_material_compiled: bool
+    material_refresh_done: bool
+    material_refresh_actions: list[str]
     program_spec: dict[str, Any]
     repair_plan: dict[str, Any]
     debug_attempts: list[dict[str, Any]]

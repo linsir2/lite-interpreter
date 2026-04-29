@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import sys
 from typing import Any
@@ -14,6 +13,7 @@ from src.api.auth import auth_enabled
 from src.api.services.task_flow_service import get_startup_recovery_status
 from src.blackboard import build_strict_state_report
 from src.common.llm_client import LiteLLMClient
+from src.common.utils import module_available
 from src.dynamic_engine.runtime_backends import list_runtime_manifests
 from src.kag.compiler.lexicon import LexiconCompiler
 from src.mcp_gateway import default_mcp_server
@@ -26,14 +26,6 @@ from src.storage.repository.audit_repo import AuditRepo
 from src.storage.repository.memory_repo import MemoryRepo
 from src.storage.repository.state_repo import StateRepo
 from src.storage.vector_client import qdrant_client
-
-
-def _module_available(module_name: str) -> bool:
-    try:
-        importlib.import_module(module_name)
-        return True
-    except Exception:
-        return False
 
 
 def _probe_sidecar_health(sidecar_url: str) -> dict[str, Any]:
@@ -61,7 +53,7 @@ def build_diagnostics_report() -> dict[str, Any]:
     conda_env_ok = current_prefix.endswith(expected_suffix)
 
     deerflow_sidecar_configured = bool(str(DEERFLOW_SIDECAR_URL).strip())
-    deerflow_client_importable = _module_available("deerflow.client")
+    deerflow_client_importable = module_available("deerflow.client")
     sidecar_health = _probe_sidecar_health(DEERFLOW_SIDECAR_URL)
     mcp_tools = default_mcp_server.list_tools()
     preset_skills = load_preset_skills()
@@ -70,7 +62,9 @@ def build_diagnostics_report() -> dict[str, Any]:
     startup_recovery = get_startup_recovery_status()
     security_policy = build_security_policy_summary()
     strict_state = build_strict_state_report()
-    llm_health = {alias: status.model_dump(mode="json") for alias, status in LiteLLMClient.probe_required_aliases().items()}
+    llm_health = {
+        alias: status.model_dump(mode="json") for alias, status in LiteLLMClient.probe_required_aliases().items()
+    }
     try:
         compiled = LexiconCompiler.compile()
         compiler_health = {

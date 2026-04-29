@@ -64,18 +64,6 @@ class KnowledgeBlackboard(BaseSubBlackboard):
             tenant_data = self._storage.get(tenant_id, {})
             return tenant_data.get(task_id)
 
-    def _load_persisted_knowledge_data(self, tenant_id: str, task_id: str) -> KnowledgeData | None:
-        full_state = StateRepo.load_blackboard_state(tenant_id, task_id)
-        if not full_state or self.board_name not in full_state:
-            return None
-        payload = full_state.get(self.board_name)
-        if not isinstance(payload, dict):
-            return None
-        try:
-            return KnowledgeData(**payload)
-        except Exception:
-            return None
-
     def write(
         self,
         tenant_id: str,

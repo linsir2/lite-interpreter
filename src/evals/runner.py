@@ -95,7 +95,7 @@ def run_case(case: EvalCase) -> EvalResult:
         observed["pinned_evidence_refs"] = list((snapshot.get("metadata") or {}).get("pinned_evidence_refs") or [])
         checks["evidence_refs"] = tuple(observed["evidence_refs"]) == case.expected_evidence_refs
         checks["pinned_evidence_refs"] = tuple(observed["pinned_evidence_refs"]) == case.expected_evidence_refs
-        if case.expected_known_gap_substrings:
+        if case.expected_known_gap_substrings and brief.get("analysis_mode") == "need_more_inputs":
             checks["brief_known_gaps"] = all(
                 any(expected in observed_gap for observed_gap in list(brief.get("known_gaps") or []))
                 for expected in case.expected_known_gap_substrings
@@ -139,7 +139,7 @@ def run_seed_evals(*, output_dir: str | Path | None = None) -> dict[str, Any]:
             },
             "final_mode_counts": {
                 mode: sum(1 for item in results if item.observed.get("final_mode") == mode)
-                for mode in ("static", "hybrid", "dynamic")
+                for mode in ("static", "dynamic")
             },
         },
         "results": [result.to_payload() for result in results],

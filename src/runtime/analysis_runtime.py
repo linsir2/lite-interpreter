@@ -164,6 +164,20 @@ class AnalysisBrief:
         }
 
 
+@dataclass(frozen=True)
+class MaterialFacts:
+    has_structured_dataset: bool
+    has_business_document: bool
+    has_business_context: bool
+
+
+@dataclass(frozen=True)
+class QueryIntentHints:
+    mentions_dataset: bool
+    mentions_rule_or_doc: bool
+    asks_analysis_or_comparison: bool
+
+
 def _default_policy() -> dict[str, Any]:
     return {
         "call_purposes": {
@@ -176,12 +190,12 @@ def _default_policy() -> dict[str, Any]:
         "profiles": {
             "dataset_analysis": {"evidence_strategy": "dataset_first", "routing_mode": "static"},
             "document_rule_analysis": {"evidence_strategy": "rules_first", "routing_mode": "static"},
-            "hybrid_analysis": {"evidence_strategy": "dataset_and_rules", "routing_mode": "static"},
             "dynamic_research_analysis": {"evidence_strategy": "external_research", "routing_mode": "dynamic"},
             "need_more_inputs": {"evidence_strategy": "input_gap", "routing_mode": "static"},
         },
         "dynamic_patterns": [],
         "single_pass_patterns": [],
+        "open_exploration_patterns": [],
         "iterative_patterns": [],
         "dataset_keywords": [],
         "document_keywords": [],
@@ -255,15 +269,64 @@ def _has_business_context(exec_data: Any) -> bool:
     return bool(rules or metrics or filters)
 
 
-def _resolve_static_destinations(
+def _material_facts(exec_data: Any | None) -> MaterialFacts:
+    structured_count, document_count = _execution_inputs(exec_data)
+    return MaterialFacts(
+        has_structured_dataset=structured_count > 0,
+        has_business_document=document_count > 0,
+        has_business_context=_has_business_context(exec_data),
+    )
+
+
+def _query_intent_hints(
     *,
     query: str,
-    exec_data: Any | None,
+    lowered_query: str,
+    lexical_signals: Any,
+    dataset_keywords: Sequence[str],
     document_keywords: Sequence[str],
-    structured_count: int,
-    document_signal: bool,
+) -> QueryIntentHints:
+    analysis_markers = (
+        "分析",
+        "统计",
+        "趋势",
+        "比较",
+        "对比",
+        "核对",
+        "检查",
+        "验证",
+        "说明",
+        "解释",
+    )
+    return QueryIntentHints(
+        mentions_dataset=bool(lexical_signals.dataset_hits)
+        or any(token.lower() in lowered_query for token in dataset_keywords),
+        mentions_rule_or_doc=bool(lexical_signals.document_hits)
+        or any(token.lower() in lowered_query for token in document_keywords),
+        asks_analysis_or_comparison=any(marker in query for marker in analysis_markers),
+    )
+
+
+def _network_forbidden(query: str) -> bool:
+    lowered = str(query or "").lower()
+    phrases = (
+        "不要联网",
+        "不允许联网",
+        "不能联网",
+        "禁止联网",
+        "别联网",
+        "无需联网",
+        "without network",
+        "no network",
+        "offline only",
+    )
+    return any(phrase in lowered for phrase in phrases)
+
+
+def _resolve_static_destinations(
+    *,
+    exec_data: Any | None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    lowered_query = str(query or "").lower()
     inputs = getattr(exec_data, "inputs", None)
     structured_datasets = list(getattr(inputs, "structured_datasets", None) or [])
     business_documents = list(getattr(inputs, "business_documents", None) or [])
@@ -271,30 +334,23 @@ def _resolve_static_destinations(
     reasons: list[str] = []
 
     if structured_datasets:
-        has_uninspected_data = any(not str(getattr(dataset, "dataset_schema", "") or "").strip() for dataset in structured_datasets)
+        has_uninspected_data = any(
+            not str(getattr(dataset, "dataset_schema", "") or "").strip() for dataset in structured_datasets
+        )
         if has_uninspected_data:
             destinations.append("data_inspector")
             reasons.append("发现新增的或尚未探查的结构化文件")
 
     if business_documents:
-        has_unparsed_docs = any(str(getattr(document, "status", "") or "").strip() != "parsed" for document in business_documents)
+        has_unparsed_docs = any(
+            str(getattr(document, "status", "") or "").strip() != "parsed" for document in business_documents
+        )
         if has_unparsed_docs:
             destinations.append("kag_retriever")
             reasons.append("发现新增的业务文档，需追加提取业务规则")
         elif not _has_business_context(exec_data):
             destinations.append("kag_retriever")
             reasons.append("业务文档已存在但尚未形成业务上下文，需补齐规则准备")
-
-    if structured_count > 0 and document_signal and not _has_business_context(exec_data):
-        if "kag_retriever" not in destinations:
-            destinations.append("kag_retriever")
-        reasons.append("混合分析缺少已抽取的业务上下文，需补齐规则准备")
-
-    if not business_documents:
-        needs_business_context = any(keyword.lower() in lowered_query for keyword in document_keywords)
-        if needs_business_context and not _has_business_context(exec_data):
-            destinations.append("kag_retriever")
-            reasons.append("缺少业务上下文，需先检索规则/文档知识")
 
     if not destinations:
         destinations.append("analyst")
@@ -412,15 +468,12 @@ def _fine_routing_runtime_enabled(model_alias: str) -> bool:
 
 def _analysis_mode_for_static_branch(
     *,
-    structured_count: int,
-    document_signal: bool,
-    static_mode: str,
+    has_structured_dataset: bool,
+    has_document_material: bool,
 ) -> str:
-    if static_mode == "hybrid":
-        return "hybrid_analysis"
-    if structured_count > 0:
+    if has_structured_dataset:
         return "dataset_analysis"
-    if document_signal:
+    if has_document_material:
         return "document_rule_analysis"
     return "need_more_inputs"
 
@@ -491,70 +544,84 @@ def classify_analysis_task(
 
     policy = load_analysis_runtime_policy()
     lowered_query = str(query or "").lower()
-    dynamic_patterns = _keywords_for(policy, "dynamic_patterns")
     single_pass_patterns = _keywords_for(policy, "single_pass_patterns")
+    open_exploration_patterns = _keywords_for(policy, "open_exploration_patterns")
     iterative_patterns = _keywords_for(policy, "iterative_patterns")
     dataset_keywords = _keywords_for(policy, "dataset_keywords")
     document_keywords = _keywords_for(policy, "document_keywords")
-    structured_count, document_count = _execution_inputs(exec_data)
-    rules, metrics, filters = _business_context(exec_data)
-    known_gaps: list[str] = []
+    structured_count, _ = _execution_inputs(exec_data)
     allowed = _normalize_strings(allowed_tools)
     lexical_signals = KnowledgeCompilerService.classify_query(query)
-
-    dynamic_hits = list(
-        dict.fromkeys([match.canonical for match in lexical_signals.dynamic_hits] or [pattern for pattern in dynamic_patterns if pattern.lower() in lowered_query])
-    )
-    single_pass_hits = list(dict.fromkeys(pattern for pattern in single_pass_patterns if pattern.lower() in lowered_query))
-    iterative_hits = list(dict.fromkeys(pattern for pattern in iterative_patterns if pattern.lower() in lowered_query))
-    if not iterative_patterns and dynamic_hits:
-        iterative_hits = list(dynamic_hits)
-    dataset_signal = structured_count > 0 or bool(lexical_signals.dataset_hits) or any(
-        token.lower() in lowered_query for token in dataset_keywords
-    )
-    document_signal = (
-        document_count > 0
-        or bool(lexical_signals.document_hits)
-        or any(token.lower() in lowered_query for token in document_keywords)
-        or bool(rules or metrics or filters)
-    )
-    static_destinations, static_reasons = _resolve_static_destinations(
+    material_facts = _material_facts(exec_data)
+    intent_hints = _query_intent_hints(
         query=query,
-        exec_data=exec_data,
+        lowered_query=lowered_query,
+        lexical_signals=lexical_signals,
+        dataset_keywords=dataset_keywords,
         document_keywords=document_keywords,
-        structured_count=structured_count,
-        document_signal=document_signal,
     )
-    static_mode = "hybrid" if structured_count > 0 and document_signal else "static"
+
+    single_pass_hits = list(
+        dict.fromkeys(pattern for pattern in single_pass_patterns if pattern.lower() in lowered_query)
+    )
+    open_patterns = open_exploration_patterns or iterative_patterns
+    open_exploration_hits = list(
+        dict.fromkeys(pattern for pattern in open_patterns if pattern.lower() in lowered_query)
+    )
+    external_signal_hits = list(dict.fromkeys([*single_pass_hits, *open_exploration_hits]))
+    network_forbidden = _network_forbidden(query)
+    external_policy = (
+        "forbidden"
+        if network_forbidden
+        else "open_exploration"
+        if open_exploration_hits
+        else "bounded_single_pass"
+        if single_pass_hits
+        else "none"
+    )
+    document_material = material_facts.has_business_document or material_facts.has_business_context
+    static_destinations, static_reasons = _resolve_static_destinations(
+        exec_data=exec_data,
+    )
     static_analysis_mode = _analysis_mode_for_static_branch(
-        structured_count=structured_count,
-        document_signal=document_signal,
-        static_mode=static_mode,
+        has_structured_dataset=material_facts.has_structured_dataset,
+        has_document_material=document_material,
     )
-    requires_static_execution = bool(structured_count > 0 or "写代码" in query or "验证" in query or static_mode == "hybrid")
-    requires_external_research = bool(dynamic_hits or single_pass_hits)
+    requires_static_execution = bool(
+        material_facts.has_structured_dataset or document_material or "写代码" in query or "验证" in query
+    )
     complexity_score = _score_routing_complexity(
         query=query,
-        dynamic_hits=dynamic_hits,
+        dynamic_hits=external_signal_hits,
         structured_count=structured_count,
-        document_signal=document_signal,
+        document_signal=document_material,
         requires_static_execution=requires_static_execution,
     )
+    static_routing_reasons = list(static_reasons)
+    if network_forbidden and external_signal_hits:
+        static_routing_reasons.insert(0, "检测到禁止联网约束，已忽略外部检索信号")
 
-    if iterative_hits:
-        known_gaps.extend(gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps)
+    if external_policy == "open_exploration":
         coarse_mode = "dynamic"
         coarse_analysis_mode = "dynamic_research_analysis"
-        route_candidates = _unique_strings(("dynamic", static_mode))
-        coarse_reasons = [f"命中动态研究信号: {', '.join(iterative_hits[:3])}"]
+        route_candidates = _unique_strings(("dynamic", "static")) if requires_static_execution else ("dynamic",)
+        coarse_reasons = [f"命中动态研究信号: {', '.join(open_exploration_hits[:3])}"]
         coarse_confidence = _coarse_confidence(
             coarse_mode=coarse_mode,
             route_candidates=route_candidates,
             structured_count=structured_count,
-            document_signal=document_signal,
-            dynamic_hits=iterative_hits,
+            document_signal=document_material,
+            dynamic_hits=open_exploration_hits,
         )
-        final_mode, routing_stage, fine_routing_invoked, routing_degraded, degrade_reason, routing_confidence, fine_rationale = _maybe_refine_route_with_llm(
+        (
+            final_mode,
+            routing_stage,
+            fine_routing_invoked,
+            routing_degraded,
+            degrade_reason,
+            routing_confidence,
+            fine_rationale,
+        ) = _maybe_refine_route_with_llm(
             query=query,
             route_candidates=route_candidates,
             coarse_mode=coarse_mode,
@@ -565,6 +632,11 @@ def classify_analysis_task(
         )
         if fine_rationale:
             coarse_reasons.append(f"精筛理由: {fine_rationale}")
+        known_gaps: list[str] = []
+        if final_mode == "dynamic":
+            known_gaps.extend(gap for gap in ("需要外部事实核验", "结果可能依赖联网检索") if gap not in known_gaps)
+        elif single_pass_hits:
+            known_gaps.append("需要一次受控外部取证")
         analysis_mode = coarse_analysis_mode if final_mode == "dynamic" else static_analysis_mode
         profile_key = analysis_mode
         destinations = ("dynamic_swarm",) if final_mode == "dynamic" else static_destinations
@@ -573,97 +645,97 @@ def classify_analysis_task(
         decision_reason = coarse_reasons[0]
         supporting_reasons: list[str] = list(coarse_reasons[1:])
         if final_mode != "dynamic":
-            supporting_reasons.extend(static_reasons)
-    elif structured_count > 0 and document_signal:
-        if not rules and not metrics and not filters:
-            known_gaps.append("业务规则尚未抽取完成")
-        if requires_external_research:
+            supporting_reasons.extend(static_routing_reasons)
+    elif static_analysis_mode == "dataset_analysis":
+        known_gaps: list[str] = []
+        if external_policy == "bounded_single_pass":
             known_gaps.append("需要一次受控外部取证")
-        return _build_non_dynamic_profile(
-            policy=policy,
-            analysis_mode="hybrid_analysis",
-            research_mode="single_pass" if requires_external_research else "none",
-            final_mode="hybrid",
-            destinations=static_destinations,
-            route_candidates=("hybrid", "static"),
-            structured_count=structured_count,
-            document_signal=document_signal,
-            allowed=allowed,
-            known_gaps=known_gaps,
-            decision_reason="任务同时涉及结构化数据与业务规则/文档",
-            routing_reasons=static_reasons,
-            complexity_score=complexity_score,
-            requires_static_execution=requires_static_execution,
-            requires_external_research=requires_external_research,
-        )
-    elif structured_count > 0 or dataset_signal:
-        if structured_count == 0:
-            known_gaps.append("尚未上传结构化数据")
-        if requires_external_research:
-            known_gaps.append("需要一次受控外部取证")
+        if network_forbidden and external_signal_hits:
+            known_gaps.append("用户禁止联网，暂不执行外部事实核验")
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="dataset_analysis",
-            research_mode="single_pass" if requires_external_research else "none",
+            research_mode="single_pass" if external_policy == "bounded_single_pass" else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
             structured_count=structured_count,
-            document_signal=document_signal,
+            document_signal=document_material,
             allowed=allowed,
             known_gaps=known_gaps,
             decision_reason="任务以结构化数据分析为主",
-            routing_reasons=static_reasons,
+            routing_reasons=tuple(static_routing_reasons),
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
-            requires_external_research=requires_external_research,
+            requires_external_research=external_policy == "bounded_single_pass",
         )
-    elif document_signal:
-        if document_count == 0 and not (rules or metrics or filters):
-            known_gaps.append("缺少业务文档输入")
-        if requires_external_research:
+    elif static_analysis_mode == "document_rule_analysis":
+        known_gaps: list[str] = []
+        if external_policy == "bounded_single_pass":
             known_gaps.append("需要一次受控外部取证")
+        if network_forbidden and external_signal_hits:
+            known_gaps.append("用户禁止联网，暂不执行外部事实核验")
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="document_rule_analysis",
-            research_mode="single_pass" if requires_external_research else "none",
+            research_mode="single_pass" if external_policy == "bounded_single_pass" else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
             structured_count=structured_count,
-            document_signal=document_signal,
+            document_signal=document_material,
             allowed=allowed,
             known_gaps=known_gaps,
             decision_reason="任务以业务规则/口径解释为主",
-            routing_reasons=static_reasons,
+            routing_reasons=tuple(static_routing_reasons),
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
-            requires_external_research=requires_external_research,
+            requires_external_research=external_policy == "bounded_single_pass",
         )
     else:
-        known_gaps.extend(["缺少结构化数据", "缺少业务规则文档"])
+        known_gaps: list[str] = []
+        if intent_hints.mentions_dataset:
+            known_gaps.append("缺少结构化数据")
+        if intent_hints.mentions_rule_or_doc:
+            known_gaps.append("缺少业务规则文档")
+        if not known_gaps:
+            known_gaps.extend(["缺少结构化数据", "缺少业务规则文档"])
+        if external_policy == "bounded_single_pass":
+            known_gaps.append("需要一次受控外部取证")
+        if network_forbidden and external_signal_hits:
+            known_gaps.append("用户禁止联网，暂不执行外部事实核验")
+        if intent_hints.mentions_rule_or_doc and not intent_hints.mentions_dataset:
+            decision_reason = "任务涉及业务规则/文档，但当前缺少可用业务材料"
+        elif intent_hints.mentions_dataset and not intent_hints.mentions_rule_or_doc:
+            decision_reason = "任务需要结构化数据，但当前没有可用数据输入"
+        elif intent_hints.mentions_dataset or intent_hints.mentions_rule_or_doc:
+            decision_reason = "当前输入不足以支撑混合分析，仍缺少用户提供材料"
+        else:
+            decision_reason = "当前输入不足以支撑可靠的数据分析结论"
         return _build_non_dynamic_profile(
             policy=policy,
             analysis_mode="need_more_inputs",
-            research_mode="single_pass" if requires_external_research else "none",
+            research_mode="single_pass" if external_policy == "bounded_single_pass" else "none",
             final_mode="static",
             destinations=static_destinations,
             route_candidates=("static",),
             structured_count=structured_count,
-            document_signal=document_signal,
+            document_signal=document_material,
             allowed=allowed,
             known_gaps=known_gaps,
-            decision_reason="当前输入不足以支撑可靠的数据分析结论",
-            routing_reasons=static_reasons,
+            decision_reason=decision_reason,
+            routing_reasons=tuple(static_routing_reasons),
             complexity_score=complexity_score,
             requires_static_execution=requires_static_execution,
-            requires_external_research=requires_external_research,
+            requires_external_research=external_policy == "bounded_single_pass",
         )
 
     profile_payload = policy["profiles"][profile_key]
+    final_research_mode = "iterative" if final_mode == "dynamic" else "single_pass" if single_pass_hits else "none"
+    final_requires_external_research = final_mode == "dynamic" or bool(single_pass_hits)
     return AnalysisTaskProfile(
         analysis_mode=analysis_mode,
-        research_mode="iterative" if final_mode == "dynamic" else "single_pass",
+        research_mode=final_research_mode,
         coarse_mode=coarse_mode,
         final_mode=final_mode,
         evidence_strategy=str(profile_payload.get("evidence_strategy") or "dataset_first"),
@@ -675,7 +747,7 @@ def classify_analysis_task(
         routing_degraded=routing_degraded,
         degrade_reason=degrade_reason,
         requires_static_execution=requires_static_execution,
-        requires_external_research=True,
+        requires_external_research=final_requires_external_research,
         fine_routing_invoked=fine_routing_invoked,
         continuation=continuation,
         next_static_steps=tuple(next_static_steps),

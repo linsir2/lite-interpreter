@@ -4,6 +4,9 @@ __all__ = [
     "CausalConstraint",
     "CompiledKnowledgeState",
     "CompiledLexicon",
+    "BusinessContextDelta",
+    "EvidenceCompilationInput",
+    "EvidenceMaterialPatch",
     "FilterSpec",
     "GraphCandidate",
     "GraphCompilationResult",
@@ -47,6 +50,10 @@ def __getattr__(name: str):
         from .service import KnowledgeCompilerService
 
         return KnowledgeCompilerService
+    if name == "EvidenceMaterialPatch":
+        from .evidence import EvidenceMaterialPatch
+
+        return EvidenceMaterialPatch
     if name in {"GraphCompilationResult", "GraphCompiler", "GraphConstraintViolation", "GraphValidator"}:
         from .graph import GraphCompilationResult, GraphCompiler, GraphConstraintViolation, GraphValidator
 
@@ -58,8 +65,10 @@ def __getattr__(name: str):
         }[name]
 
     from .types import (
+        BusinessContextDelta,
         CausalConstraint,
         CompiledKnowledgeState,
+        EvidenceCompilationInput,
         FilterSpec,
         GraphCandidate,
         GraphCompilationSummaryState,
@@ -74,7 +83,9 @@ def __getattr__(name: str):
 
     types_map = {
         "CausalConstraint": CausalConstraint,
+        "BusinessContextDelta": BusinessContextDelta,
         "CompiledKnowledgeState": CompiledKnowledgeState,
+        "EvidenceCompilationInput": EvidenceCompilationInput,
         "FilterSpec": FilterSpec,
         "GraphCandidate": GraphCandidate,
         "GraphCompilationSummaryState": GraphCompilationSummaryState,

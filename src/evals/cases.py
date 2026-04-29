@@ -44,9 +44,9 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
     ),
     EvalCase(
         case_id="route_hybrid",
-        description="Dataset plus business document questions should be treated as hybrid analysis.",
+        description="Dataset plus business document questions stay on the static path without a hybrid route family.",
         query="结合费用数据和报销制度，核对哪些记录违反了含税和合同规则",
-        expected_analysis_mode="hybrid_analysis",
+        expected_analysis_mode="dataset_analysis",
         expected_route="data_inspector",
         structured_datasets=({"file_name": "expenses.csv", "path": "/tmp/expenses.csv"},),
         business_documents=({"file_name": "policy.pdf", "path": "/tmp/policy.pdf", "status": "parsed"},),
@@ -78,16 +78,17 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
     ),
     EvalCase(
         case_id="route_rules_without_doc_asset",
-        description="Business rule wording should still classify as rule analysis even before docs are uploaded.",
+        description="Rule wording alone should not route into document retrieval without business materials.",
         query="请说明审批口径和合规规则",
-        expected_analysis_mode="document_rule_analysis",
-        expected_route="kag_retriever",
+        expected_analysis_mode="need_more_inputs",
+        expected_route="analyst",
+        expected_known_gap_substrings=("缺少业务规则文档",),
     ),
     EvalCase(
         case_id="route_hybrid_with_known_rules",
-        description="Dataset questions with extracted business context stay hybrid even when docs are already parsed.",
+        description="Dataset questions with extracted business context remain dataset-first even when docs are already parsed.",
         query="结合当前数据和已抽取规则，检查合同缺失与税额缺失问题",
-        expected_analysis_mode="hybrid_analysis",
+        expected_analysis_mode="dataset_analysis",
         expected_route="analyst",
         structured_datasets=(
             {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},
@@ -97,10 +98,10 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
     ),
     EvalCase(
         case_id="context_evidence_pinning",
-        description="Context building must preserve evidence refs for rule-heavy tasks.",
+        description="Context building must preserve evidence refs even when routing still reports missing rule materials.",
         query="请总结报销规则和指标口径",
-        expected_analysis_mode="document_rule_analysis",
-        expected_route="kag_retriever",
+        expected_analysis_mode="need_more_inputs",
+        expected_route="analyst",
         knowledge_hits=(
             {
                 "chunk_id": "c1",
@@ -118,13 +119,13 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
             },
         ),
         expected_evidence_refs=("c1", "c2"),
-        expected_known_gap_substrings=("缺少业务文档输入",),
+        expected_known_gap_substrings=("缺少业务规则文档",),
     ),
     EvalCase(
         case_id="context_dataset_plus_rule",
-        description="Hybrid context briefs must keep both evidence refs and dataset/rule summaries.",
+        description="Mixed-material context briefs must keep both evidence refs and dataset/rule summaries.",
         query="结合费用数据和规则，检查合同缺失",
-        expected_analysis_mode="hybrid_analysis",
+        expected_analysis_mode="dataset_analysis",
         expected_route="analyst",
         structured_datasets=(
             {"file_name": "expenses.csv", "path": "/tmp/expenses.csv", "dataset_schema": "contract_id,tax_amount"},

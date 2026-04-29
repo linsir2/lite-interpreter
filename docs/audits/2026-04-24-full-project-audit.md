@@ -1920,3 +1920,58 @@
 2. 扩展 `scripts/create_analysis.py`：创建任务后轮询事件和详情，直到 terminal status，并验证至少一个输出合同。
 3. 将 release/CI 路径的前端安装命令统一为 `npm ci`。
 4. 为 `apps/web` 增加 bundle budget 或 benchmark baseline compare，并决定 `.gstack/benchmark-reports` 是否应转存到可审查位置。
+
+
+---
+
+## 补充审查四：上传后业务文档未预解析，解析成本被推迟到分析 DAG（2026-04-28）
+
+#### 55. 业务文档上传后没有后台预解析，导致用户创建分析时才集中等待
+
+严重级别：MEDIUM
+
+证据：
+
+- `src/api/services/asset_service.py:256`
+- `src/api/services/asset_service.py:264`
+- `src/api/services/asset_service.py:271`
+- `src/api/services/asset_service.py:471`
+- `src/dag_engine/nodes/kag_retriever.py:64`
+- `src/dag_engine/nodes/kag_retriever.py:78`
+- `src/dag_engine/nodes/kag_retriever.py:91`
+- `src/api/app_presenters.py:478`
+
+问题说明：
+
+- 用户上传 `business_document` 到资料库时，当前流程只把 workspace-level `KnowledgeData.business_documents` 同步为 `status="pending"`。
+- 真正的文档解析 / KAG builder 入库发生在分析任务 DAG 流转到 `kag_retriever_node` 之后。
+- 这意味着用户在“上传资料”阶段没有得到后台预处理收益，首次创建分析时才承担解析等待。
+- 资料库 readiness 展示也因此只能粗略显示“待处理 / 可直接分析”，无法稳定表达 `processing / parsed / failed` 这类生命周期状态。
+
+为什么重要：
+
+- 业务文档解析是高延迟步骤，不应默认阻塞用户创建分析后的 DAG 主路径。
+- 用户已经在资料库上传文件时，系统有机会提前完成解析、抽取和索引准备。
+- 如果不做预解析，后续 routing / DAG 即使设计得更清楚，也仍会把“材料准备成本”推迟到用户等待分析结果的阶段。
+- `kag_retriever` 应该是兜底 / 修复路径，而不是每份业务文档的正常首次解析入口。
+
+根因：
+
+- 上传服务只负责落盘和同步 asset metadata，没有触发后台知识构建任务。
+- workspace asset 的解析状态没有形成清晰生命周期：`uploaded -> processing -> parsed | failed`。
+- 创建分析时 attach workspace asset 只能重新构造 task-local `BusinessDocumentState`，没有可靠继承 workspace-level parse readiness。
+
+建议方向：
+
+- 在业务文档上传成功后触发后台预解析任务，异步调用现有 KAG builder / ingest pipeline。
+- 将 workspace-level 文档状态持久化为 `uploaded / processing / parsed / failed`，并保存 parser diagnostics。
+- 创建分析并 attach 已解析文档时，把 parsed 状态和 diagnostics 带入 task-local `ExecutionData.inputs.business_documents`。
+- 保留 `kag_retriever` 的兜底职责：当文档仍 pending、解析失败、索引缺失或状态过期时，再在 DAG 中重试或阻断。
+- 前端资料库 readiness 应区分处理中、可直接分析、解析失败，而不是只用“待处理”。
+
+非目标：
+
+- 本条不解决 routing 分类边界问题。
+- 本条不重写 DAG。
+- 本条不改变 `known_gaps`、`single_pass`、`iterative` 或 dynamic/static 分工。
+- routing 问题应作为单独设计 / 实现任务处理，避免和上传预解析混成一个补丁。

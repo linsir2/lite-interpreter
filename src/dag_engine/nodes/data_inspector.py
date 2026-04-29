@@ -22,6 +22,7 @@ from src.common import get_logger
 from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
 from src.prompts.inspector_prompts import DATA_INSPECTOR_SYSTEM_PROMPT, build_llm_fallback_prompt
+from src.storage.repository.knowledge_repo import KnowledgeRepo
 
 logger = get_logger(__name__)
 
@@ -44,6 +45,31 @@ def fast_llm_call(prompt: str) -> str:
         return "推测：存在嵌套表头，优先尝试 `skiprows=2, sep='|', encoding='gbk'` 读取。"
 
 
+def _catalog_inspected_dataset(
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    file_name: str,
+    dataframe: pd.DataFrame | None,
+    semantic_summary: str,
+) -> None:
+    """Register inspected structured data without making catalog persistence a DAG blocker."""
+
+    if dataframe is None or not KnowledgeRepo.structured_catalog_available():
+        return
+    try:
+        KnowledgeRepo.save_structured_data(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            file_name=file_name,
+            df=dataframe,
+            semantic_summary=semantic_summary[:2000],
+            persist=False,
+        )
+    except Exception as exc:  # pragma: no cover - repository already guards expected failures
+        logger.warning(f"[Data Inspector] 结构化数据目录注册失败，继续静态链: {exc}")
+
+
 def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
     """
     数据探查员：为结构化文件提取 Schema 和读取参数
@@ -62,6 +88,7 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
     if not exec_data or not exec_data.inputs.structured_datasets:
         logger.warning(f"任务 {task_id} 没有需要探查的结构化数据。")
         return {}
+    catalog_enabled = KnowledgeRepo.structured_catalog_available()
 
     inspection_count = 0
     inspection_failed = False
@@ -82,6 +109,7 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
 
         logger.info(f"正在探查新文件: {file_name}")
         inspection_result = {"schema": "", "load_kwargs": {}}
+        catalog_df: pd.DataFrame | None = None
         suffix = os.path.splitext(str(file_path))[-1].lower()
 
         if suffix == ".json":
@@ -97,6 +125,7 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
                 else:
                     rows = []
                 df = pd.DataFrame(rows[:200])
+                catalog_df = pd.DataFrame(rows) if catalog_enabled else None
                 inspection_result["schema"] = (
                     f"【JSON表结构】\n{df.dtypes.to_markdown() if not df.empty else 'empty'}\n\n"
                     f"【样本数据】\n{df.head(5).to_markdown() if not df.empty else 'empty'}"
@@ -104,6 +133,13 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
                 inspection_result["load_kwargs"] = {"format": "json"}
                 dataset.dataset_schema = inspection_result["schema"]
                 dataset.load_kwargs = inspection_result["load_kwargs"]
+                _catalog_inspected_dataset(
+                    tenant_id=tenant_id,
+                    workspace_id=exec_data.workspace_id,
+                    file_name=file_name,
+                    dataframe=catalog_df,
+                    semantic_summary=inspection_result["schema"],
+                )
                 execution_blackboard.write(tenant_id, task_id, exec_data)
                 execution_blackboard.persist(tenant_id, task_id)
                 inspection_count += 1
@@ -117,6 +153,8 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
             conn = duckdb.connect(":memory:")
             schema_df = conn.execute(f"DESCRIBE SELECT * FROM read_csv_auto('{file_path}')").df()
             sample_df = conn.execute(f"SELECT * FROM read_csv_auto('{file_path}') LIMIT 5").df()
+            if catalog_enabled:
+                catalog_df = conn.execute(f"SELECT * FROM read_csv_auto('{file_path}')").df()
 
             inspection_result["schema"] = (
                 f"【表结构】\n{schema_df.to_markdown()}\n\n【前5行样例】\n{sample_df.to_markdown()}"
@@ -144,6 +182,8 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
                         sep = ","
 
                 df = pd.read_csv(file_path, nrows=5, encoding=encoding, sep=sep, engine="python")
+                if catalog_enabled:
+                    catalog_df = pd.read_csv(file_path, encoding=encoding, sep=sep, engine="python")
 
                 inspection_result["schema"] = (
                     f"【表结构】\n{df.dtypes.to_markdown()}\n\n【样本数据】\n{df.head(5).to_markdown()}"
@@ -178,6 +218,13 @@ def data_inspector_node(state: DagGraphState) -> dict[str, Any]:
         if not inspection_failed:
             dataset.dataset_schema = inspection_result["schema"]
             dataset.load_kwargs = inspection_result["load_kwargs"]
+            _catalog_inspected_dataset(
+                tenant_id=tenant_id,
+                workspace_id=exec_data.workspace_id,
+                file_name=file_name,
+                dataframe=catalog_df,
+                semantic_summary=inspection_result["schema"],
+            )
             # 逐个文件增量落盘：
             # 这样如果节点在后续文件上中途崩溃，前面已经探查完成的数据集
             # 不会因为整个节点尚未结束而全部丢失。

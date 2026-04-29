@@ -68,7 +68,7 @@ def resolve_strategy_family(
     if normalized == "dynamic_research_analysis":
         return "hybrid_reconciliation"
     if normalized == "dataset_analysis":
-        return "dataset_profile"
+        return "hybrid_reconciliation" if has_business_signals else "dataset_profile"
     if structured_count and document_count:
         return "hybrid_reconciliation"
     if document_count and not structured_count:

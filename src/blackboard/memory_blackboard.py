@@ -85,18 +85,6 @@ class MemoryBlackboard(BaseSubBlackboard):
             logger.error(f"记忆数据恢复失败: {exc}", extra={"trace_id": task_id})
             return False
 
-    def _load_persisted_memory_data(self, tenant_id: str, task_id: str) -> MemoryData | None:
-        full_state = StateRepo.load_blackboard_state(tenant_id, task_id)
-        if not full_state or self.board_name not in full_state:
-            return None
-        payload = full_state.get(self.board_name)
-        if not isinstance(payload, dict):
-            return None
-        try:
-            return MemoryData(**payload)
-        except Exception:
-            return None
-
     @staticmethod
     def _is_newer_memory_data(candidate: MemoryData, current: MemoryData | None) -> bool:
         if current is None:

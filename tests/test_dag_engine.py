@@ -5,7 +5,7 @@ from unittest.mock import patch
 from src.blackboard import ExecutionData, MemoryData, execution_blackboard, global_blackboard, memory_blackboard
 from src.common import ExecutionRecord
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
-from src.dag_engine.dag_graph import execute_task_flow
+from src.dag_engine.dag_graph import _run_evidence_compiler_if_needed, execute_task_flow
 from src.dag_engine.nodes.analyst_node import analyst_node
 from src.dag_engine.nodes.auditor_node import auditor_node
 from src.dag_engine.nodes.coder_node import coder_node
@@ -20,8 +20,8 @@ from src.dag_engine.nodes.static_codegen_payload import (
     build_static_codegen_payload,
     build_static_generation_directives,
 )
-from src.dag_engine.nodes.static_generation_registry import build_static_generation_bundle
 from src.dag_engine.nodes.static_evidence_node import static_evidence_node
+from src.dag_engine.nodes.static_generation_registry import build_static_generation_bundle
 from src.dag_engine.nodes.summarizer_node import summarizer_node
 from src.dynamic_engine.deerflow_bridge import DeerflowTaskResult
 from src.mcp_gateway.tools.sandbox_exec_tool import normalize_execution_result
@@ -168,7 +168,7 @@ def test_router_routes_complex_task_to_dynamic_swarm():
     assert result["execution_intent"]["metadata"]["routing_stage"] in {"coarse", "fine", "fallback"}
 
 
-def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
+def test_router_keeps_mixed_material_static_even_when_query_is_long():
     tenant_id = "tenant_hybrid_long"
     task_id = global_blackboard.create_task(tenant_id, "ws_hybrid_long", "placeholder")
     execution_blackboard.write(
@@ -195,8 +195,8 @@ def test_router_keeps_hybrid_analysis_static_even_when_query_is_long():
         }
     )
 
-    assert result["execution_intent"]["metadata"]["analysis_mode"] == "hybrid_analysis"
-    assert result["execution_intent"]["metadata"]["final_mode"] == "hybrid"
+    assert result["execution_intent"]["metadata"]["analysis_mode"] == "dataset_analysis"
+    assert result["execution_intent"]["metadata"]["final_mode"] == "static"
     assert result["next_actions"] != ["dynamic_swarm"]
 
 
@@ -551,6 +551,163 @@ def test_dynamic_resume_does_not_follow_analyst_into_static_evidence():
     assert called == ["analyst", "coder"]
 
 
+def test_static_evidence_material_refresh_runs_inspector_before_coder():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-static-evidence-refresh",
+            "task_id": "task-static-evidence-refresh",
+            "workspace_id": "ws-static-evidence-refresh",
+            "input_query": "查公开事实再分析",
+        },
+        nodes={
+            "router": lambda state: {"next_actions": []},
+            "dynamic_swarm": lambda state: {},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: called.append("data_inspector") or {},
+            "kag_retriever": lambda state: called.append("kag_retriever") or {},
+            "context_builder": lambda state: called.append("context_builder") or {},
+            "analyst": lambda state: called.append("analyst") or {"next_actions": ["static_evidence"]},
+            "static_evidence": lambda state: (
+                called.append("static_evidence") or {"static_evidence_bundle": {"records": [{"text": "Q1=1"}]}}
+            ),
+            "evidence_compiler": lambda state: (
+                called.append(f"evidence_compiler:{state.get('evidence_compiler_source')}")
+                or {
+                    "material_refresh_actions": ["data_inspector"],
+                }
+            ),
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == [
+        "analyst",
+        "static_evidence",
+        "evidence_compiler:static_evidence",
+        "data_inspector",
+        "analyst",
+        "coder",
+    ]
+
+
+def test_dynamic_resume_material_refresh_uses_shared_compiler_once():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-dynamic-refresh",
+            "task_id": "task-dynamic-refresh",
+            "workspace_id": "ws-dynamic-refresh",
+            "input_query": "research then code",
+        },
+        nodes={
+            "router": lambda state: {"next_actions": ["dynamic_swarm"]},
+            "dynamic_swarm": lambda state: {
+                "dynamic_status": "completed",
+                "dynamic_continuation": "resume_static",
+                "dynamic_resume_overlay": {
+                    "continuation": "resume_static",
+                    "next_static_steps": ["coder"],
+                },
+                "dynamic_research_findings": ["2024Q1 revenue = 1"],
+            },
+            "evidence_compiler": lambda state: (
+                called.append(f"evidence_compiler:{state.get('evidence_compiler_source')}")
+                or {
+                    "material_refresh_actions": ["data_inspector"],
+                }
+            ),
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: called.append("data_inspector") or {},
+            "kag_retriever": lambda state: called.append("kag_retriever") or {},
+            "context_builder": lambda state: called.append("context_builder") or {},
+            "analyst": lambda state: called.append("analyst") or {},
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert called == ["evidence_compiler:dynamic_resume", "data_inspector", "analyst", "coder"]
+
+
+def test_evidence_compiler_tracks_compiled_sources_independently():
+    called: list[str] = []
+    state = {
+        "tenant_id": "tenant-evidence-sources",
+        "task_id": "task-evidence-sources",
+        "workspace_id": "ws-evidence-sources",
+        "input_query": "research then verify",
+    }
+    nodes = {
+        "evidence_compiler": lambda current: (
+            called.append(str(current.get("evidence_compiler_source")))
+            or {
+                "material_refresh_actions": ["data_inspector"],
+            }
+        )
+    }
+
+    state = _run_evidence_compiler_if_needed(current_state=state, nodes=nodes, source="dynamic_resume")
+    state = _run_evidence_compiler_if_needed(current_state=state, nodes=nodes, source="static_evidence")
+    state = _run_evidence_compiler_if_needed(current_state=state, nodes=nodes, source="dynamic_resume")
+
+    assert called == ["dynamic_resume", "static_evidence"]
+    assert state["compiled_evidence_sources"] == ["dynamic_resume", "static_evidence"]
+    assert state["evidence_material_compiled"] is True
+    assert state["material_refresh_done"] is False
+
+
+def test_material_refresh_hits_only_runs_context_builder_not_kag():
+    called: list[str] = []
+
+    result = execute_task_flow(
+        {
+            "tenant_id": "tenant-hit-refresh",
+            "task_id": "task-hit-refresh",
+            "workspace_id": "ws-hit-refresh",
+            "input_query": "查公开事实再分析",
+        },
+        nodes={
+            "router": lambda state: {"next_actions": []},
+            "dynamic_swarm": lambda state: {},
+            "skill_harvester": lambda state: {},
+            "summarizer": lambda state: {"final_response": {"mode": "static"}},
+            "data_inspector": lambda state: called.append("data_inspector") or {},
+            "kag_retriever": lambda state: called.append("kag_retriever") or {},
+            "context_builder": lambda state: called.append("context_builder") or {},
+            "analyst": lambda state: called.append("analyst") or {"next_actions": ["static_evidence"]},
+            "static_evidence": lambda state: (
+                called.append("static_evidence") or {"static_evidence_bundle": {"records": [{"text": "source text"}]}}
+            ),
+            "evidence_compiler": lambda state: (
+                called.append("evidence_compiler")
+                or {
+                    "material_refresh_actions": ["context_builder"],
+                }
+            ),
+            "coder": lambda state: called.append("coder") or {"code": "print('ok')"},
+            "auditor": lambda state: {"next_actions": ["executor"]},
+            "debugger": lambda state: {},
+            "executor": lambda state: {"execution_record": {"success": True, "output": "ok"}},
+        },
+    )
+
+    assert result["terminal_status"] == "success"
+    assert "context_builder" in called
+    assert "kag_retriever" not in called
+
+
 def test_dynamic_resume_overlay_wins_when_legacy_steps_conflict():
     called: list[str] = []
 
@@ -618,7 +775,9 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
         recommended_skill={"source": "dynamic_swarm", "source_task_type": "dynamic_task"},
         trace=[],
     )
-    monkeypatch.setattr("src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", lambda self, request, on_event=None: fake_result)
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.dynamic_swarm_node.DeerflowBridge.run", lambda self, request, on_event=None: fake_result
+    )
 
     result = execute_task_flow(
         {
@@ -780,11 +939,25 @@ def test_dynamic_swarm_node_aborts_when_lease_is_lost_mid_event(monkeypatch):
         raise AssertionError("dynamic_swarm_node should stop on lease loss")
 
 
-def test_data_inspector_persists_successful_schema_updates(tmp_path):
+def test_data_inspector_persists_successful_schema_updates(tmp_path, monkeypatch):
     tenant_id = "tenant_inspector"
     task_id = global_blackboard.create_task(tenant_id, "ws_inspector", "inspect dataset")
     csv_path = tmp_path / "sales.csv"
     csv_path.write_text("col1,col2\n1,2\n3,4\n", encoding="utf-8")
+    catalog_calls: list[dict[str, object]] = []
+
+    def fake_save_structured_data(**kwargs):
+        catalog_calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.data_inspector.KnowledgeRepo.save_structured_data",
+        fake_save_structured_data,
+    )
+    monkeypatch.setattr(
+        "src.dag_engine.nodes.data_inspector.KnowledgeRepo.structured_catalog_available",
+        lambda: True,
+    )
     execution_blackboard.write(
         tenant_id,
         task_id,
@@ -819,6 +992,10 @@ def test_data_inspector_persists_successful_schema_updates(tmp_path):
     assert restored is not None
     assert restored.inputs.structured_datasets[0].dataset_schema
     assert restored.inputs.structured_datasets[0].load_kwargs == {}
+    assert len(catalog_calls) == 1
+    assert catalog_calls[0]["tenant_id"] == tenant_id
+    assert catalog_calls[0]["workspace_id"] == "ws_inspector"
+    assert catalog_calls[0]["file_name"] == "sales.csv"
 
 
 def test_data_inspector_handles_json_structured_dataset(tmp_path):
@@ -1016,7 +1193,10 @@ def test_execute_task_flow_degrades_to_static_path_when_dynamic_is_denied():
             },
             "dynamic_swarm": lambda state: {"dynamic_status": "denied", "dynamic_summary": "policy denied"},
             "skill_harvester": lambda state: {},
-            "summarizer": lambda state: {"final_response": {"mode": "fallback"}, "observed_degrade_reason": state.get("degrade_reason")},
+            "summarizer": lambda state: {
+                "final_response": {"mode": "fallback"},
+                "observed_degrade_reason": state.get("degrade_reason"),
+            },
             "data_inspector": lambda state: {},
             "kag_retriever": lambda state: {},
             "context_builder": lambda state: {},
@@ -1225,7 +1405,12 @@ def test_static_nodes_form_minimal_safe_chain():
                 ],
             },
             knowledge={
-                "business_context": {"rules": ["报销金额需含税"], "metrics": [], "filters": [], "sources": ["rule.pdf"]},
+                "business_context": {
+                    "rules": ["报销金额需含税"],
+                    "metrics": [],
+                    "filters": [],
+                    "sources": ["rule.pdf"],
+                },
                 "compiled": {
                     "rule_specs": [
                         {
@@ -1700,7 +1885,13 @@ def test_build_dataset_aware_code_includes_directive_driven_sections():
         "analysis_mode": "static",
         "analysis_brief": {},
         "business_context": {"rules": [], "metrics": [], "filters": []},
-        "compiled_knowledge": {"rule_specs": [], "metric_specs": [], "filter_specs": [], "spec_parse_errors": [], "graph_compilation_summary": {}},
+        "compiled_knowledge": {
+            "rule_specs": [],
+            "metric_specs": [],
+            "filter_specs": [],
+            "spec_parse_errors": [],
+            "graph_compilation_summary": {},
+        },
         "approved_skills": [],
         "skill_strategy_hints": [],
         "refined_context_excerpt": "",
@@ -1847,7 +2038,13 @@ def test_build_dataset_aware_code_supports_json_structured_inputs(tmp_path):
         "analysis_mode": "static",
         "analysis_brief": {},
         "business_context": {"rules": [], "metrics": [], "filters": []},
-        "compiled_knowledge": {"rule_specs": [], "metric_specs": [], "filter_specs": [], "spec_parse_errors": [], "graph_compilation_summary": {}},
+        "compiled_knowledge": {
+            "rule_specs": [],
+            "metric_specs": [],
+            "filter_specs": [],
+            "spec_parse_errors": [],
+            "graph_compilation_summary": {},
+        },
         "approved_skills": [],
         "skill_strategy_hints": [],
         "refined_context_excerpt": "",
@@ -1997,7 +2194,9 @@ def test_summarizer_node_builds_static_final_response():
                             "measure_terms": ["审批时效"],
                             "group_terms": ["contract_id"],
                             "preferred_date_terms": ["biz_date"],
-                            "temporal_constraints": [{"anchor_type": "year", "value": "2024", "source_text": "审批时效口径"}],
+                            "temporal_constraints": [
+                                {"anchor_type": "year", "value": "2024", "source_text": "审批时效口径"}
+                            ],
                         }
                     ],
                     "filter_specs": [
@@ -2091,7 +2290,10 @@ def test_summarizer_node_builds_static_final_response():
     assert result["final_response"]["details"]["knowledge_snapshot"]["rewritten_query"] == "报销 规则 上海"
     assert result["final_response"]["details"]["knowledge_snapshot"]["metadata"]["preferred_date_terms"] == ["biz_date"]
     assert result["final_response"]["details"]["analysis_brief"]["question"] == ""
-    assert result["final_response"]["details"]["compiled_knowledge"]["rule_specs"][0]["source_text"] == "报销金额必须含税并上传合同"
+    assert (
+        result["final_response"]["details"]["compiled_knowledge"]["rule_specs"][0]["source_text"]
+        == "报销金额必须含税并上传合同"
+    )
     assert result["final_response"]["details"]["compiled_knowledge"]["graph_compilation_summary"]["accepted_count"] == 2
     assert result["final_response"]["details"]["approved_skills"][0]["name"] == "approved_skill_demo"
     assert result["final_response"]["details"]["skill_strategy_hints"][0]["name"] == "approved_skill_demo"

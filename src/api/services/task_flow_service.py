@@ -36,6 +36,7 @@ from src.dag_engine.nodes.context_builder_node import context_builder_node
 from src.dag_engine.nodes.data_inspector import data_inspector_node
 from src.dag_engine.nodes.debugger_node import debugger_node
 from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
+from src.dag_engine.nodes.evidence_compiler_node import evidence_compiler_node
 from src.dag_engine.nodes.executor_node import executor_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
 from src.dag_engine.nodes.router_node import router_node
@@ -178,6 +179,7 @@ async def _run_task_flow(
                     "context_builder": context_builder_node,
                     "analyst": analyst_node,
                     "static_evidence": static_evidence_node,
+                    "evidence_compiler": evidence_compiler_node,
                     "coder": coder_node,
                     "auditor": auditor_node,
                     "debugger": debugger_node,

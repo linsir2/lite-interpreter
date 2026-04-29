@@ -10,7 +10,6 @@ src/storage/postgres_client.py
 
 from __future__ import annotations
 
-import importlib
 import json
 from typing import Any
 
@@ -19,18 +18,10 @@ from config.settings import POSTGRES_URI
 from sqlalchemy import bindparam, create_engine, text
 
 from src.common.logger import get_logger
-from src.common.utils import scope_identifier_to_db_name
+from src.common.utils import module_available, scope_identifier_to_db_name
 from src.storage.schema import DocChunk
 
 logger = get_logger(__name__)
-
-
-def _module_available(module_name: str) -> bool:
-    try:
-        importlib.import_module(module_name)
-        return True
-    except Exception:
-        return False
 
 
 def _resolve_postgres_uri(raw_uri: str) -> tuple[str, str]:
@@ -38,9 +29,9 @@ def _resolve_postgres_uri(raw_uri: str) -> tuple[str, str]:
     if normalized.startswith("postgresql+"):
         driver = normalized.split("://", 1)[0].split("+", 1)[1]
         return normalized, driver
-    if _module_available("psycopg"):
+    if module_available("psycopg"):
         return normalized.replace("postgresql://", "postgresql+psycopg://", 1), "psycopg"
-    if _module_available("psycopg2"):
+    if module_available("psycopg2"):
         return normalized.replace("postgresql://", "postgresql+psycopg2://", 1), "psycopg2"
     raise ModuleNotFoundError("Postgres driver unavailable: install `psycopg` or `psycopg2`")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import importlib
 import os
 import re
 import time
@@ -42,6 +43,14 @@ def truncate_string(s: str, max_length: int = LOG_MAX_LENGTH) -> str:
 
 def get_current_timestamp() -> float:
     return time.time()
+
+
+def module_available(module_name: str) -> bool:
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:
+        return False
 
 
 def build_tenant_key(board_name: str, tenant_id: str, key: str) -> str:

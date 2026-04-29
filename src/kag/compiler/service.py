@@ -4,9 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .evidence import EvidenceMaterialPatch, compile_external_evidence
 from .lexicon import LexiconMatcher, QueryLexicalSignals
 from .parser import SpecCompilationResult, SpecCompiler
-from .types import FilterSpec, LexiconMatch, MetricSpec, RuleSpec, SpecParseError
+from .types import (
+    EvidenceCompilationInput,
+    FilterSpec,
+    LexiconMatch,
+    MetricSpec,
+    RuleSpec,
+    SpecParseError,
+)
 
 
 class KnowledgeCompilerService:
@@ -52,3 +60,7 @@ class KnowledgeCompilerService:
         filters: Iterable[str],
     ) -> SpecCompilationResult:
         return cls._spec_compiler.compile_business_context(rules=rules, metrics=metrics, filters=filters)
+
+    @classmethod
+    def compile_external_evidence(cls, compilation_input: EvidenceCompilationInput) -> EvidenceMaterialPatch:
+        return compile_external_evidence(compilation_input)

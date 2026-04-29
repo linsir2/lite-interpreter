@@ -26,6 +26,10 @@ logger = get_logger(__name__)
 
 class KnowledgeRepo:
     @classmethod
+    def structured_catalog_available(cls) -> bool:
+        return bool(getattr(pg_client, "engine", None))
+
+    @classmethod
     def save_chunks_and_embeddings(
         cls,
         tenant_id: str,
@@ -84,6 +88,9 @@ class KnowledgeRepo:
         semantic_summary: str | None,
         persist: bool = False,
     ):
+        if not cls.structured_catalog_available():
+            logger.info("[KnowledgeRepo] Postgres 未初始化，跳过结构化数据目录注册。")
+            return None
         try:
             safe_name = file_name.replace(".", "_").replace("-", "_").lower()
             timestamp = get_utc_now().strftime("%Y%m%d_%H%M")
