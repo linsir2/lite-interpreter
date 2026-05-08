@@ -14,17 +14,18 @@ from src.dag_engine.nodes.static_generation_registry import build_static_generat
 
 @dataclass(frozen=True)
 class PreparedStaticCodegen:
-    """All artifacts required by the static coder node."""
+    """Artifacts required by the static coder node.
+
+    execution_strategy is NOT included — it is owned by the analyst and
+    read from blackboard, never overwritten by coder/debugger.
+    """
 
     generated_code: str
     input_mounts: list[dict[str, Any]]
-    execution_strategy: dict[str, Any]
     static_evidence_bundle: dict[str, Any]
     program_spec: dict[str, Any]
     repair_plan: dict[str, Any]
     generator_manifest: dict[str, Any]
-    artifact_plan: dict[str, Any]
-    verification_plan: dict[str, Any]
 
 
 def prepare_static_codegen(
@@ -84,7 +85,7 @@ def prepare_static_codegen(
         open_questions=list(execution_metadata.get("open_questions") or []),
         strategy_family=execution_metadata.get("strategy_family"),
     )
-    generated_code, execution_strategy, generator_manifest = build_static_generation_bundle(
+    generated_code, generator_manifest, program_spec = build_static_generation_bundle(
         payload,
         dynamic_resume_overlay=dynamic_resume_overlay if dynamic_resume_overlay.continuation == "resume_static" else None,
         repair_plan=(
@@ -95,20 +96,20 @@ def prepare_static_codegen(
     return PreparedStaticCodegen(
         generated_code=generated_code,
         input_mounts=input_mounts,
-        execution_strategy=execution_strategy.model_dump(mode="json"),
         static_evidence_bundle=(
             exec_data.static.static_evidence_bundle.model_dump(mode="json")
             if getattr(exec_data.static, "static_evidence_bundle", None)
             else {}
         ),
-        program_spec=execution_strategy.program_spec.model_dump(mode="json") if execution_strategy.program_spec else {},
-        repair_plan=execution_strategy.repair_plan.model_dump(mode="json") if execution_strategy.repair_plan else {},
+        program_spec=program_spec.model_dump(mode="json") if program_spec else {},
+        repair_plan=(
+            state.get("repair_plan")
+            or (exec_data.static.repair_plan.model_dump(mode="json") if getattr(exec_data.static, "repair_plan", None) else None)
+        ) or {},
         generator_manifest=generator_manifest.model_dump(mode="json"),
-        artifact_plan=execution_strategy.artifact_plan.model_dump(mode="json"),
-        verification_plan=execution_strategy.verification_plan.model_dump(mode="json"),
     )
 
 
 def build_dataset_aware_code(payload: dict[str, Any]) -> str:
-    generated_code, _strategy, _manifest = build_static_generation_bundle(payload)
+    generated_code, *_ = build_static_generation_bundle(payload)
     return generated_code

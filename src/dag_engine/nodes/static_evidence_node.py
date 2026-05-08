@@ -167,7 +167,7 @@ def static_evidence_node(state: DagGraphState) -> dict[str, Any]:
         }
     )
     exec_data.static.static_evidence_bundle = bundle
-    strategy.evidence_plan = evidence_plan
+    strategy = strategy.model_copy(update={"evidence_plan": evidence_plan})
     exec_data.static.execution_strategy = strategy
     mount = _persist_bundle_file(
         tenant_id=tenant_id,

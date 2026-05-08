@@ -14,7 +14,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.common.contracts import (
-    ArtifactPlan,
     ArtifactVerificationResult,
     DebugAttemptRecord,
     DynamicResumeOverlay,
@@ -26,7 +25,6 @@ from src.common.contracts import (
     StaticProgramSpec,
     StaticRepairPlan,
     TaskEnvelope,
-    VerificationPlan,
 )
 from src.common.control_plane import parser_reports_from_documents
 from src.common.utils import get_utc_now
@@ -440,8 +438,6 @@ class NodeOutputPatchState(StrictStateModel):
     repair_plan: StaticRepairPlan | None = None
     debug_attempts: list[DebugAttemptRecord] = Field(default_factory=list)
     generator_manifest: GeneratorManifest | None = None
-    artifact_plan: ArtifactPlan | None = None
-    verification_plan: VerificationPlan | None = None
     artifact_verification: ArtifactVerificationResult | None = None
     input_mounts: list[InputMountState] = Field(default_factory=list)
     audit_result: AuditResultState = Field(default_factory=AuditResultState)
@@ -503,10 +499,6 @@ class NodeOutputPatchState(StrictStateModel):
         )
         if self.generator_manifest is not None and not isinstance(self.generator_manifest, GeneratorManifest):
             object.__setattr__(self, "generator_manifest", GeneratorManifest.model_validate(self.generator_manifest))
-        if self.artifact_plan is not None and not isinstance(self.artifact_plan, ArtifactPlan):
-            object.__setattr__(self, "artifact_plan", ArtifactPlan.model_validate(self.artifact_plan))
-        if self.verification_plan is not None and not isinstance(self.verification_plan, VerificationPlan):
-            object.__setattr__(self, "verification_plan", VerificationPlan.model_validate(self.verification_plan))
         if self.artifact_verification is not None and not isinstance(
             self.artifact_verification, ArtifactVerificationResult
         ):
@@ -697,7 +689,6 @@ class ExecutionKnowledgeState(StrictStateModel):
 class ExecutionStaticState(StrictStateModel):
     """Static execution chain outputs and execution results."""
 
-    analysis_plan: str | None = None
     generated_code: str | None = None
     execution_strategy: ExecutionStrategy | None = None
     static_evidence_bundle: StaticEvidenceBundle | None = None
@@ -705,8 +696,6 @@ class ExecutionStaticState(StrictStateModel):
     repair_plan: StaticRepairPlan | None = None
     debug_attempts: list[DebugAttemptRecord] = Field(default_factory=list)
     generator_manifest: GeneratorManifest | None = None
-    artifact_plan: ArtifactPlan | None = None
-    verification_plan: VerificationPlan | None = None
     artifact_verification: ArtifactVerificationResult | None = None
     latest_error_traceback: str | None = None
     audit_result: AuditResultState | None = None
@@ -736,10 +725,6 @@ class ExecutionStaticState(StrictStateModel):
         )
         if self.generator_manifest is not None and not isinstance(self.generator_manifest, GeneratorManifest):
             object.__setattr__(self, "generator_manifest", GeneratorManifest.model_validate(self.generator_manifest))
-        if self.artifact_plan is not None and not isinstance(self.artifact_plan, ArtifactPlan):
-            object.__setattr__(self, "artifact_plan", ArtifactPlan.model_validate(self.artifact_plan))
-        if self.verification_plan is not None and not isinstance(self.verification_plan, VerificationPlan):
-            object.__setattr__(self, "verification_plan", VerificationPlan.model_validate(self.verification_plan))
         if self.artifact_verification is not None and not isinstance(
             self.artifact_verification, ArtifactVerificationResult
         ):

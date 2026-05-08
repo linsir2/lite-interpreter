@@ -11,7 +11,6 @@ from .global_blackboard import GlobalBlackboard, global_blackboard
 from .knowledge_blackboard import KnowledgeBlackboard, knowledge_blackboard
 from .memory_blackboard import MemoryBlackboard, memory_blackboard
 from .schema import (
-    ArtifactPlan,
     ArtifactVerificationResult,
     AuditResultState,
     BusinessContextState,
@@ -50,14 +49,12 @@ from .schema import (
     StructuredDatasetState,
     TaskGlobalState,
     TaskMemorySummaryState,
-    VerificationPlan,
     WorkspacePreferenceState,
 )
 from .strict_state import build_strict_state_report
 
 __all__ = [
     "BaseSubBlackboard",
-    "ArtifactPlan",
     "ArtifactVerificationResult",
     "AuditResultState",
     "BusinessContextState",
@@ -77,7 +74,6 @@ __all__ = [
     "KnowledgeSnapshotState",
     "MemoryCacheHintState",
     "TaskMemorySummaryState",
-    "VerificationPlan",
     "WorkspacePreferenceState",
     "NodeOutputPatchState",
     "NodeCheckpointState",

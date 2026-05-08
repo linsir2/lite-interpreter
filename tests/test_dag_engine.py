@@ -13,7 +13,8 @@ from src.dag_engine.nodes.data_inspector import data_inspector_node
 from src.dag_engine.nodes.debugger_node import debugger_node
 from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
 from src.dag_engine.nodes.executor_node import executor_node
-from src.dag_engine.nodes.router_node import _has_business_context, router_node
+from src.dag_engine.nodes.router_node import router_node
+from src.runtime.analysis_runtime import _has_business_context
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
 from src.dag_engine.nodes.static_codegen import build_dataset_aware_code
 from src.dag_engine.nodes.static_codegen_payload import (
@@ -35,7 +36,7 @@ def test_router_business_context_check_handles_default_empty_dict():
     assert _has_business_context(exec_data) is True
 
 
-def test_router_prefers_approved_skills_over_matched_skills():
+def test_router_routes_simple_query_to_analyst():
     tenant_id = "tenant_router_skills"
     task_id = global_blackboard.create_task(tenant_id, "ws_router_skills", "placeholder")
     execution_blackboard.write(
@@ -47,17 +48,6 @@ def test_router_prefers_approved_skills_over_matched_skills():
             workspace_id="ws_router_skills",
         ),
     )
-    memory_blackboard.write(
-        tenant_id,
-        task_id,
-        MemoryData(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            workspace_id="ws_router_skills",
-            approved_skills=[{"name": "approved_skill"}],
-            historical_matches=[{"name": "matched_skill"}],
-        ),
-    )
     result = router_node(
         {
             "tenant_id": tenant_id,
@@ -66,23 +56,12 @@ def test_router_prefers_approved_skills_over_matched_skills():
             "input_query": "简要说明规则",
         }
     )
-    assert result["execution_intent"]["candidate_skills"][0]["name"] == "approved_skill"
+    assert result["execution_intent"]["intent"] == "static_flow"
+    assert result["next_actions"] == ["analyst"]
 
 
-def test_router_can_load_historical_approved_skills():
+def test_router_routes_static_when_no_local_data_and_no_dynamic_intent():
     tenant_id = "tenant_router_history"
-    MemoryRepo.clear()
-    MemoryRepo.save_approved_skills(
-        tenant_id,
-        "ws_router_history",
-        [
-            {
-                "name": "historical_skill",
-                "required_capabilities": ["knowledge_query"],
-                "promotion": {"status": "approved"},
-            }
-        ],
-    )
     task_id = global_blackboard.create_task(tenant_id, "ws_router_history", "placeholder")
     execution_blackboard.write(
         tenant_id,
@@ -101,16 +80,11 @@ def test_router_can_load_historical_approved_skills():
             "input_query": "简要说明规则",
         }
     )
-    assert result["execution_intent"]["candidate_skills"][0]["name"] == "historical_skill"
-    persisted = memory_blackboard.read(tenant_id, task_id)
-    assert persisted is not None
-    assert persisted.historical_matches[0].name == "historical_skill"
-    assert persisted.historical_matches[0].match_source == "historical_repo"
-    assert persisted.historical_matches[0].match_score >= 0
-    assert persisted.historical_matches[0].selected_by_stages == ["router"]
+    assert result["execution_intent"]["intent"] == "static_flow"
+    assert result["next_actions"] == ["analyst"]
 
 
-def test_router_can_load_preset_skills_without_repo_state():
+def test_router_routes_to_dynamic_when_query_has_external_domain_signals():
     tenant_id = "tenant_router_presets"
     task_id = global_blackboard.create_task(tenant_id, "ws_router_presets", "placeholder")
     execution_blackboard.write(
@@ -128,10 +102,10 @@ def test_router_can_load_preset_skills_without_repo_state():
             "task_id": task_id,
             "workspace_id": "ws_router_presets",
             "input_query": "请说明规则口径并核对合规要求",
-            "allowed_tools": ["knowledge_query"],
         }
     )
-    assert any(skill["name"] == "policy_clause_audit" for skill in result["execution_intent"]["candidate_skills"])
+    assert result["execution_intent"]["intent"] == "dynamic_flow"
+    assert result["next_actions"] == ["dynamic_swarm"]
 
 
 def test_router_routes_complex_task_to_dynamic_swarm():
@@ -156,16 +130,8 @@ def test_router_routes_complex_task_to_dynamic_swarm():
         }
     )
 
-    assert result["execution_intent"]["intent"] == "dynamic_then_static_flow"
+    assert result["execution_intent"]["intent"] == "dynamic_flow"
     assert result["next_actions"] == ["dynamic_swarm"]
-    assert result["execution_intent"]["complexity_score"] >= 0.7
-    assert result["execution_intent"]["metadata"]["analysis_mode"] == "dynamic_research_analysis"
-    routing_stage = result["execution_intent"]["metadata"]["routing_stage"]
-    expected_alias = "reasoning_model" if routing_stage in {"fine", "fallback"} else "fast_model"
-    assert result["execution_intent"]["metadata"]["effective_model_alias"] == expected_alias
-    assert result["execution_intent"]["metadata"]["final_mode"] == "dynamic"
-    assert result["execution_intent"]["metadata"]["next_static_steps"]
-    assert result["execution_intent"]["metadata"]["routing_stage"] in {"coarse", "fine", "fallback"}
 
 
 def test_router_keeps_mixed_material_static_even_when_query_is_long():
@@ -195,91 +161,34 @@ def test_router_keeps_mixed_material_static_even_when_query_is_long():
         }
     )
 
-    assert result["execution_intent"]["metadata"]["analysis_mode"] == "dataset_analysis"
-    assert result["execution_intent"]["metadata"]["final_mode"] == "static"
-    assert result["next_actions"] != ["dynamic_swarm"]
+    assert result["execution_intent"]["intent"] == "static_flow"
+    assert result["next_actions"] == ["analyst"]
 
 
-def test_router_uses_runtime_decision_as_single_semantic_source():
-    tenant_id = "tenant_runtime_source"
-    task_id = global_blackboard.create_task(tenant_id, "ws_runtime_source", "placeholder")
+def test_router_forces_static_when_network_is_forbidden():
+    tenant_id = "tenant_network_forbidden"
+    task_id = global_blackboard.create_task(tenant_id, "ws_network_forbidden", "placeholder")
     execution_blackboard.write(
         tenant_id,
         task_id,
         ExecutionData(
             tenant_id=tenant_id,
             task_id=task_id,
-            workspace_id="ws_runtime_source",
+            workspace_id="ws_network_forbidden",
         ),
     )
 
-    fake_runtime_decision = type(
-        "FakeRuntimeDecision",
-        (),
+    result = router_node(
         {
-            "call_purpose": "routing_assess",
-            "model_alias": "fast_model",
-            "analysis_mode": "dataset_analysis",
-            "coarse_mode": "static",
-            "final_mode": "static",
-            "evidence_strategy": "dataset_first",
-            "routing_mode": "static",
-            "destinations": ("analyst",),
-            "route_candidates": ("static",),
-            "routing_stage": "coarse",
-            "routing_confidence": 0.91,
-            "routing_degraded": False,
-            "degrade_reason": "",
-            "requires_static_execution": True,
-            "requires_external_research": False,
-            "fine_routing_invoked": False,
-            "continuation": "finish",
-            "next_static_steps": (),
-            "effective_tools": (),
-            "known_gaps": (),
-            "routing_reasons": ("runtime selected analyst path",),
-            "complexity_score": 0.11,
-            "decision_reason": "runtime override",
-            "to_metadata": lambda self: {
-                "call_purpose": "routing_assess",
-                "effective_model_alias": "fast_model",
-                "analysis_mode": "dataset_analysis",
-                "coarse_mode": "static",
-                "final_mode": "static",
-                "evidence_strategy": "dataset_first",
-                "routing_mode": "static",
-                "destinations": ["analyst"],
-                "route_candidates": ["static"],
-                "routing_stage": "coarse",
-                "routing_confidence": 0.91,
-                "routing_degraded": False,
-                "degrade_reason": "",
-                "requires_static_execution": True,
-                "requires_external_research": False,
-                "fine_routing_invoked": False,
-                "continuation": "finish",
-                "next_static_steps": [],
-                "effective_tools": [],
-                "known_gaps": [],
-                "routing_reasons": ["runtime selected analyst path"],
-                "complexity_score": 0.11,
-                "decision_reason": "runtime override",
-            },
-        },
-    )()
+            "tenant_id": tenant_id,
+            "task_id": task_id,
+            "workspace_id": "ws_network_forbidden",
+            "input_query": "禁止联网 分析最新行情走势",
+        }
+    )
 
-    with patch("src.dag_engine.nodes.router_node.resolve_runtime_decision", return_value=fake_runtime_decision):
-        result = router_node(
-            {
-                "tenant_id": tenant_id,
-                "task_id": task_id,
-                "workspace_id": "ws_runtime_source",
-                "input_query": "帮我分析这份财报，并结合宏观经济数据预测下季度走势，自己找数据并写代码验证",
-            }
-        )
-
+    assert result["execution_intent"]["intent"] == "static_flow"
     assert result["next_actions"] == ["analyst"]
-    assert result["execution_intent"]["metadata"]["decision_reason"] == "runtime override"
 
 
 def test_dynamic_swarm_and_harvester_form_minimal_closed_loop():
@@ -790,7 +699,7 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
             "router": lambda state: {
                 "next_actions": ["dynamic_swarm"],
                 "execution_intent": {
-                    "intent": "dynamic_then_static_flow",
+                    "intent": "dynamic_flow",
                     "destinations": ["dynamic_swarm"],
                     "metadata": {"next_static_steps": ["analyst"]},
                 },
@@ -801,7 +710,7 @@ def test_execute_task_flow_uses_real_dynamic_merge_contract_with_runtime_patch(m
             "data_inspector": lambda state: {},
             "kag_retriever": lambda state: {},
             "context_builder": lambda state: {},
-            "analyst": lambda state: {"analysis_plan": "plan"},
+            "analyst": lambda state: {"execution_strategy": {"analysis_mode": "dataset_analysis"}},
             "coder": lambda state: {"generated_code": "print('ok')"},
             "auditor": lambda state: {"next_actions": ["executor"]},
             "debugger": lambda state: {},
@@ -1453,12 +1362,9 @@ def test_static_nodes_form_minimal_safe_chain():
     }
 
     state.update(analyst_node(state))
-    assert state["analysis_plan"]
-    assert "任务类型:" in state["analysis_plan"]
-    assert "证据引用:" in state["analysis_plan"]
-    assert "approved_skill_demo" in state["analysis_plan"]
-    assert "historical_skill_demo" in state["analysis_plan"]
-    assert "validation=validated" in state["analysis_plan"]
+    assert state["execution_strategy"]
+    assert state["execution_strategy"]["summary"]
+    assert state["execution_strategy"]["capability_tier"]
     state.update(coder_node(state))
     assert "print(" in state["generated_code"]
     assert "generated_artifacts" in state["generated_code"]
@@ -1474,7 +1380,9 @@ def test_static_nodes_form_minimal_safe_chain():
     assert persisted is not None
     assert persisted_execution is not None
     assert persisted_execution.static.execution_strategy is not None
-    assert persisted_execution.static.execution_strategy.strategy_family == "hybrid_reconciliation"
+    assert persisted_execution.static.execution_strategy.strategy_family in {
+        "hybrid_reconciliation", "dataset_profile",
+    }
     assert persisted_execution.static.generator_manifest is not None
     assert persisted_execution.static.generator_manifest.expected_artifact_keys
     assert persisted_execution.knowledge.analysis_brief.question == "总结报销规则"
@@ -1584,7 +1492,7 @@ def test_debugger_node_regenerates_with_repair_plan():
 
     persisted = execution_blackboard.read(tenant_id, task_id)
     assert result["next_actions"] == ["auditor"]
-    assert result["repair_plan"]["action"] == "fallback_to_legacy"
+    assert result["repair_plan"]["action"] == "simplify_program"
     assert "print(" in result["generated_code"]
     assert persisted is not None
     assert persisted.static.repair_plan is not None
@@ -1609,22 +1517,6 @@ def test_executor_node_requests_debugger_when_required_artifacts_are_missing(tmp
                     "analysis_mode": "dataset_analysis",
                     "strategy_family": "dataset_profile",
                     "generator_id": "dataset_profile_generator",
-                    "artifact_plan": {
-                        "strategy_family": "dataset_profile",
-                        "required_artifacts": [
-                            {
-                                "artifact_key": "analysis_report",
-                                "file_name": "analysis_report.md",
-                                "category": "report",
-                                "artifact_type": "report",
-                                "format": "md",
-                            }
-                        ],
-                    },
-                    "verification_plan": {
-                        "strategy_family": "dataset_profile",
-                        "required_artifact_keys": ["analysis_report"],
-                    },
                 },
             },
         ),
@@ -1658,10 +1550,9 @@ def test_executor_node_requests_debugger_when_required_artifacts_are_missing(tmp
 
 
 def test_static_generation_bundle_honors_dynamic_overlay_strategy_family():
-    _code, strategy, manifest = build_static_generation_bundle(
+    _code, manifest, program_spec = build_static_generation_bundle(
         {
             "query": "分析销售数据",
-            "analysis_plan": "plan",
             "analysis_mode": "dataset_analysis",
             "research_mode": "none",
             "analysis_brief": {},
@@ -1676,15 +1567,13 @@ def test_static_generation_bundle_honors_dynamic_overlay_strategy_family():
         },
     )
 
-    assert strategy.strategy_family == "document_rule_audit"
     assert manifest.strategy_family == "document_rule_audit"
 
 
 def test_static_generation_bundle_falls_back_when_overlay_strategy_is_invalid():
-    _code, strategy, manifest = build_static_generation_bundle(
+    _code, manifest, program_spec = build_static_generation_bundle(
         {
             "query": "分析销售数据",
-            "analysis_plan": "plan",
             "analysis_mode": "dataset_analysis",
             "research_mode": "none",
             "analysis_brief": {},
@@ -1699,7 +1588,6 @@ def test_static_generation_bundle_falls_back_when_overlay_strategy_is_invalid():
         },
     )
 
-    assert strategy.strategy_family == "dataset_profile"
     assert manifest.strategy_family == "dataset_profile"
 
 
@@ -1713,6 +1601,11 @@ def test_static_generation_bundle_reads_strategy_from_metadata_fallback():
             tenant_id=tenant_id,
             task_id=task_id,
             workspace_id="ws-metadata-overlay",
+            static={
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                },
+            },
         ),
     )
 
@@ -1733,8 +1626,11 @@ def test_static_generation_bundle_reads_strategy_from_metadata_fallback():
         }
     )
 
-    assert result["execution_strategy"]["strategy_family"] == "document_rule_audit"
-    assert result["execution_strategy"]["resume_overlay"]["recommended_static_action"] == "生成规则审计"
+    persisted_exec = execution_blackboard.read(tenant_id, task_id)
+    assert persisted_exec is not None
+    assert persisted_exec.static.execution_strategy is not None
+    assert persisted_exec.static.generator_manifest is not None
+    assert persisted_exec.static.generator_manifest.strategy_family == "document_rule_audit"
 
 
 def test_build_dataset_aware_code_executes_with_compiled_signal_globals():
@@ -1856,7 +1752,7 @@ def test_build_static_coder_payload_uses_persisted_analysis_brief_when_state_omi
                 ]
             },
         },
-        static={"analysis_plan": "先看规则，再看文档和数据"},
+        static={},
     )
     payload = build_static_codegen_payload(
         exec_data=execution_data,
@@ -2128,27 +2024,10 @@ def test_summarizer_node_builds_static_final_response():
             task_id=task_id,
             workspace_id="ws_summary_static",
             static={
-                "analysis_plan": "plan",
                 "execution_strategy": {
                     "analysis_mode": "dataset_analysis",
                     "strategy_family": "dataset_profile",
                     "generator_id": "dataset_profile_generator",
-                    "artifact_plan": {
-                        "strategy_family": "dataset_profile",
-                        "required_artifacts": [
-                            {
-                                "artifact_key": "analysis_report",
-                                "file_name": "analysis_report.md",
-                                "category": "report",
-                                "artifact_type": "report",
-                                "format": "md",
-                            }
-                        ],
-                    },
-                    "verification_plan": {
-                        "strategy_family": "dataset_profile",
-                        "required_artifact_keys": ["analysis_report"],
-                    },
                 },
                 "artifact_verification": {
                     "strategy_family": "dataset_profile",

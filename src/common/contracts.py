@@ -7,9 +7,13 @@ them incrementally without rewriting the whole runtime in one pass.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from collections.abc import Mapping
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from src.common.utils import get_utc_now
 
@@ -50,9 +54,11 @@ class EvidencePacket(BaseModel):
 
 
 class ExecutionIntent(BaseModel):
-    """Routing decision for the current task run."""
+    """Lightweight routing decision. Analyst owns downstream refinement."""
 
-    intent: Literal["static_flow", "dynamic_only", "dynamic_then_static_flow"]
+    model_config = ConfigDict(extra="ignore")
+
+    intent: Literal["static_flow", "dynamic_flow"]
     destinations: list[str] = Field(default_factory=list)
     reason: str = ""
     complexity_score: float = 0.0
@@ -173,6 +179,39 @@ StrategyFamily = Literal[
 ResearchMode = Literal["none", "single_pass", "iterative"]
 
 
+class CapabilityTier(str, Enum):
+    """Capability gradient — how much runtime power the task needs.
+
+    Filled by analyst; router does NOT set this.  Router only decides
+    static_flow vs dynamic_flow at the DAG-entry level; analyst then
+    declares the specific tier and any per-tier skip_static_steps via
+    DynamicResumeOverlay so the DAG can skip nodes without changing topology.
+    """
+
+    STATIC_ONLY = "static_only"
+    STATIC_WITH_NETWORK = "static_with_network"
+    DYNAMIC_EXPLORATION_THEN_STATIC = "dynamic_exploration_then_static"
+    DYNAMIC_ONLY = "dynamic_only"
+
+
+def _derive_research_mode(tier: CapabilityTier) -> str:
+    return {
+        CapabilityTier.STATIC_ONLY: "none",
+        CapabilityTier.STATIC_WITH_NETWORK: "single_pass",
+        CapabilityTier.DYNAMIC_EXPLORATION_THEN_STATIC: "iterative",
+        CapabilityTier.DYNAMIC_ONLY: "iterative",
+    }.get(tier, "none")
+
+
+def _derive_execution_intent(tier: CapabilityTier) -> str:
+    return {
+        CapabilityTier.STATIC_ONLY: "static_flow",
+        CapabilityTier.STATIC_WITH_NETWORK: "static_flow",
+        CapabilityTier.DYNAMIC_EXPLORATION_THEN_STATIC: "dynamic_flow",
+        CapabilityTier.DYNAMIC_ONLY: "dynamic_flow",
+    }.get(tier, "static_flow")
+
+
 ArtifactCategory = Literal["report", "chart", "export", "diagnostic"]
 
 
@@ -192,7 +231,7 @@ class ArtifactSpec(BaseModel):
 class ArtifactPlan(BaseModel):
     """Artifact contract declared by the selected generator strategy."""
 
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    strategy_family: StrategyFamily = "dataset_profile"
     output_root: str = "/app/outputs"
     required_artifacts: list[ArtifactSpec] = Field(default_factory=list)
     optional_artifacts: list[ArtifactSpec] = Field(default_factory=list)
@@ -252,11 +291,14 @@ class EvidencePlan(BaseModel):
 class VerificationPlan(BaseModel):
     """Rules used to validate post-execution artifact delivery."""
 
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    strategy_family: StrategyFamily = "dataset_profile"
     required_artifact_keys: list[str] = Field(default_factory=list)
     prohibited_extensions: list[str] = Field(default_factory=list)
     allowed_output_roots: list[str] = Field(default_factory=list)
     require_declared_filenames: bool = True
+    criteria: list[dict[str, Any]] = Field(default_factory=list)
+    """Semantic verification criteria. Each entry is {check, params, severity}.
+    e.g. {"check": "csv_has_min_columns", "params": {"min": 3}, "severity": "error"}"""
 
 
 class ComputationStep(BaseModel):
@@ -314,7 +356,7 @@ class StaticProgramSpec(BaseModel):
     """Compiler-owned declarative representation of one static program."""
 
     spec_id: str
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    strategy_family: StrategyFamily = "dataset_profile"
     analysis_mode: str = ""
     research_mode: ResearchMode = "none"
     steps: list[ComputationStep] = Field(default_factory=list)
@@ -325,11 +367,21 @@ class StaticProgramSpec(BaseModel):
 
 
 class StaticRepairPlan(BaseModel):
-    """Debugger-owned bounded repair instruction for one failed static attempt."""
+    """Debugger-owned bounded repair instruction for one failed static attempt.
+
+    Actions are scoped to specific plan regions; debugger may not rewrite
+    strategy_family or generator_id (those are frozen in ExecutionStrategy).
+    """
 
     reason: str = ""
     attempt_index: int = 1
-    action: Literal["fallback_to_legacy", "simplify_program", "drop_external_evidence"] = "simplify_program"
+    action: Literal[
+        "simplify_program",
+        "drop_external_evidence",
+        "patch_evidence_plan",
+        "patch_artifact_plan",
+        "retry_with_evidence",
+    ] = "simplify_program"
     updates: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -347,7 +399,7 @@ class GeneratorManifest(BaseModel):
     """Generator metadata persisted for replay, debugging, and migration cutover."""
 
     generator_id: str
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    strategy_family: StrategyFamily = "dataset_profile"
     renderer_id: str = "dataset_aware_renderer"
     fallback_used: bool = False
     expected_artifact_keys: list[str] = Field(default_factory=list)
@@ -371,7 +423,7 @@ class DynamicResumeOverlay(BaseModel):
 class ArtifactVerificationResult(BaseModel):
     """Post-execution verification result for an artifact plan."""
 
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
+    strategy_family: StrategyFamily = "dataset_profile"
     passed: bool = False
     verified_artifact_keys: list[str] = Field(default_factory=list)
     missing_artifact_keys: list[str] = Field(default_factory=list)
@@ -380,20 +432,193 @@ class ArtifactVerificationResult(BaseModel):
     debug_hints: list[RepairHint] = Field(default_factory=list)
 
 
-class ExecutionStrategy(BaseModel):
-    """Internal execution-strategy truth source for static artifact-producing runs."""
+def _artifact_spec(
+    artifact_key: str,
+    file_name: str,
+    *,
+    category: str,
+    required: bool = True,
+    summary: str = "",
+    description: str = "",
+) -> ArtifactSpec:
+    return ArtifactSpec(
+        artifact_key=artifact_key,
+        file_name=file_name,
+        category=category,
+        artifact_type=category,
+        format=Path(file_name).suffix.lstrip("."),
+        required=required,
+        summary=summary,
+        description=description,
+    )
 
+
+def _derive_artifact_plan(strategy_family: StrategyFamily) -> ArtifactPlan:
+    if strategy_family == "dataset_profile":
+        required = [
+            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="数据分析报告"),
+            _artifact_spec("summary_json", "summary.json", category="export", summary="结构化摘要"),
+        ]
+        optional = [
+            _artifact_spec("comparison_csv", "comparison.csv", category="export", required=False, summary="对比导出"),
+        ]
+        notes = ["趋势图不是 v1 强制项；优先保证报告与结构化导出稳定生成。"]
+    elif strategy_family == "document_rule_audit":
+        required = [
+            _artifact_spec("rule_audit_report", "rule_audit_report.md", category="report", summary="规则审计报告"),
+            _artifact_spec("rule_checks_json", "rule_checks.json", category="export", summary="规则检查结果"),
+        ]
+        optional = []
+        notes = ["文档规则审计以报告和规则检查 JSON 作为最小交付面。"]
+    elif strategy_family == "hybrid_reconciliation":
+        required = [
+            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="综合分析报告"),
+            _artifact_spec("cross_source_findings", "cross_source_findings.json", category="export", summary="跨来源发现"),
+            _artifact_spec("comparison_csv", "comparison.csv", category="export", summary="用户导向对比导出"),
+        ]
+        optional = []
+        notes = ["v1 用 comparison.csv 代替更重的图表引擎。"]
+    elif strategy_family == "input_gap_report":
+        required = [
+            _artifact_spec("input_gap_report", "input_gap_report.md", category="report", summary="输入缺口报告"),
+        ]
+        optional = [
+            _artifact_spec("requested_inputs_json", "requested_inputs.json", category="export", required=False, summary="补充输入请求"),
+        ]
+        notes = ["input_gap_report 禁止产伪图表。"]
+    else:
+        required = [
+            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="兼容报告"),
+            _artifact_spec("summary_json", "summary.json", category="export", summary="兼容摘要"),
+        ]
+        optional = []
+        notes = ["legacy fallback 继续使用 dataset-aware renderer，但产出新 artifact contract。"]
+
+    return ArtifactPlan(
+        strategy_family=strategy_family,
+        output_root="/app/outputs",
+        required_artifacts=list(required),
+        optional_artifacts=list(optional),
+        notes=list(notes),
+    )
+
+
+def _derive_verification_plan(strategy_family: StrategyFamily) -> VerificationPlan:
+    from config.settings import OUTPUT_DIR as _OUTPUT_DIR
+
+    artifact_plan = _derive_artifact_plan(strategy_family)
+    prohibited_extensions: list[str] = [".png", ".jpg", ".jpeg", ".webp"] if strategy_family == "input_gap_report" else []
+    return VerificationPlan(
+        strategy_family=strategy_family,
+        required_artifact_keys=[item.artifact_key for item in artifact_plan.required_artifacts if item.required],
+        prohibited_extensions=prohibited_extensions,
+        allowed_output_roots=[str(Path(_OUTPUT_DIR).resolve())],
+        require_declared_filenames=True,
+    )
+
+
+def _derive_strategy_family(analysis_mode: str) -> StrategyFamily:
+    """Derive strategy family from analyst-written analysis_mode.
+
+    This replaces the old runtime derivation in static_generation_registry.
+    Mapping is deterministic: one analysis_mode maps to one strategy_family.
+    """
+    mode = str(analysis_mode or "").strip()
+    if mode == "document_rule_analysis":
+        return "document_rule_audit"
+    if mode == "hybrid_analysis":
+        return "hybrid_reconciliation"
+    if mode == "need_more_inputs":
+        return "input_gap_report"
+    if mode == "dataset_analysis":
+        return "dataset_profile"
+    if mode == "dynamic_research_analysis":
+        return "hybrid_reconciliation"
+    return "dataset_profile"
+
+
+class ExecutionStrategy(BaseModel):
+    """Immutable execution-strategy truth source. Analyst is the sole writer.
+
+    Analyst-written fields:
+        - capability_tier  — how much runtime power the task needs
+        - fallback_tier    — fallback if the primary tier fails
+        - analysis_mode    — what type of analysis (dataset_analysis, etc.)
+        - summary          — human-readable plan summary
+        - evidence_plan    — external evidence collection spec
+
+    Derived fields (@computed_field, never stored):
+        - research_mode      — from capability_tier
+        - strategy_family    — from analysis_mode
+        - generator_id       — from strategy_family
+        - execution_intent   — from capability_tier
+        - artifact_plan      — from strategy_family
+        - verification_plan  — from strategy_family
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    # ---- Analyst-written plan fields ----
+    capability_tier: CapabilityTier = CapabilityTier.STATIC_ONLY
+    fallback_tier: CapabilityTier | None = None
     analysis_mode: str = ""
-    research_mode: ResearchMode = "none"
-    strategy_family: StrategyFamily = "legacy_dataset_aware_generator"
-    generator_id: str = "legacy_dataset_aware_generator"
+    summary: str = ""
     evidence_plan: EvidencePlan = Field(default_factory=EvidencePlan)
-    artifact_plan: ArtifactPlan = Field(default_factory=ArtifactPlan)
-    verification_plan: VerificationPlan = Field(default_factory=VerificationPlan)
-    program_spec: StaticProgramSpec | None = None
-    repair_plan: StaticRepairPlan | None = None
-    resume_overlay: DynamicResumeOverlay | None = None
-    legacy_compatibility: dict[str, Any] = Field(default_factory=dict)
+
+    # ---- Derived fields (@computed_field) ----
+    @computed_field
+    @property
+    def research_mode(self) -> str:
+        return _derive_research_mode(self.capability_tier)
+
+    @computed_field
+    @property
+    def strategy_family(self) -> StrategyFamily:
+        return _derive_strategy_family(self.analysis_mode)
+
+    @computed_field
+    @property
+    def generator_id(self) -> str:
+        return f"{self.strategy_family}_generator"
+
+    @computed_field
+    @property
+    def execution_intent(self) -> str:
+        return _derive_execution_intent(self.capability_tier)
+
+    @computed_field
+    @property
+    def artifact_plan(self) -> ArtifactPlan:
+        return _derive_artifact_plan(self.strategy_family)
+
+    @computed_field
+    @property
+    def verification_plan(self) -> VerificationPlan:
+        return _derive_verification_plan(self.strategy_family)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_old_checkpoint(cls, data: Any) -> Any:
+        """Infer new fields from old stored fields so legacy checkpoints load."""
+        if not isinstance(data, Mapping):
+            return data
+        d = dict(data)
+        # Strip old stored fields that are now @computed_field
+        for key in (
+            "research_mode", "strategy_family", "generator_id", "execution_intent",
+            "artifact_plan", "verification_plan",
+        ):
+            d.pop(key, None)
+        # Infer capability_tier from old research_mode if missing
+        if "capability_tier" not in d or not d.get("capability_tier"):
+            old_rm = str(data.get("research_mode") or "")
+            if old_rm == "iterative":
+                d["capability_tier"] = CapabilityTier.DYNAMIC_ONLY
+            elif old_rm == "single_pass":
+                d["capability_tier"] = CapabilityTier.STATIC_WITH_NETWORK
+            else:
+                d.setdefault("capability_tier", CapabilityTier.STATIC_ONLY)
+        return d
 
 
 class ToolCallRecord(BaseModel):

@@ -247,15 +247,20 @@ def build_static_codegen_payload(*, exec_data: Any, state: Mapping[str, Any], in
         for skill in approved_skills
     ]
     skill_strategy_hints = build_skill_strategy_hints(approved_skill_payloads)
+    analysis_plan = (
+        getattr(exec_data.static.execution_strategy, 'summary', None)
+        if getattr(exec_data.static, "execution_strategy", None) is not None
+        else ""
+    )
     directives = build_static_generation_directives(
-        analysis_plan=exec_data.static.analysis_plan or "",
+        analysis_plan=analysis_plan or "",
         analysis_brief=analysis_brief,
         compiled_knowledge=exec_data.knowledge.compiled.model_dump(mode="json"),
         skill_strategy_hints=skill_strategy_hints,
     )
     payload = StaticCodegenPayload(
         query=state["input_query"],
-        analysis_plan=exec_data.static.analysis_plan or "",
+        analysis_plan=analysis_plan or "",
         analysis_mode=str(analysis_brief.get("analysis_mode") or ""),
         research_mode=str(
 

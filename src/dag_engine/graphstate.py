@@ -54,7 +54,6 @@ class DagGraphState(TypedDict, total=False):
     analysis_brief: dict[str, Any]
     # 经过压缩后的精炼 Markdown 文本
     refined_context: str
-    analysis_plan: str
     generated_code: str
     execution_strategy: dict[str, Any]
     static_evidence_bundle: dict[str, Any]
@@ -63,12 +62,9 @@ class DagGraphState(TypedDict, total=False):
     evidence_material_compiled: bool
     material_refresh_done: bool
     material_refresh_actions: list[str]
-    program_spec: dict[str, Any]
     repair_plan: dict[str, Any]
     debug_attempts: list[dict[str, Any]]
     generator_manifest: dict[str, Any]
-    artifact_plan: dict[str, Any]
-    verification_plan: dict[str, Any]
     artifact_verification: dict[str, Any]
     input_mounts: list[dict[str, Any]]
     audit_result: dict[str, Any]

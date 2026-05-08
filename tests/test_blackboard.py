@@ -233,38 +233,21 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
                     "allowed_domains": ["duckduckgo.com"],
                     "allowed_capabilities": ["web_search"],
                 },
-                "artifact_plan": {
+                },
+                "program_spec": {
+                    "spec_id": "hybrid:v1",
                     "strategy_family": "hybrid_reconciliation",
-                    "required_artifacts": [
+                    "analysis_mode": "hybrid_analysis",
+                    "research_mode": "single_pass",
+                    "steps": [{"step_id": "load:1", "kind": "load_evidence"}],
+                    "artifact_emits": [
                         {
                             "artifact_key": "analysis_report",
                             "file_name": "analysis_report.md",
+                            "emit_kind": "analysis_report",
                             "category": "report",
-                            "artifact_type": "report",
-                            "format": "md",
                         }
                     ],
-                },
-                    "verification_plan": {
-                        "strategy_family": "hybrid_reconciliation",
-                        "required_artifact_keys": ["analysis_report"],
-                    },
-                    "program_spec": {
-                        "spec_id": "hybrid:v1",
-                        "strategy_family": "hybrid_reconciliation",
-                        "analysis_mode": "hybrid_analysis",
-                        "research_mode": "single_pass",
-                        "steps": [{"step_id": "load:1", "kind": "load_evidence"}],
-                        "artifact_emits": [
-                            {
-                                "artifact_key": "analysis_report",
-                                "file_name": "analysis_report.md",
-                                "emit_kind": "analysis_report",
-                                "category": "report",
-                            }
-                        ],
-                    },
-                    "legacy_compatibility": {"analysis_plan": "legacy plan"},
                 },
                 "static_evidence_bundle": {
                     "request": {"query": "行业平均增速", "research_mode": "single_pass"},
@@ -273,7 +256,7 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
                 "repair_plan": {
                     "reason": "missing required artifact",
                     "attempt_index": 1,
-                    "action": "fallback_to_legacy",
+                    "action": "simplify_program",
                 },
                 "debug_attempts": [
                     {
@@ -282,7 +265,7 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
                         "repair_plan": {
                             "reason": "missing required artifact",
                             "attempt_index": 1,
-                            "action": "fallback_to_legacy",
+                            "action": "simplify_program",
                         },
                     }
                 ],
@@ -309,8 +292,10 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
     assert execution.static.execution_strategy.strategy_family == "hybrid_reconciliation"
     assert execution.static.execution_strategy.research_mode == "single_pass"
     assert execution.static.execution_strategy.evidence_plan.search_queries == ["行业平均增速"]
-    assert execution.static.execution_strategy.program_spec is not None
+    assert execution.static.program_spec is not None
     assert execution.static.execution_strategy.artifact_plan.required_artifacts[0].file_name == "analysis_report.md"
+    assert execution.static.execution_strategy.verification_plan is not None
+    assert "analysis_report" in execution.static.execution_strategy.verification_plan.required_artifact_keys
     assert execution.static.static_evidence_bundle is not None
     assert execution.static.static_evidence_bundle.records[0].title == "公开报告"
     assert execution.static.repair_plan is not None

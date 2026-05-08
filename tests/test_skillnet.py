@@ -43,7 +43,7 @@ def test_skill_harvester_derives_required_capabilities_from_governance():
                 "governance_profile": "researcher",
             },
             "execution_intent": {
-                "intent": "dynamic_only",
+                "intent": "dynamic_flow",
                 "destinations": ["dynamic_swarm"],
                 "reason": "dynamic",
             },

@@ -35,25 +35,19 @@ def coder_node(state: DagGraphState) -> dict[str, Any]:
         exec_data=exec_data,
         state=state,
     )
+    # Read the analyst's frozen ExecutionStrategy — coder does NOT overwrite it.
     exec_data.static.generated_code = prepared.generated_code
-    exec_data.static.execution_strategy = prepared.execution_strategy
     exec_data.static.static_evidence_bundle = prepared.static_evidence_bundle or None
     exec_data.static.program_spec = prepared.program_spec or None
     exec_data.static.repair_plan = prepared.repair_plan or None
     exec_data.static.generator_manifest = prepared.generator_manifest
-    exec_data.static.artifact_plan = prepared.artifact_plan
-    exec_data.static.verification_plan = prepared.verification_plan
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
     return {
         "generated_code": prepared.generated_code,
-        "execution_strategy": prepared.execution_strategy,
         "static_evidence_bundle": prepared.static_evidence_bundle,
-        "program_spec": prepared.program_spec,
         "repair_plan": prepared.repair_plan,
         "generator_manifest": prepared.generator_manifest,
-        "artifact_plan": prepared.artifact_plan,
-        "verification_plan": prepared.verification_plan,
         "input_mounts": prepared.input_mounts,
         "next_actions": ["auditor"],
     }

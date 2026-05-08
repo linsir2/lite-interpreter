@@ -65,8 +65,6 @@ class DynamicSupervisor:
             routing_mode="dynamic",
             destinations=["dynamic_swarm"],
             reason=str(state.get("dynamic_reason") or "dynamic super-node selected"),
-            complexity_score=float(state.get("complexity_score") or 0.0),
-            candidate_skills=list(state.get("candidate_skills") or []),
         )
 
     @staticmethod

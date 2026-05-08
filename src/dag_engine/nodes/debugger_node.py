@@ -46,11 +46,7 @@ def debugger_node(state: DagGraphState) -> dict[str, Any]:
         {
             "reason": failure_reason,
             "attempt_index": retry_count,
-            "action": (
-                "fallback_to_legacy"
-                if strategy.strategy_family != "legacy_dataset_aware_generator"
-                else "simplify_program"
-            ),
+            "action": "simplify_program",
             "updates": {
                 "previous_strategy_family": strategy.strategy_family,
                 "retry_count": retry_count,
@@ -75,20 +71,16 @@ def debugger_node(state: DagGraphState) -> dict[str, Any]:
         exec_data=exec_data,
         state={**state, "repair_plan": repair_plan.model_dump(mode="json")},
     )
+    # Debugger writes repair artifacts only — execution_strategy remains the analyst's frozen copy.
     exec_data.static.generated_code = prepared.generated_code
-    exec_data.static.execution_strategy = prepared.execution_strategy
     exec_data.static.static_evidence_bundle = prepared.static_evidence_bundle or None
     exec_data.static.program_spec = prepared.program_spec or None
     exec_data.static.generator_manifest = prepared.generator_manifest
-    exec_data.static.artifact_plan = prepared.artifact_plan
-    exec_data.static.verification_plan = prepared.verification_plan
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
     return {
         "generated_code": exec_data.static.generated_code,
-        "execution_strategy": prepared.execution_strategy,
         "static_evidence_bundle": prepared.static_evidence_bundle,
-        "program_spec": prepared.program_spec,
         "repair_plan": repair_plan.model_dump(mode="json"),
         "debug_attempts": [item.model_dump(mode="json") for item in exec_data.static.debug_attempts],
         "next_actions": ["auditor"],

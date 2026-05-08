@@ -1,6 +1,21 @@
 # lite-interpreter 项目完整审计报告
 
 日期：2026-04-24
+最后更新：2026-05-08
+
+## 近期修正状态（2026-05-08）
+
+以下审计发现已通过 ADR-002 / ADR-003 实现修复：
+
+**已解决：**
+- **#32: `ExecutionStrategy` owner 被拆散** — `artifact_plan` / `verification_plan` 改为 `@computed_field`，从 `strategy_family` 派生。`ExecutionStrategy` 现在是 `frozen=True`，analyst 唯一写入者。
+- **#33: Coder 边界不清** — `coder_node` / `debugger_node` 不再写 `artifact_plan` / `verification_plan`。这些字段已从 `PreparedStaticCodegen`、`ExecutionStaticState`、`NodeOutputPatchState` 中删除。
+- **`ensure_artifact_plan()` / `ensure_verification_plan()`** — 从 `control_plane.py` 中彻底删除。`ensure_execution_strategy()` 不再有 `verification_plan` 参数。
+- **ADR-002: Router 简化** — Router 退化为 3 层信号（探索动词/时效性/外部域）→ `static_flow` / `dynamic_flow` 二进制路由。删除 skill matching 和 LLM routing。
+
+**部分解决：**
+- **#1: analyst / 静态生成链** — `ExecutionStrategy` 的 owner 问题已修复，但 `AnalystPlan` 结构化合同尚未实现。DAG 仍是硬编码节点序列。
+- **#1-A: legacy codegen 双后端** — `artifact_plan` / `verification_plan` 的默认值污染已消除，但 `legacy_dataset_aware_generator` 仍在 `StrategyFamily` 中，legacy renderer 未删除。
 
 ## 审计范围
 
@@ -154,13 +169,91 @@
 - `build_static_generation_bundle()` 已读取 dynamic overlay 的 `strategy_family`，不会再让 registry 推导覆盖 dynamic 的策略意图。
 - 剩余风险并入本问题：dynamic handoff 可以影响策略和路由，但静态 codegen 仍受 `AnalystPlan` 缺失、固定 family、双后端模板和 coder 边界过载限制。
 
-新增 finding：legacy strategy family 的删除需要迁移窗口。
+补充 finding 1-A：legacy codegen 渲染器与双后端架构债务必须清除
 
-- `legacy_dataset_aware_generator` 在当前 `resolve_strategy_family()` 推断路径中几乎不会作为正常业务策略被选中，它更像未知/默认/fallback 标记。
-- 不能直接从 `StrategyFamily` Literal 和默认值里删除它，因为旧 checkpoint 里的 `ExecutionStrategy.strategy_family` 可能已经持久化为该值；删除后 Pydantic 读取旧数据会 validation error，checkpoint replay 会挂。
-- 多个合同默认值仍写死 `legacy_dataset_aware_generator`，硬删会牵动 `ExecutionStrategy`、`ArtifactPlan`、`VerificationPlan`、`GeneratorManifest`、`StaticProgramSpec` 等默认链。
-- 正确做法是先做 schema migration：读取旧 checkpoint 时把 legacy 值迁移成真实推断出的 `strategy_family`，迁移窗口结束后再移除 Literal 值和默认值。
-- 当前保留 legacy 是兼容旧数据的安全惰性，不代表它仍是有业务语义的正常策略。
+严重级别：HIGH（从属于 finding 1 的双后端/模板注入子问题）
+
+证据：
+
+- `src/dag_engine/nodes/static_codegen_renderer.py` — 整个文件（49 行 Python，但内含 ~400 行硬编码的 Python 模板字符串，通过 `{{` / `}}` 占位符做假模板渲染）
+- `src/dag_engine/nodes/static_codegen_renderer.py:9` — `_BOOTSTRAP_SECTION`（~80 行模板）
+- `src/dag_engine/nodes/static_codegen_renderer.py:10` — `_HELPER_SECTION`（~120 行模板）
+- `src/dag_engine/nodes/static_codegen_renderer.py:11` — `_INPUT_PROCESSING_SECTION`（~120 行模板）
+- `src/dag_engine/nodes/static_codegen_renderer.py:12` — `_CHECKS_SECTION`（~40 行模板）
+- `src/dag_engine/nodes/static_codegen_renderer.py:13` — `_FINALIZE_SECTION`（2 行模板）
+- `src/dag_engine/nodes/static_codegen_renderer.py:40` — `render_dataset_aware_code()` 把 5 段模板拼成"生成的代码"
+- `src/dag_engine/nodes/static_generation_registry.py:475` — `_inject_artifact_writer()` 用 `str.replace()` 把 artifact writer 代码注入 legacy 路径的 `print(json.dumps(...))` 行
+- `src/dag_engine/nodes/static_generation_registry.py:567-569` — `build_static_generation_bundle()` 的双后端分支：
+  - `if strategy_family == "legacy_dataset_aware_generator"` → `render_dataset_aware_code()` + 字符串注入
+  - `else` → `compile_static_program()`（所谓"新"路径）
+- `src/dag_engine/nodes/static_program_compiler.py:9` — `_COMPILER_TEMPLATE`（"新"路径仍然是另一个硬编码模板，只是改为 spec-driven）
+- `src/dag_engine/nodes/debugger_node.py:50-51` — `fallback_to_legacy` action：debugger 失败时强制切到 legacy 路径
+- `src/common/contracts.py:169` — `StrategyFamily` Literal 中包含 `"legacy_dataset_aware_generator"`
+- `src/common/contracts.py:396` — `ExecutionStrategy.legacy_compatibility: dict[str, Any]` 字段
+- `src/common/contracts.py:332` — `StaticRepairPlan.action` 包含 `"fallback_to_legacy"`
+
+问题说明：
+
+**A. 双后端现状。** 当前 codegen 实际存在两条路径：
+
+- **Legacy 路径**（`render_dataset_aware_code`）：把 `__PAYLOAD_LITERAL__` 用 `repr()` 注入模板字符串，再通过 `str.replace()` 把 `print(json.dumps(...))` 替换成 artifact writer 代码。这种字符串替换注入没有任何类型安全、语法校验或契约保证。
+- **"新"路径**（`compile_static_program`）：虽然叫"编译"，但实际上也是另一个硬编码的 `_COMPILER_TEMPLATE` 字符串，同样通过 `__PAYLOAD_LITERAL__` 和 `__SPEC_LITERAL__` 占位符替换生成代码。
+
+**B. 两条都不是真正的 LLM 驱动代码生成。** 不管是 legacy 还是 compiler，生成的"分析代码"都是固定的模板逻辑——遍历 dataset、做规则/指标/过滤检查、输出报告。区别只在于 legacy 路径自己从 payload 中提取 business_keywords 等信号，而 compiler 路径多了一层 `StaticProgramSpec` 中间表示。两者本质上都是模板渲染，不是按任务意图生成的代码。
+
+**C. 字符串注入是安全风险。** `_inject_artifact_writer()` 在 `static_generation_registry.py:475-479` 通过查找 `print(json.dumps(result, ensure_ascii=False))` 字符串并替换的方式注入 artifact writer。如果模板中的 print 语句发生任何变化（包括空格、缩进），注入会静默失败——artifact writer 不会被注入，产物不会生成，但代码仍然能"正常"执行，错误难以发现。
+
+**D. `legacy_dataset_aware_generator` 作为全局默认值污染。** 以下合同的默认值都写死 legacy（✅ `ArtifactPlan`/`VerificationPlan` 已修复：ADR-003 将其改为 `@computed_field`，不再独立存在默认值）：
+
+| 合同 | 字段 | 默认值 | 状态 |
+|---|---|---|---|
+| ~~`ArtifactPlan`~~ | ~~`strategy_family`~~ | ~~`"legacy_dataset_aware_generator"`~~ | ✅ 已删除（@computed_field） |
+| ~~`VerificationPlan`~~ | ~~`strategy_family`~~ | ~~`"legacy_dataset_aware_generator"`~~ | ✅ 已删除（@computed_field） |
+| `StaticProgramSpec` | `strategy_family` | `"dataset_profile"` | 待清理 legacy |
+| `GeneratorManifest` | `strategy_family` | `"dataset_profile"` | 待清理 legacy |
+| `ExecutionStrategy` | `strategy_family` | `"dataset_profile"` | 待清理 legacy |
+| `ExecutionStrategy` | `generator_id` | `"legacy_dataset_aware_generator"` |
+| `ArtifactVerificationResult` | `strategy_family` | `"legacy_dataset_aware_generator"` |
+| `DynamicResumeOverlay` | `strategy_family` | `None`（唯一不默认 legacy 的） |
+| `control_plane.py` 中所有 `ensure_*` 函数 | `strategy_family` 参数 | `"legacy_dataset_aware_generator"` | `ensure_artifact_plan`/`ensure_verification_plan` 已删除 |
+
+这意味着任何一个合同如果被部分构造而没显式传入 `strategy_family`，就会静默回退到 legacy 路径。
+
+**E. Debugger 的 `fallback_to_legacy` 是设计缺陷。** `debugger_node.py:50-51` 的逻辑是：如果执行失败，且当前 strategy 不是 legacy，就 fallback 到 legacy。这意味 legacy 被当作"更安全"的兜底——但实际上 legacy 渲染器只是更老、更硬编码、更没有 spec 校验，不是更安全。
+
+**F. `ExecutionStrategy.legacy_compatibility` 是无结构垃圾场。** 这个 `dict[str, Any]` 字段在 `analyst_node.py:185` 传入 `analysis_plan` 和 `next_static_steps`，在 `static_generation_registry.py:544` 传入 `analysis_plan`、`generation_directives`、`next_static_steps`。它是无 schema 的隐式传参通道，绕过了类型系统。
+
+为什么重要：
+
+- 双后端意味着任何 codegen 行为的修改需要在两处验证，增加了维护成本和 bug 面
+- 字符串注入是静默失败模式——注入失败不会报错，代码仍能执行但产物缺失
+- 7 个合同的默认值指向 legacy，意味着"默认行为就是旧行为"
+- 当前架构声称有"编译器"（`static_program_compiler.py`），但实际上"新"路径也是模板，这让 compiler 的概念名不副实
+- 不清除 legacy 路径，`AnalystPlan` 和真正的 plan-driven codegen 就无法成为唯一路径
+
+建议方向：
+
+**Phase 1：消除双后端，统一到 compiler 路径。**
+- `render_dataset_aware_code()` 和整个 `static_codegen_renderer.py` 删除
+- `_inject_artifact_writer()` 删除，artifact writer 逻辑移到 compiler 模板中作为显式 section
+- `build_static_generation_bundle()` 中的 `if/else` 分支（line 567-569）消除，始终走 `compile_static_program()`
+- `_COMPILER_TEMPLATE` 暂时保留作为过渡期模板
+
+**Phase 2：清除 `legacy_dataset_aware_generator` 从 StrategyFamily。**
+- 所有合同默认值从 `"legacy_dataset_aware_generator"` 改为 `"dataset_profile"`（或对应的合理默认值）
+- `StrategyFamily` Literal 中移除 `"legacy_dataset_aware_generator"`
+- `StaticRepairPlan.action` 中移除 `"fallback_to_legacy"`，改为 `"simplify_program"` 或 `"retry_with_repair"`
+- `debugger_node.py` 中删除 legacy fallback 逻辑
+- `ExecutionStrategy.legacy_compatibility` 字段删除
+
+**Phase 3：编译器真正化。**
+- `_COMPILER_TEMPLATE` 从硬编码字符串演进为 LLM 驱动的代码生成（由 `AnalystPlan` 中的 generation directives 指导）
+- 或者至少把模板拆分为可组合的、有类型保证的 section builder，不再通过字符串占位符注入
+
+**迁移窗口。**
+- 旧 checkpoint 中持久化的 `strategy_family: "legacy_dataset_aware_generator"` 需要在读取时自动迁移为 `dataset_profile` 或其他推断值
+- 迁移逻辑可放在 `ExecutionStaticState._coerce_typed_payloads()` 的 model validator 中
+- 迁移窗口建议保留 2 周，之后移除迁移逻辑
 
 #### 4. DeerFlow 目前仍然是运行时依赖，而不只是被抽取思想
 
@@ -254,44 +347,62 @@
   - `dynamic_exploration_then_static`
   - `dynamic_only`
 
-#### 7. 依赖真相源分裂，而且部分内容不可移植
+近期修正状态（2026-04-29）：
+
+- 本问题已经部分收窄，但不应整条删除。
+- 已完成：
+  - routing policy 已把 `single_pass_patterns` 和 `open_exploration_patterns` 分开，避免把所有联网/公开资料信号都粗暴送进 dynamic。
+  - `resolve_runtime_decision()` 已能把“查一个公开数据 / 行业平均 / benchmark”这类有结构化数据支撑的任务保留在静态链，并标记 `research_mode=single_pass`。
+  - `不要联网 / no network` 约束会压过外部检索关键词。
+  - `分析当前美国的经济走向` 这类开放宏观问题已稳定路由到 `dynamic_research_analysis`，不再误报为 `need_more_inputs`。
+- 仍未完成：
+  - 代码层还没有显式的一等能力梯度枚举，例如 `static_with_network` / `dynamic_exploration_then_static`。
+  - routing 仍主要依赖 pattern + optional fine routing，而不是由结构化 `AnalystPlan` / capability contract 驱动。
+  - 因此本 finding 应保留，但范围从“具体误判 + 粗分流”收窄为“缺少显式能力梯度合同”。
+
+#### 7. 依赖真相源分裂且出现实际冲突，供应链扫描缺口明显
 
 严重级别：HIGH
 
+合并范围：
+
+- 原问题 22：Python 依赖环境已出现实际冲突，供应链扫描能力也缺口明显
+
 证据：
 
-- `pyproject.toml:7`
-- `requirements.txt:97`
-- `requirements.txt:100`
-- `requirements.txt:115`
-- `requirements.txt:135`
-- `requirements.txt:216`
+- `pyproject.toml:7` — 只声明了两个极简依赖
+- `requirements.txt:97` — 约 250 个包，含绝对本地路径依赖（`file://`）
+- `requirements.txt:100`, `requirements.txt:115`, `requirements.txt:135`, `requirements.txt:216`
+- 本轮 `pip check` 失败（3 组实际冲突）：
+  - `typer 0.15.4` 要求 `click<8.2`，环境实际为 `click 8.3.1`
+  - `aliyun-log-python-sdk 0.8.8` 要求 `protobuf<4.0.0`，环境实际为 `protobuf 6.33.6`
+  - `opencv-python-headless 4.13.0.92` 要求 `numpy>=2`，环境实际为 `numpy 1.26.4`
+- 本轮 `python -m pip_audit --version` 失败：未安装 `pip_audit`，Python CVE 扫描能力缺失
 
 问题说明：
 
-- `pyproject.toml` 只声明了两个极简依赖
-- `requirements.txt` 却固定了约 250 个包
-- 其中还有一个绝对本地路径依赖
-- 依赖版本约束之间也没有清晰对齐
+- `pyproject.toml` 与 `requirements.txt` 形成了两套依赖真相，没有明确的各自职责
+- 当前”测试通过”的环境本身也不是依赖约束一致状态（3 组 pip check 违反）
+- `requirements.txt` 更接近原型期环境快照，包含 `file://` 来源和标准库 backport 包，不可移植
+- 缺少 lock file（`poetry.lock` / `pip-tools`）来保证可复现解析
 
 为什么重要：
 
-- 安装可复现性很弱
-- CI、开发机、Docker 环境都可能运行在不同依赖集合上
+- 安装可复现性很弱，CI、开发机、Docker 环境可能运行在不同依赖集合上
+- 真实部署或新机器重建环境时，可能出现与本机不同的解析结果，甚至直接不可安装
 - 核心运行时与可选 heavyweight feature 的边界不清晰
+- Python CVE 扫描工具未进入默认健康门，供应链攻击面不可观测
 
 根因：
 
-- 仓库当前仍然混用了“原型期环境快照”和“产品化包装信号”
+- 仓库混用了”原型期环境快照”和”产品化包装信号”，从未做过依赖面收口
 
 建议方向：
 
-- 统一依赖真相源
-- 把依赖拆分为：
-  - core
-  - docs / OCR
-  - ML / heavy
-  - dev / test
+- 统一依赖来源，明确 `pyproject.toml` / lock / requirements 各自职责
+- 把依赖拆分为：core / docs+OCR / ML+heavy / dev+test
+- 移除不可移植 `file://` 依赖和无必要 backport
+- 把 `pip check` 与 Python vulnerability audit（`pip_audit`）加入 `make verify` / CI
 
 #### 8. MCP 工具执行没有在 registry 边界做强制授权
 
@@ -327,7 +438,7 @@
 
 ### 二、中优先级问题
 
-#### 9. 联网能力已经存在，但还不是 DAG 原生的一等研究层
+#### 9. 联网能力已经存在，但 research capability 合同还没有一等化
 
 严重级别：MEDIUM
 
@@ -345,25 +456,47 @@
   - `static_evidence_node`
   - `web_search`
   - `web_fetch`
-- 这还是一个有界单次取证分支，而不是 DAG 原生的通用研究能力
+- `static_evidence_node` 的合理定位是静态链里的 single-pass 外部取证节点：
+  - 明确知道要查一次公开事实 / 行业均值 / 外部资料
+  - 查完后把 evidence 编译回结构化数据、业务上下文或 citation material
+- 动态链不应该把“联网”作为外部 DAG 节点反复调用；dynamic 的价值是多轮探索循环，应在自己的节点内部通过已注册 tool / capability 调用 `web_search`、`web_fetch` 或后续 browser/search provider
+- 当前缺的不是一个“通用联网 DAG 节点”，而是跨 static single-pass 与 dynamic realtime research 共享的 research capability 合同
 
 为什么重要：
 
-- 静态链与动态链还无法共享一个统一的 research abstraction
-- 网络证据收集目前仍然更像 side path，而不是 orchestration primitive
+- 如果把联网硬抽成通用 DAG 节点，dynamic 每一步查找都要跳出自己的 reasoning loop，状态传递和实时策略反而更复杂
+- 真正需要共享的是 tool registry、授权、预算、trace、citation 和 evidence materialization，而不是共享同一个联网节点
+- 静态链需要可审计的一次性取证；动态链需要内部多轮 tool-calling research loop；两者的编排语义不同
 
 根因：
 
-- 联网支持是作为 `static_evidence` 的战术增强加进去的，不是作为核心 DAG research node family 被设计进去的
+- 联网支持是作为 `static_evidence` 的战术增强加进去的
+- dynamic 当前依赖外部 DeerFlow sidecar 自带的实时联网/工具循环；未来内化 DeerFlow 思想时，需要自己承接 tool-calling loop，但不应复用 `static_evidence_node` 作为动态联网步骤
+- 工具能力、治理合同和 evidence 回流合同还没有被显式建模为跨静态/动态共享层
 
 建议方向：
 
-- 引入 DAG 原生的 research layer：
-  - source discovery
-  - retrieval
-  - deduplication
-  - citation bundle
-  - confidence / freshness metadata
+- 保留 `static_evidence_node`，但只用于静态链 single-pass 外部取证
+- 动态链后续内化为 `dynamic_exploration_node` 时，应在节点内部通过 tool registry / MCP gateway 调用联网工具，而不是把 `static_evidence_node` 当子步骤
+- 抽象共享 research capability 合同，而不是抽象通用联网节点：
+  - tool/capability registry：`web_search`、`web_fetch`、browser/search provider
+  - authz / allowlist / profile enforcement
+  - budget / timeout / retry policy
+  - trace / citation / evidence refs
+  - evidence compiler / material patch，把结果回流到 canonical material owners
+
+近期修正状态（2026-04-29）：
+
+- 本问题已经部分收窄，但不应整条删除。
+- 已完成：
+  - `evidence_compiler_node` / `KnowledgeCompilerService.compile_external_evidence()` 已把 `static_evidence` 与 dynamic resume 产生的 evidence 编译成现有材料模型补丁。
+  - 编译后的结构化数据会回到 `data_inspector`，文本/业务上下文会回到 `context_builder`，避免联网或动态研究结果只停留在 side path。
+  - DAG 已在 `static_evidence` 和 dynamic resume 两条路径后统一执行 evidence compiler，并用 `compiled_evidence_sources` 防止同一来源重复编译。
+- 仍未完成：
+  - `static_evidence_node` 仍应保持为有界单次取证节点，不应扩展成 dynamic 通用联网节点。
+  - tool registry、authz / allowlist、预算、trace、citation、freshness metadata 与 evidence materialization 的共享合同仍没有完全一等化。
+  - dynamic realtime research 未来内化时仍需要自己的内部 tool loop，而不是复用 `static_evidence_node`。
+  - 因此本 finding 应保留，但范围从“取证结果不能进入材料 owner / 联网要节点化”收窄为“research capability 合同和 evidence materialization 需要跨静态/动态共享”。
 
 #### 10. Sandbox 治理配置面对操作者来说有误导性
 
@@ -429,38 +562,57 @@
 - 应用侧合同显式暴露 queued vs running
 - 定义任务饱和与拒绝策略
 
-#### 12. 应用侧 presenter 仍承担过多聚合与文件系统感知逻辑
+#### 12. 应用侧 presenter 过载：聚合、路径暴露与错误退化三个症状共享同一根因
 
 严重级别：MEDIUM
 
+合并范围：
+
+- 原问题 23：app-facing 资料库仍向前端暴露宿主机文件路径
+- 原问题 47：app-facing read-model 退化把存储故障伪装成空数据
+
 证据：
 
-- `src/api/app_presenters.py:243`
-- `src/api/app_presenters.py:355`
-- `src/api/app_presenters.py:403`
+**Presenter 过载（核心问题）：**
+- `src/api/app_presenters.py:243` — output shaping
+- `src/api/app_presenters.py:355` — event shaping
+- `src/api/app_presenters.py:403` — workspace asset aggregation + filesystem upload discovery
 - `docs/reference/project-status.md:84`
+
+**宿主机路径暴露（症状 B）：**
+- `src/api/app_schemas.py:155`, `:161` — `AssetListItem` schema 包含 `filePath` 字段
+- `src/api/app_presenters.py:472` — presenter 透传 server-side upload path
+- `apps/web/src/lib/types.ts:121` — 前端类型定义接受 `filePath`
+- `apps/web/src/pages/AssetsPage.tsx:93` — 前端资料库页面直接展示 `asset.filePath`
+
+**错误退化（症状 C）：**
+- `src/api/app_presenters.py:408`, `:414`, `:430`, `:436`, `:496`, `:502`, `:537`, `:543` — 资料、方法、审计 read-model 在 `RuntimeError` 时记录 warning 后退化为空列表
+- 对 `Assets` 页，跳过 execution/knowledge state 后继续展示 upload 目录，用户看不到索引不可用
+- 对 `Audit` 页，`AuditRepo.query_records()` 失败返回 `([], 0)`，治理页面呈现为"没有审计记录"
 
 问题说明：
 
-- presenter 当前不仅做 schema 映射，还做：
-  - output shaping
-  - event shaping
-  - workspace asset aggregation
-  - filesystem upload discovery
+presenter 当前不仅做 schema 映射，还承担 output shaping、event shaping、workspace asset aggregation、filesystem upload discovery。两个具体症状：
+- **路径暴露**：`filePath` 穿透 app-facing 合同直达浏览器，把文件系统布局、tenant/workspace 路径变成产品合同
+- **错误退化**：资料、方法、审计三个 read-model 在存储故障时统一回退为空数据（HTTP 200），不区分"真的没数据"和"存储不可用"
 
 为什么重要：
 
-- app-facing API 是稳定产品合同
-- 如果 presenter 同时负责聚合、过滤、文件系统发现和 copy shaping，后续字段漂移和 scoping mistake 的概率会升高
+- app-facing API 是稳定产品合同，presenter 过载导致字段漂移和 scoping mistake 概率升高
+- 把存储故障伪装成空数据会削弱治理可信度，也让监控失去信号
+- 文件系统布局不应作为产品合同暴露
 
 根因：
 
-- read-model aggregation 还没有被彻底拆到专门的 read-model builder / repository 层
+- 三个问题都指向同一个根因：read-model aggregation 还没有被彻底拆到专门的 read-model builder / repository 层，presenter 被迫承担了聚合、发现和错误处理
 
 建议方向：
 
-- 让 presenter 变薄
-- 聚合与发现逻辑下沉到 read-model service / repository
+- 让 presenter 变薄，聚合与发现逻辑下沉到 read-model service / repository
+- 从 app-facing schema 移除 `filePath`，改为 opaque asset id、display name、kind、readiness
+- app-facing schema 增加 `warnings` / `degradedSources`，区分 soft degradation 与 hard failure
+- 方法页展示预置方法可以 degraded，但审计记录不可用应返回结构化错误或带 `degraded=true` 的响应
+- 为 storage read failure 增加测试，验证用户不会把故障误解成空状态
 
 #### 13. Artifact reference 虽然做了 sanitize，但本质仍是 path-oriented
 
@@ -490,54 +642,68 @@
 - 切到 opaque artifact ID + metadata
 - 绝对路径只保留在 server-side lookup 逻辑内部
 
-#### 14. 文档已经再次出现 verification baseline 漂移
+#### 14. 文档 verification baseline 漂移，且一致性测试检测不到真相源本身过期
 
 严重级别：MEDIUM
 
+合并范围：
+
+- 原问题 24：文档一致性测试只能防止”多处硬编码基线”，不能防止唯一真相源本身过期
+
 证据：
 
-- `docs/reference/project-status.md:11`
-- 本轮本地运行 pytest 得到 `260 passed, 4 skipped`
+- `docs/reference/project-status.md:11`, `:13` — 写的是 `255 passed, 4 skipped`，本轮实际 `260 passed, 4 skipped`
+- `tests/test_docs_consistency.py:15`, `:18`, `:35` — 只保证其它文档不硬编码通过数，不验证 truth source 中的基线是否等于最近一次测试结果
 
 问题说明：
 
-- 文档写的是 `255 passed, 4 skipped`
-- 本轮审计实际跑出来的是 `260 passed, 4 skipped`
+- `project-status.md` 明确把自己定义成唯一真相源，但测试基线已漂移（255→260）
+- `test_docs_consistency.py` 要求其它文档引用 truth source，但它不验证 truth source 本身是否过期
+- 结果是：唯一真相源过期时，现有 consistency gate 仍然绿色
 
 为什么重要：
 
-- 这个文件明确把自己定义成唯一 truth source
-- 一旦 truth-source 文档漂移，仓库就会再次回到“文档和现实两套真相”的状态
+- 这个仓库最忌讳”文档和现实两套真相”（AGENTS.md 第 8 节反复强调）
+- 如果唯一真相源本身过期而 gate 检测不到，仓库会再次失真
 
 根因：
 
-- 当前状态基线更新仍然是手工行为，没有被 release gate 严格约束
+- 当前状态基线更新仍是手工行为；consistency test 只防”多处硬编码”，不防”唯一真相源过期”
 
 建议方向：
 
-- 立即更新当前文档基线
-- 决定是否自动化，或者把状态文档更新纳入严格发版门禁
+- 立即把当前基线更新为 `260 passed, 4 skipped`
+- 把测试摘要生成为 CI artifact，或要求 release checklist 同步更新 project-status.md
+- 扩展 docs consistency：检查 AGENTS 中列出的高风险同步面（README、deployment、development、testing 等），而不仅是几个主文档引用
 
 ### 三、低优先级问题
 
-#### 15. 当前没有在已审计表面看到明确的 CI / release gate 合同
+#### 15. CI / release gate 合同缺失，质量信号分散需要人工拼接
 
 严重级别：LOW
+
+合并范围：
+
+- 原问题 28：单一健康 / 发布入口仍缺席，质量信号需要人工拼接
 
 证据：
 
 - 审查范围内没有 `.github/workflows/*`
-- `Makefile` 有多个局部命令，但没有唯一 `verify` 入口
+- `Makefile:30`, `:45`, `:48` — 有多个局部命令但没有唯一 `verify` 入口
+- `apps/web/package.json:6` — 前端脚本无统一 verify
+- `pyproject.toml:12`, `:14` — pytest 配置没有 coverage 门槛
 
-为什么重要：
+问题说明：
 
-- 贡献者可能只跑部分检查
-- 发布信心过于依赖人工自律
+- 后端测试、ruff lint、ruff format、docs consistency、前端 lint/build、dependency audit、Docker/integration gate 分散在多个命令中
+- Makefile 没有 `verify` / `health` 聚合目标
+- 审计和发版时容易遗漏某个质量面，发布信心依赖人工自律
 
 建议方向：
 
-- 增加一个 canonical `make verify`
-- 再把它接入 CI
+- 增加 `make verify`：后端 lint/format/test、docs consistency、前端 lint/build/test、dependency checks
+- 接入 CI，产出 JUnit、coverage、前端构建摘要、dependency audit 摘要
+- 使用 gstack `health` 输出的分类评分作为人工审查辅助，而不是替代原生命令
 
 #### 16. Prometheus 配置看起来处于半接线或残留状态
 
@@ -803,96 +969,17 @@
 - 把 `make test-docker` / `make test-integration` 纳入 CI
 - CI 输出应区分“环境 skip”与“目标不存在 / 没跑到”
 
-#### 22. Python 依赖环境已出现实际冲突，供应链扫描能力也缺口明显
+#### 22. 已合并到问题 7：Python 依赖环境已出现实际冲突，供应链扫描能力也缺口明显
 
-严重级别：HIGH
+> 本问题的 pip check 冲突证据（typer/click、aliyun-log/protobuf、opencv/numpy）和 pip_audit 缺失已合并到问题 7，作为依赖真相源分裂的具体后果。
 
-证据：
+#### 23. 已合并到问题 12：app-facing 资料库仍向前端暴露宿主机文件路径
 
-- `pyproject.toml:7`
-- `requirements.txt:135`
-- `requirements.txt:138`
-- 本轮 `conda run -n lite_interpreter python -m pip check` 失败：
-  - `typer 0.15.4` 要求 `click<8.2`，但环境为 `click 8.3.1`
-  - `aliyun-log-python-sdk 0.8.8` 要求 `protobuf<4.0.0`，但环境为 `protobuf 6.33.6`
-  - `opencv-python-headless 4.13.0.92` 要求 `numpy>=2`，但环境为 `numpy 1.26.4`
-- 本轮 `python -m pip_audit --version` 失败：未安装 `pip_audit`
+> 本问题的 `filePath` 暴露问题已合并到问题 12（presenter 过载），作为 presenter 承担过多文件系统感知逻辑的具体症状之一。
 
-问题说明：
+#### 24. 已合并到问题 14：文档一致性测试只能防止”多处硬编码基线”，不能防止唯一真相源本身过期
 
-- 既有审计已指出依赖真相源分裂；本轮进一步确认当前可运行环境本身也不是依赖约束一致状态
-- `requirements.txt` 中仍有本机 `file://` 构建来源和标准库 backport 包，说明它更像环境快照而不是可移植锁文件
-- Python CVE 扫描工具也没有进入默认健康门
-
-为什么重要：
-
-- 当前“测试通过”不能证明依赖约束是可复现、可审计、可迁移的
-- 真实部署或新机器重建环境时，可能出现与本机不同的解析结果
-
-建议方向：
-
-- 统一依赖来源，明确 `pyproject.toml` / lock / requirements 各自职责
-- 移除不可移植 `file://` 依赖和无必要 backport
-- 把 `pip check` 与 Python vulnerability audit 加入 `make verify` / CI
-
-#### 23. app-facing 资料库仍向前端暴露宿主机文件路径
-
-严重级别：MEDIUM
-
-证据：
-
-- `src/api/app_schemas.py:155`
-- `src/api/app_schemas.py:161`
-- `src/api/app_presenters.py:472`
-- `apps/web/src/lib/types.ts:121`
-- `apps/web/src/pages/AssetsPage.tsx:93`
-
-问题说明：
-
-- `AssetListItem` app-facing schema 包含 `filePath`
-- presenter 会把 server-side upload path 透传给前端
-- 前端资料库页面会直接展示 `asset.filePath`
-
-为什么重要：
-
-- 既有审计已经指出 artifact identity 偏 path-oriented；本轮发现资料库列表也有同类问题
-- 文件系统布局、tenant/workspace 路径、部署目录等不应作为稳定产品合同暴露给浏览器
-
-建议方向：
-
-- 从 app-facing schema 移除 `filePath`，改为 opaque asset id、display name、kind、readiness
-- 如确需排障路径，应放到 admin-only diagnostics，而不是普通资料库列表
-- 增加测试确保 `/api/app/assets` 不返回绝对路径
-
-#### 24. 文档一致性测试只能防止“多处硬编码基线”，不能防止唯一真相源本身过期
-
-严重级别：MEDIUM
-
-证据：
-
-- `docs/reference/project-status.md:11`
-- `docs/reference/project-status.md:13`
-- `tests/test_docs_consistency.py:15`
-- `tests/test_docs_consistency.py:18`
-- `tests/test_docs_consistency.py:35`
-- 本轮实际全量回归：`260 passed, 4 skipped`
-
-问题说明：
-
-- `project-status.md` 仍写 `255 passed, 4 skipped`
-- `tests/test_docs_consistency.py` 只保证其它文档不硬编码通过数，并要求主文档引用 truth source
-- 它不会验证 truth source 中的基线是否等于最近一次测试结果
-
-为什么重要：
-
-- 这个仓库明确把 `docs/reference/project-status.md` 当成当前状态唯一真相源
-- 如果唯一真相源本身过期，现有 consistency gate 仍然绿色
-
-建议方向：
-
-- 立即把当前基线更新为 `260 passed, 4 skipped`
-- 后续把测试摘要生成为 CI artifact，或要求 release checklist 同步更新该文件
-- 扩展 docs consistency：检查 AGENTS 中列出的高风险同步面，而不仅是几个主文档引用
+> 本条是问题 14 的根因侧解释：基线漂移（255→260）之所以未被发现，正因为 `test_docs_consistency.py` 只防多处硬编码、不防真相源本身过期。完整证据、影响与建议已合并到问题 14。
 
 #### 25. 前端没有自动化测试套件，产品面回归主要依赖 lint/build 与人工 smoke
 
@@ -976,35 +1063,9 @@
 - 把 `fmt-check-all` 加入统一 verify gate
 - 对生成代码目录继续保留必要的 per-file ignore / exclude，避免格式化生成物造成无意义 churn
 
-#### 28. 单一健康 / 发布入口仍缺席，质量信号需要人工拼接
+#### 28. 已合并到问题 15：单一健康 / 发布入口仍缺席，质量信号需要人工拼接
 
-严重级别：LOW
-
-证据：
-
-- `Makefile:30`
-- `Makefile:45`
-- `Makefile:48`
-- `apps/web/package.json:6`
-- `pyproject.toml:12`
-- `pyproject.toml:14`
-
-问题说明：
-
-- 后端测试、ruff lint、ruff format、docs consistency、前端 lint/build、dependency audit、Docker/integration gate 分散在多个命令中
-- `pyproject.toml` 的 pytest 配置没有 coverage 门槛
-- Makefile 没有 `verify` / `health` 聚合目标
-
-为什么重要：
-
-- 审计和发版时容易遗漏某个质量面
-- 健康趋势无法稳定量化，也不利于后续多 agent 协作
-
-建议方向：
-
-- 增加 `make verify`：后端 lint/format/test、docs consistency、前端 lint/build/test、dependency checks
-- 增加 CI artifact：JUnit、coverage、前端构建摘要、dependency audit 摘要
-- 使用 gstack `health` 输出的分类评分作为人工审查辅助，而不是替代原生命令
+> 本条与问题 15 同根：缺少统一的 CI/release gate。本条从"质量信号分散"的角度补充了 Makefile 缺少 `verify` 入口、pytest 无 coverage 门槛等具体证据。完整证据、影响与建议已合并到问题 15。
 
 ### 补充评分
 
@@ -1049,77 +1110,65 @@
 
 本条与问题 1 同根：`analyst` 没有一等 `AnalystPlan` / `StrategyPlan`，DAG 也没有消费 plan 的 graph spec / edge condition / node outcome。完整证据、影响与建议已合并到问题 1，避免重复维护两套修复范围。
 
-#### 30. 节点 I/O 合同是 dict patch soup，缺少强类型 NodeOutcome
+#### 30. 节点 I/O 合同是 dict patch soup，checkpoint replay 由此也不可验证
 
 严重级别：HIGH
 
+合并范围：
+
+- 原问题 31：checkpoint replay 没有输入摘要、合同版本和语义 outcome，恢复正确性不可证明
+
 证据：
 
-- `src/dag_engine/graphstate.py:9`
-- `src/dag_engine/graphstate.py:13`
-- `src/dag_engine/graphstate.py:75`
-- `src/dag_engine/dag_graph.py:25`
-- `src/dag_engine/dag_graph.py:39`
+**Dict patch soup（核心问题）：**
+- `src/dag_engine/graphstate.py:9`, `:13`, `:75` — `DagGraphState` 包含大量事实字段却自称”瞬时传输态”
+- `src/dag_engine/dag_graph.py:25`, `:39` — DAG 靠 `next_actions`、`blocked`、`execution_record`、`retry_count` 等字符串键名解释控制流
 - `src/dag_engine/nodes/coder_node.py:48`
 - `src/dag_engine/nodes/debugger_node.py:87`
 - `src/dag_engine/nodes/executor_node.py:115`
 
+**Checkpoint 不可验证（直接后果）：**
+- `src/blackboard/schema.py:237`, `:246` — `NodeCheckpointState` 只保存 status、timestamp、attempt_count、error、output_patch
+- `src/dag_engine/dag_graph.py:50`, `:55`, `:87`, `:98` — `_run_checkpointed_node()` 看到 `status == “completed”` 且 patch 非空就直接回放
+- checkpoint 不记录上游输入 digest、ExecutionData 版本、schema/contract 版本、代码版本、policy 版本、node semantic outcome
+
 问题说明：
 
-- `DagGraphState` 自称只是“瞬时传输态”，但它包含 `analysis_brief/generated_code/execution_strategy/program_spec/repair_plan/execution_record/dynamic_*` 等大量事实字段
-- 节点返回任意 dict patch，DAG 再靠 `next_actions`、`blocked`、`execution_record`、`retry_count` 等字符串/键名约定解释控制流
-- 没有区分 `continue`、`retryable_failure`、`terminal_failure`、`waiting_for_human`、`degraded_success` 等语义
-
-为什么这是架构问题：
-
+- 节点返回任意 dict patch，没有区分 `continue`、`retryable_failure`、`terminal_failure`、`waiting_for_human`、`degraded_success` 等语义
 - 字段名成为隐式接口，重命名或漏填会直接改变调度行为
 - checkpoint、resume、summary、UI event 都在消费同一批松散 patch，调用方无法知道某个字段是事实、派生值还是临时控制信号
-- 新节点无法声明“我成功但交付未达标”“我失败但可修复”“我阻断且等待输入”这类结构化 outcome
+- 如果用户输入、知识快照、governance、asset mount、analysis plan 或代码版本变化，旧 checkpoint 仍可能被复用——恢复链路实际只是 patch cache，错误 patch 一旦缓存会稳定污染后续节点
+
+为什么重要：
+
+- 新节点无法声明”我成功但交付未达标””我失败但可修复””我阻断且等待输入”这类结构化 outcome
+- checkpoint replay 看似可靠，但无法判断 replay 是否仍适用于当前任务事实
+- 后续任何节点输出格式变更或 schema 迁移都会同时破坏运行中流程和恢复中流程
+
+根因：
+
+- 节点输出、控制语义、checkpoint 都没有 typed 合同——三者共享同一个根因
 
 建议方向：
 
 - 定义 `NodeResult[TOutput]`：包含 `node_name`、`status`、`outcome`、`output`、`state_patch`、`failure`、`next_hint`
 - `next_actions` 只能作为 hint，不再作为唯一控制语义
 - `DagGraphState` 缩小为身份、trace、临时传输字段；事实写入必须经 typed blackboard accessor
-
-#### 31. checkpoint replay 没有输入摘要、合同版本和语义 outcome，恢复正确性不可证明
-
-严重级别：HIGH
-
-证据：
-
-- `src/blackboard/schema.py:237`
-- `src/blackboard/schema.py:246`
-- `src/dag_engine/dag_graph.py:50`
-- `src/dag_engine/dag_graph.py:55`
-- `src/dag_engine/dag_graph.py:87`
-- `src/dag_engine/dag_graph.py:98`
-
-问题说明：
-
-- `NodeCheckpointState` 只保存 status、timestamp、attempt_count、error、output_patch
-- `_run_checkpointed_node()` 只要看到 `status == "completed"` 且 patch 非空，就直接回放旧 output patch
-- checkpoint 不记录上游输入 digest、ExecutionData 版本、schema/contract 版本、代码版本、policy 版本、node semantic outcome
-
-为什么这是架构问题：
-
-- 如果用户输入、知识快照、governance、asset mount、analysis plan 或代码版本变化，旧 checkpoint 仍可能被复用
-- 恢复链路看似可靠，实际只是 patch cache；无法判断 replay 是否仍适用于当前任务事实
-- 这会放大第 30 条 dict patch soup 的风险：错误 patch 一旦被缓存，会稳定污染后续节点
-
-建议方向：
-
 - checkpoint 增加 `input_digest`、`contract_version`、`node_impl_version`、`semantic_outcome`、`depends_on` 列表
-- 只有 digest 与版本匹配时才允许 replay
-- 对 router/analyst/coder/debugger/executor 使用不同 checkpoint policy；副作用节点默认不可盲目 replay
+- 只有 digest 与版本匹配时才允许 replay；副作用节点默认不可盲目 replay
+- 对 router/analyst/coder/debugger/executor 使用不同 checkpoint policy
 
-#### 32. 已合并到问题 1：`ExecutionStrategy` owner 被拆散
+#### 31. 已合并到问题 30：checkpoint replay 没有输入摘要、合同版本和语义 outcome
 
-本条与问题 1 同根：规划、registry 编译、debug repair 共享并覆盖同一个 `ExecutionStrategy`，导致策略归属不可解释。完整证据、影响与建议已合并到问题 1。
+> 本问题是 dict patch soup（问题 30）的直接后果：因为节点输出没有 typed outcome，checkpoint 只能缓存 raw patch，无法判断 replay 是否仍适用。完整证据、影响与建议已合并到问题 30。
 
-#### 33. 已合并到问题 1：Coder 边界不清
+#### 32. ~~已合并到问题 1：`ExecutionStrategy` owner 被拆散~~ ✅ 已修复（ADR-003）
 
-本条与问题 1 同根：coder 仍在生成代码时同时生成或改写 strategy/spec/artifact/verification 多个控制合同。完整证据、影响与建议已合并到问题 1。
+`artifact_plan` / `verification_plan` 改为 `@computed_field`，从 `strategy_family` 派生。`ExecutionStrategy` 是 `frozen=True`，analyst 唯一写入者。coder/debugger 不再写这些字段。
+
+#### 33. ~~已合并到问题 1：Coder 边界不清~~ ✅ 已修复（ADR-003）
+
+`coder_node` / `debugger_node` 不再写 `exec_data.static.{artifact_plan,verification_plan}`。`PreparedStaticCodegen`、`ExecutionStaticState`、`NodeOutputPatchState` 已删除这些字段。`ensure_artifact_plan()` / `ensure_verification_plan()` 已从 `control_plane.py` 删除。
 
 #### 34. Debugger 实际是重新生成/回退节点，不是真正的 failure-localizing debugger
 
@@ -1154,67 +1203,48 @@
 - Debugger 输出 `RepairDecision`，只允许修改 `program_spec`、`artifact_plan` 或 `renderer_config` 的限定区域
 - Repair 应可被 verifier 独立验证，而不是直接再次跑完整 codegen
 
-#### 35. Executor 同时承担执行、持久化、artifact 验证和 retry 路由，职责过载
+#### 35. Executor 职责过载：执行、验证、路由合一，”无代码”前置失败因此被伪装为可继续
 
 严重级别：HIGH
 
+合并范围：
+
+- 原问题 36：Executor 的”无代码可执行”前置失败被伪装成可继续路径
+
 证据：
 
-- `src/dag_engine/nodes/executor_node.py:76`
-- `src/dag_engine/nodes/executor_node.py:84`
-- `src/dag_engine/nodes/executor_node.py:94`
-- `src/dag_engine/nodes/executor_node.py:101`
-- `src/dag_engine/nodes/executor_node.py:111`
-- `src/dag_engine/nodes/executor_node.py:121`
+**Executor 过载（核心问题）：**
+- `src/dag_engine/nodes/executor_node.py:76`, `:84`, `:94`, `:101`, `:111`, `:121` — Executor 承担 lease 检查、sandbox 运行、execution_record 持久化、artifact verification、latest_error_traceback 写入、决定进入 debugger 或 skill_harvester
+- `verify_generated_artifacts()` 在 executor 内部调用，”运行成功”和”交付合同成功”两个概念被合并
+
+**无代码伪可继续（症状 B）：**
+- `src/dag_engine/nodes/executor_node.py:70`, `:73` — 无 `exec_data` 或无 `generated_code` 时返回 `next_actions: [“skill_harvester”]` 和 `execution_record: None`
+- `src/dag_engine/dag_graph.py:233`, `:239`, `:241`, `:248` — DAG 继续执行 skill_harvester 与 summarizer，最后才因 `execution_record` 缺失判定失败
 
 问题说明：
 
-- Executor 负责 lease 检查、sandbox 运行、execution_record 持久化、artifact verification、latest_error_traceback 写入、决定进入 debugger 或 skill_harvester
-- `verify_generated_artifacts()` 在 executor 内部调用，导致“运行成功”和“交付合同成功”两个概念被合并在同一节点
-- 如果 artifact 验证失败，executor 直接把 next action 设为 debugger
+Executor 当前混合了六个职责：lease 检查、沙箱执行、执行记录持久化、artifact 验证、错误 traceback 写入、修复路由决策。两个具体后果：
+- **职责过载**：executor 难以替换为其它 runtime，artifact verifier 无法作为独立质量门复用
+- **”无代码”伪可继续**：前置条件不满足时 executor 无法表达 `terminal_failure`，只能继续推进到 harvester/summarizer 制造无意义副作用
 
-为什么这是架构问题：
+为什么重要：
 
-- executor 难以替换为其它 runtime，因为它不仅是 runtime adapter，还是 verifier 与 repair router
-- sandbox 执行失败、artifact 合同失败、lease 失败、无代码失败会走不同隐式路径，缺少统一 outcome
-- artifact verifier 无法作为独立质量门复用或单测其 orchestration 行为
+- sandbox 执行失败、artifact 合同失败、lease 失败、无代码失败走不同隐式路径，缺少统一 typed outcome
+- 观察者误以为链路已进入收尾阶段，而真实错误发生在 executor 前置条件
+- 这本质上是同一种架构缺陷的两种表现：executor 没有 typed outcome 合同
 
 建议方向：
 
 - 拆成 `SandboxExecutor`、`ExecutionRecorder`、`ArtifactVerifier`、`RepairRouter`
 - Executor 只输出 `ExecutionRecord` 与 runtime failure
 - Verifier 独立消费 `ExecutionRecord + ArtifactPlan`，输出 `VerificationOutcome`
+- 前置条件失败（无代码、无 exec_data）返回 `terminal_failure` 或 `blocked` outcome（`failure_kind=no_generated_code`）
+- DAG 对前置条件失败直接终止或回到 coder，不再进入 harvester/summarizer happy-path
 - RepairRouter 根据 typed failure 决定 debugger / terminal / waiting_for_human
 
-#### 36. Executor 的“无代码可执行”前置失败被伪装成可继续路径
+#### 36. 已合并到问题 35：Executor 的”无代码可执行”前置失败被伪装成可继续路径
 
-严重级别：MEDIUM
-
-证据：
-
-- `src/dag_engine/nodes/executor_node.py:70`
-- `src/dag_engine/nodes/executor_node.py:73`
-- `src/dag_engine/dag_graph.py:233`
-- `src/dag_engine/dag_graph.py:239`
-- `src/dag_engine/dag_graph.py:241`
-- `src/dag_engine/dag_graph.py:248`
-
-问题说明：
-
-- 当没有 `exec_data` 或没有 `generated_code` 时，executor 返回 `next_actions: ["skill_harvester"]` 和 `execution_record: None`
-- DAG 仍继续执行 skill_harvester 与 summarizer，最后才因 `execution_record` 缺失判定失败
-
-为什么这是架构问题：
-
-- 节点无法表达“前置条件不满足，立即终止/回到 coder/等待人工”的 outcome
-- 下游节点会处理一个根本没有执行记录的任务，制造无意义 summary/harvest 副作用
-- 这类问题会让观察者误以为链路已进入收尾阶段，而真实错误发生在 executor 前置条件
-
-建议方向：
-
-- Executor 返回 `terminal_failure` 或 `blocked` outcome，附 `failure_kind=no_generated_code`
-- DAG 对前置条件失败直接终止或回到 coder，不再进入 harvester/summarizer happy-path
-- summary 只在 terminal verdict 生成后投影，不应掩盖前置失败
+> 本问题是 Executor 职责过载（问题 35）的直接子症状：如果 Executor 有 typed outcome 合同，”无代码可执行”就会表达为 `terminal_failure` 而不是继续推进到 harvester。完整证据、影响与建议已合并到问题 35。
 
 #### 37. Summarizer 过载，混合终态判定、用户文案、技术投影、诊断聚合与脱敏
 
@@ -1248,70 +1278,50 @@
 - 再拆 `UserResponseProjector` 与 `TechnicalDetailsProjector`
 - 脱敏、memory 存储、UI event 发布放到 orchestration 收尾层，而不是 summary 文案构造函数内
 
-#### 38. Static/dynamic handoff 双写 `resume_overlay` 与 legacy steps，回流合同没有唯一 owner
+#### 38. 动态运行时双向缺少 typed 合同：handoff 双写（写方向）+ ExecutionData 被当扁平 dict（读方向）
 
 严重级别：HIGH
 
-证据：
+合并范围：
 
-- `docs/reference/execution-strategy.md:99`
-- `docs/reference/execution-strategy.md:103`
-- `src/blackboard/schema.py:764`
-- `src/blackboard/schema.py:766`
-- `src/dag_engine/nodes/dynamic_swarm_node.py:95`
-- `src/dag_engine/nodes/dynamic_swarm_node.py:110`
-- `src/dag_engine/dag_graph.py:329`
-- `src/dag_engine/dag_graph.py:337`
-
-问题说明：
-
-- 文档承认 v1 仍把 `resume_overlay` 与 `next_static_steps` 双写
-- `ExecutionDynamicState` 同时存 `resume_overlay` 和 `next_static_steps`
-- 动态节点 `_build_dynamic_patch()` 同时返回两套字段
-- 静态回流时 `_merge_dynamic_research_into_static_state()` 优先读 `dynamic_next_static_steps` 或 `execution_intent.metadata.next_static_steps`，没有把 `resume_overlay` 作为唯一输入合同
-
-为什么这是架构问题：
-
-- dynamic -> static handoff 的真实语义分布在 overlay、legacy step list、execution_intent metadata、state patch 多处
-- 一旦字段不同步，静态链会按旧步骤恢复，证据 refs、open questions、suggested actions 与实际回流计划分叉
-- 这会阻碍动态研究真正成为静态链的一等前置阶段
-
-建议方向：
-
-- `DynamicResumeOverlay` 升级为唯一 handoff contract
-- `next_static_steps` 不再持久化双写，只作为 overlay 的读时派生字段
-- `_merge_dynamic_research_into_static_state()` 只接收 `DynamicResumeOverlay + DynamicResearchPacket`，禁止从多个 legacy 字段猜测
-
-#### 39. 动态运行时把嵌套 ExecutionData 当扁平 dict 读取，导致上下文投影失真
-
-严重级别：HIGH
+- 原问题 39：动态运行时把嵌套 ExecutionData 当扁平 dict 读取，导致上下文投影失真
 
 证据：
 
-- `src/dag_engine/nodes/dynamic_swarm_node.py:34`
-- `src/dag_engine/nodes/dynamic_swarm_node.py:39`
-- `src/blackboard/schema.py:805`
-- `src/blackboard/schema.py:812`
-- `src/dynamic_engine/supervisor.py:115`
-- `src/dynamic_engine/supervisor.py:127`
+**Handoff 双写（写方向）：**
+- `docs/reference/execution-strategy.md:99`, `:103` — 文档承认 v1 仍双写 `resume_overlay` + `next_static_steps`
+- `src/blackboard/schema.py:764`, `:766` — `ExecutionDynamicState` 同时存两套字段
+- `src/dag_engine/nodes/dynamic_swarm_node.py:95`, `:110` — `_build_dynamic_patch()` 同时返回两套字段
+- `src/dag_engine/dag_graph.py:329`, `:337` — `_merge_dynamic_research_into_static_state()` 优先读 `dynamic_next_static_steps` 或 `execution_intent.metadata.next_static_steps`，不把 `resume_overlay` 作为唯一输入
+
+**扁平 dict 读取（读方向）：**
+- `src/dag_engine/nodes/dynamic_swarm_node.py:34`, `:39` — 动态节点把 `ExecutionData` 直接 `model_dump()` 成嵌套 dict
+- `src/blackboard/schema.py:805`, `:812`
+- `src/dynamic_engine/supervisor.py:115`, `:127` — `build_inherited_context()` 用 `execution_state.get("knowledge_snapshot")`、`execution_state.get("decision_log")`、`execution_state.get("execution_intent")` 读取顶层字段
 
 问题说明：
 
-- 动态节点把 `ExecutionData` 直接 `model_dump()` 成嵌套 dict
-- `ExecutionData` 的真实结构是 `control/inputs/knowledge/static/dynamic`
-- `DynamicSupervisor.build_inherited_context()` 却用 `execution_state.get("knowledge_snapshot")`、`execution_state.get("decision_log")`、`execution_state.get("execution_intent")` 读取顶层字段
+动态运行时在两个方向上缺少 typed 合同：
+- **写方向**：dynamic → static handoff 的语义分布在 overlay、legacy step list、execution_intent metadata、state patch 多处。一旦字段不同步，静态链按旧步骤恢复，证据 refs 与回流计划分叉。
+- **读方向**：动态节点读取 `ExecutionData` 时绕过其 `control/inputs/knowledge/static/dynamic` 的嵌套结构，用 `dict.get()` 猜顶层字段。动态链可能拿不到持久化的 knowledge snapshot、decision log、execution intent，退回瞬时 state 或空值。
 
-为什么这是架构问题：
+为什么重要：
 
-- 动态链可能拿不到持久化的 knowledge snapshot、decision log、execution intent，只能退回瞬时 state 或空值
-- 这不是单个字段 bug，而是缺少 `ExecutionData -> DynamicContextInput` 显式投影层
-- 后续任何嵌套 state 重构都会继续破坏 dynamic context
+- 读写两个方向都缺少显式 typed 投影层，后续任何 state 重构都会继续破坏 dynamic context
+- 这阻碍动态研究真正成为静态链的一等前置阶段
+
+根因：
+
+- 动态 ↔ 静态之间缺少双向 typed contract projector：写方向需要唯一 `DynamicResumeOverlay`，读方向需要 `DynamicContextInput`
 
 建议方向：
 
-- 建立 typed projector：`build_dynamic_context_input(execution_data: ExecutionData, graph_state: DagGraphState)`
-- 动态 supervisor 只能消费 `DynamicContextInput`，不得直接消费 raw `model_dump()`
-- 所有 knowledge/control/dynamic 字段通过 accessor 读取，禁止自由 `dict.get()` 猜结构
+- 写方向：`DynamicResumeOverlay` 升级为唯一 handoff contract；`next_static_steps` 不再持久化双写，只作为 overlay 的读时派生字段；`_merge_dynamic_research_into_static_state()` 只接收 `DynamicResumeOverlay + DynamicResearchPacket`
+- 读方向：建立 typed projector `build_dynamic_context_input(execution_data: ExecutionData, graph_state: DagGraphState)`；动态 supervisor 只能消费 `DynamicContextInput`，禁止 raw `model_dump()` + `dict.get()`
+
+#### 39. 已合并到问题 38：动态运行时把嵌套 ExecutionData 当扁平 dict 读取
+
+> 本问题与问题 38 共享同一根因：动态 ↔ 静态之间缺少 typed 合同。问题 38 覆盖写方向（handoff 双写），本条覆盖读方向（ExecutionData 扁平 dict 读取）。完整证据、影响与建议已合并到问题 38。
 
 #### 40. 动态 degraded preview 与 DAG terminal 语义互相矛盾
 
@@ -1380,37 +1390,47 @@
 - Auditor/Debugger/DAG/global event 都只读写同一份 repair loop state
 - retry outcome 应包含 `attempt_index`、`max_attempts`、`stop_reason`
 
-#### 42. `waiting_for_human` 在调度层是终态，在事件合同里却不是终态
+#### 42. `waiting_for_human` 终态语义不完整：事件侧不承认 + 产品侧没有操作闭环
 
 严重级别：MEDIUM
 
+合并范围：
+
+- 原问题 48：`waiting_for_human` 已作为终态展示，但缺少继续、补料、取消或归档闭环
+
 证据：
 
-- `src/api/services/task_flow_service.py:205`
-- `src/api/services/task_flow_service.py:212`
+**事件侧不承认（症状 A）：**
+- `src/api/services/task_flow_service.py:205`, `:212` — task flow 把 `terminal_status == "waiting_for_human"` 映射到 `GlobalStatus.WAITING_FOR_HUMAN`
 - `src/blackboard/schema.py:58`
-- `src/blackboard/global_blackboard.py:264`
-- `src/blackboard/global_blackboard.py:285`
-- `src/blackboard/global_blackboard.py:324`
-- `src/blackboard/global_blackboard.py:326`
+- `src/blackboard/global_blackboard.py:264`, `:285`, `:324`, `:326` — 恢复逻辑不把 WAITING_FOR_HUMAN 放入 unfinished tasks（说明它是阻断终态），但 `SYS_TASK_FINISHED` 只在 `SUCCESS/FAILED` 时发布
+
+**产品侧没有操作闭环（症状 B）：**
+- `apps/web/src/app/App.tsx:22` — 前端把 `waiting_for_human` 放入 terminal status set，停止轮询
+- `apps/web/src/pages/AnalysesPage.tsx:40`, `AnalysisDetailPage.tsx:23`
+- `src/blackboard/global_blackboard.py:325`, `:335` — 恢复逻辑不会自动恢复
+- 本轮搜索 `src/api` 与 `apps/web/src`：未看到针对 `waiting_for_human` 的 resume / continue / cancel 操作入口
+- `archive_task()` 只允许 `SUCCESS/FAILED`，不允许归档等待人工任务
 
 问题说明：
 
-- Task flow 把 `terminal_status == "waiting_for_human"` 映射到 `GlobalStatus.WAITING_FOR_HUMAN`
-- global blackboard 的恢复逻辑明确不把 WAITING_FOR_HUMAN 放入 unfinished tasks，说明它是稳定阻断终态
-- 但 `SYS_TASK_FINISHED` 只在 `SUCCESS/FAILED` 时发布
+`waiting_for_human` 在三个层面都存在语义不完整：
+- **事件侧**：调度层把它当终态（不自动恢复），但 event bus 不把它当终态（不发 `SYS_TASK_FINISHED`）
+- **产品侧**：前端把它当终态展示（停止轮询），但没有提供 resume / cancel / archive 动作入口
+- 结果：用户被告知"等待人工处理"后，面对一个不可操作的阻断终态
 
-为什么这是架构问题：
+为什么重要：
 
-- terminal state 集合没有统一定义
-- 依赖 finished event 的外部消费者会认为等待人工的任务仍未结束
-- Orchestration terminal 与 event terminal 不一致，会造成监控、恢复和 UI 状态不同步
+- 任务不会自动恢复，前端也停止轮询，除非开发者手工改状态，否则任务可能永久滞留
+- 这不是单纯的 event 语义问题，而是产品闭环缺口——terminal state 的定义需要贯穿 scheduler、event bus、API、前端
 
 建议方向：
 
-- 定义统一 `TerminalStatusSet = {success, failed, waiting_for_human, archived?}`
-- `SYS_TASK_FINISHED` 覆盖所有稳定终态，并用 `final_status` 区分结果
+- 定义统一 `TerminalStatusSet = {success, failed, waiting_for_human, archived}`
+- `SYS_TASK_FINISHED` 覆盖所有稳定终态，用 `final_status` 区分结果
 - 恢复逻辑、UI presenter、event bus 使用同一个 terminal 判定函数
+- 为 `waiting_for_human` 定义明确用户动作：补充 asset 后 resume、确认静态 fallback、取消、归档
+- app-facing API 增加对应端点，`archive_task()` 覆盖 `WAITING_FOR_HUMAN`
 
 #### 43. 已合并到问题 1：static codegen 双后端与模板注入
 
@@ -1592,71 +1612,13 @@
 - 如果 DeerFlow 必须依赖 cwd，应把 sidecar 限制为单请求串行，或在独立子进程中运行每个配置上下文。
 - 至少先统一相对路径解析：`resolve_client_config_dir()` 应复用与 `build_client_kwargs()` 相同的 project-root 解析逻辑。
 
-#### 47. app-facing read-model 退化把存储故障伪装成空数据
+#### 47. 已合并到问题 12：app-facing read-model 退化把存储故障伪装成空数据
 
-严重级别：MEDIUM
+> 本问题的 read-model 错误退化（RuntimeError → 空列表、HTTP 200）已合并到问题 12（presenter 过载），作为 presenter 承担过多错误处理逻辑的具体症状之一。
 
-证据：
+#### 48. 已合并到问题 42：`waiting_for_human` 已作为终态展示，但缺少操作闭环
 
-- `src/api/app_presenters.py:408`
-- `src/api/app_presenters.py:414`
-- `src/api/app_presenters.py:430`
-- `src/api/app_presenters.py:436`
-- `src/api/app_presenters.py:496`
-- `src/api/app_presenters.py:502`
-- `src/api/app_presenters.py:537`
-- `src/api/app_presenters.py:543`
-
-问题说明：
-
-- 资料、方法、审计 read-model 在遇到 `RuntimeError` 时都会记录 warning，然后退化为空列表或只展示预置方法。
-- 对 `Assets` 页，跳过 execution/knowledge state 后还可能继续展示 upload 目录，用户看不到“索引态不可用”的事实。
-- 对 `Audit` 页，`AuditRepo.query_records()` 失败会直接返回 `([], 0)`，治理页面呈现为“没有审计记录”。
-
-为什么重要：
-
-- 对业务资料库，空数据和存储不可用是两种完全不同的状态。
-- 对审计页面，把审计存储故障显示为空记录会削弱治理可信度。
-- 这也会让监控和前端错误处理失去信号，因为 HTTP 仍然是 200。
-
-建议方向：
-
-- 区分 soft degradation 与 hard failure：方法页展示预置方法可以 degraded，但审计记录不可用应返回结构化错误或带 `degraded=true` 的响应。
-- app-facing schema 增加 `warnings` / `degradedSources`，让前端明确显示“部分数据源不可用”。
-- 为 storage read failure 增加测试，验证用户不会把故障误解成空状态。
-
-#### 48. `waiting_for_human` 已作为终态展示，但缺少继续、补料、取消或归档闭环
-
-严重级别：MEDIUM
-
-证据：
-
-- `src/api/services/task_flow_service.py:205`
-- `apps/web/src/app/App.tsx:22`
-- `apps/web/src/pages/AnalysesPage.tsx:40`
-- `apps/web/src/pages/AnalysisDetailPage.tsx:23`
-- `src/blackboard/global_blackboard.py:325`
-- `src/blackboard/global_blackboard.py:335`
-- 本轮搜索 `src/api` 与 `apps/web/src`，未看到针对 `waiting_for_human` 的 resume / continue / cancel 操作入口。
-
-问题说明：
-
-- task flow 会把 input gap、治理阻断等路径落到 `GlobalStatus.WAITING_FOR_HUMAN`。
-- 前端把 `waiting_for_human` 放入 terminal status set，详情和列表都停止轮询。
-- global blackboard 恢复逻辑也明确不会自动恢复 `WAITING_FOR_HUMAN`。
-- 但产品/API 侧没有一等的“补充资料后继续”“确认后重跑”“取消/归档”动作；甚至 `archive_task()` 只允许 `SUCCESS/FAILED`，不允许归档等待人工任务。
-
-为什么重要：
-
-- 这会把用户引入一个不可操作的阻断终态：系统说“等待人工处理”，但没有提供处理入口。
-- 任务不会自动恢复，前端也停止轮询，因此除非开发者手工改状态，否则任务可能永久滞留。
-- 这不是单纯事件语义问题，而是产品闭环缺口。
-
-建议方向：
-
-- 为 `waiting_for_human` 定义明确用户动作：补充 asset 后 resume、确认静态 fallback、取消、归档。
-- app-facing API 增加对应端点和审计记录。
-- `archive_task()` 或新的 cancel/archive policy 应覆盖 `WAITING_FOR_HUMAN`，并补测试。
+> 本条与问题 42 共享同一根因：`waiting_for_human` 的终态语义不完整。问题 42 覆盖事件侧不一致（scheduler vs event bus），本条覆盖产品侧缺失（无 resume/cancel/archive）。完整证据、影响与建议已合并到问题 42。
 
 #### 49. 工作台运行/复核指标只基于第一页数据，容易与真实总量不一致
 
@@ -1735,38 +1697,45 @@
 
 ### 新增发现
 
-#### 50. DeerFlow readiness smoke 默认不做真实 sidecar 调用，会给动态运行时假绿信号
+#### 50. DeerFlow 与模型 smoke 默认都只做配置检查，运行时真链路未被默认门禁验证
 
 严重级别：HIGH
 
+合并范围：
+
+- 原问题 53：模型 smoke 目标默认只做配置检查，目标命名会误导发布验证
+
 证据：
 
-- `docs/how-to/testing.md:42`
-- `docs/how-to/testing.md:47`
-- `docs/how-to/development.md:154`
-- `docs/how-to/development.md:159`
-- `scripts/smoke_deerflow_bridge.py:31`
-- `scripts/smoke_deerflow_bridge.py:111`
-- `scripts/smoke_deerflow_bridge.py:112`
-- `scripts/smoke_deerflow_bridge.py:113`
+**DeerFlow smoke（症状 A）：**
+- `docs/how-to/testing.md:42`, `:47` — 测试文档把 `scripts/smoke_deerflow_bridge.py` 放在 readiness / smoke 命令
+- `docs/how-to/development.md:154`, `:159`
+- `scripts/smoke_deerflow_bridge.py:31`, `:111`, `:112`, `:113` — 默认只验证模块 import、配置文件存在、`DeerFlowClient` 可构造；仅 `--run-chat` 时才真实调用；默认路径输出 `chat SKIPPED` 后仍 exit 0
+
+**模型 smoke（症状 B）：**
+- `Makefile:54`, `:55` — `smoke-models` 目标
+- `docs/how-to/development.md:154`, `:158`
+- `scripts/smoke_dashscope_litellm.py:24`, `:25`, `:57`, `:58` — 默认 `live=False` 只探测 alias/config；仅 `--run-chat` / `--run-embedding` 时真实调用；默认无 live 参数时输出 `Result: CONFIG OK` 并 exit 0
 
 问题说明：
 
-- 测试文档把 `scripts/smoke_deerflow_bridge.py` 放在 readiness / smoke 命令里。
-- 但脚本默认只验证模块 import、配置文件存在、`DeerFlowClient` 可构造。
-- 只有显式传 `--run-chat` 时才会执行真实 chat 调用；默认路径输出 `chat SKIPPED` 后仍以 `READY FOR LIVE CHAT` 和 exit 0 结束。
+两个关键运行时 smoke 脚本共享同一个故障模式：名字暗示做了 live 验证（”smoke”），但默认行为只是 config probe。发布者会把”配置存在”误读成”运行时链路可用”。真实 sidecar 或模型服务挂掉、网络不可达、协议漂移时，默认命令仍是绿的。
 
 为什么重要：
 
-- 发布者会把“client 可构造”误读成“sidecar 可达、HTTP/streaming 正常、动态研究桥接可用”。
-- 真实 sidecar 服务挂掉、网络不可达、chat/streaming 协议漂移时，当前默认 smoke 仍可能是绿的。
-- 这会削弱第 46 条中 sidecar 并发风险之外的运行时发布信心：即便没有并发问题，live 链路也未被默认门禁验证。
+- DeerFlow 是动态研究的运行时依赖（见问题 4），模型链路是 LLM 应用的核心门禁——两个运行时真链路都不在默认门禁内
+- “smoke” 这个命名让维护者误以为已经验证了真链路
+
+根因：
+
+- 配置检查与 live smoke 的语义和命名未分离
 
 建议方向：
 
-- 把脚本拆成 `check-deerflow-config` 与 `smoke-deerflow-live` 两层。
-- readiness 文档里的发布级命令默认应跑 live 版本，至少校验 sidecar `/health` 和一次最小 chat/stream 请求。
-- 如果 live smoke 依赖密钥或外部服务，应显式区分 `skipped: missing credential`、`failed: sidecar unreachable`、`failed: protocol/runtime error`。
+- DeerFlow：拆成 `check-deerflow-config` 与 `smoke-deerflow-live`；live 版至少校验 sidecar `/health` 和一次最小 chat/stream 请求
+- 模型：当前目标重命名为 `check-model-config`；新增 `smoke-models-live` 显式传 `--run-chat --run-embedding`
+- live 目标统一区分：`skipped: missing credential`、`failed: unreachable`、`failed: protocol/runtime error`
+- readiness 文档里的发布级命令默认应跑 live 版本
 
 #### 51. app-facing “快速验收”脚本只验证创建接口，不能证明分析闭环可用
 
@@ -1835,38 +1804,9 @@
 - 本地开发可以保留 `npm install` 说明，但 release/CI/verify 入口必须使用 `npm ci`。
 - CI 增加 lockfile 漂移检查：运行安装和构建后，`git diff --exit-code apps/web/package-lock.json` 应保持干净。
 
-#### 53. 模型 smoke 目标默认只做配置检查，目标命名会误导发布验证
+#### 53. 已合并到问题 50：模型 smoke 目标默认只做配置检查
 
-严重级别：MEDIUM
-
-证据：
-
-- `Makefile:54`
-- `Makefile:55`
-- `docs/how-to/development.md:154`
-- `docs/how-to/development.md:158`
-- `scripts/smoke_dashscope_litellm.py:24`
-- `scripts/smoke_dashscope_litellm.py:25`
-- `scripts/smoke_dashscope_litellm.py:57`
-- `scripts/smoke_dashscope_litellm.py:58`
-
-问题说明：
-
-- Makefile 暴露 `smoke-models`，开发文档也把 `scripts/smoke_dashscope_litellm.py` 放在关键 smoke / readiness 命令里。
-- 但脚本默认 `live=False` 探测 alias/config，并且只有传 `--run-chat` 或 `--run-embedding` 时才会真实调用 provider。
-- 默认无 live 参数时直接输出 `Result: CONFIG OK` 并返回 0。
-
-为什么重要：
-
-- `make smoke-models` 这个名字容易让维护者以为已经验证了 DashScope/LiteLLM chat 与 embedding 真链路。
-- 实际上 provider 鉴权、网络、模型别名、embedding 维度、chat 返回格式都可能坏掉，而默认命令仍是绿的。
-- 对 LLM 应用来说，模型链路 smoke 是核心运行时门禁；配置检查和 live 调用必须在命名和 exit 语义上分开。
-
-建议方向：
-
-- 将当前目标重命名为 `check-model-config`。
-- 新增 `smoke-models-live`，显式传 `--run-chat --run-embedding`。
-- live 目标应把缺少密钥标记为环境型 skip/不可验证，把真实调用失败标记为 release-blocking failure。
+> 本条与问题 50 共享同一故障模式：smoke 脚本默认只做配置检查但以"smoke"命名，给发布验证假绿信号。完整证据、影响与建议已合并到问题 50。
 
 #### 54. Benchmark 基线默认落在被忽略目录，性能回归无法自然进入团队审查
 
@@ -1975,3 +1915,114 @@
 - 本条不重写 DAG。
 - 本条不改变 `known_gaps`、`single_pass`、`iterative` 或 dynamic/static 分工。
 - routing 问题应作为单独设计 / 实现任务处理，避免和上传预解析混成一个补丁。
+
+---
+
+## 补充审查五：模块扇入扇出与层次依赖分析（2026-04-29）
+
+### Scope
+
+本节使用自动化 import 分析对 `src/` 下 179 个 Python 文件进行扇入（被依赖数）、扇出（依赖数）、层次依赖矩阵和循环依赖检测。本节不修代码，只补充审计记录。
+
+### 方法
+
+- 正则匹配 `from src.xxx import ...` 和 `import src.xxx` 模式，构建文件级和层级有向依赖图。
+- 扇入：多少其他模块 import 了该模块 → 越高越基础，改动影响面越大。
+- 扇出：该模块 import 了多少其他模块 → 越高越脆弱，越难独立测试和替换。
+- DFS 染色法检测循环依赖。
+
+### 56. 项目模块层次已形成 5 层但 dag_engine 是上帝层
+
+严重级别：HIGH
+
+证据：
+
+- 层间依赖矩阵（数字 = 该层对其他层的 import 次数）：
+
+```
+FROM \ TO     api  black  common dag_eng dynam  harne  kag   mcp_ga memor  runti  sandb  skill storag
+api            -     9      16     15      2      2     1      1      1      1      3     2     14
+blackboard     -     -       9      -      -      -     1      -      -      -      -     1      4
+common         -     -       -      1      -      -     1      -      -      -      -     -      2
+dag_engine     -    39      33      -      3      1    11      4      5      4      1     3      3
+dynamic_eng    -     -       8      1      -      2     -      -      1      1      -     -      -
+evals          -     1       -      2      -      -     -      -      -      -      -     -      -
+harness        -     -       2      -      -      -     -      -      -      -      -     -      -
+kag            -     2      20      -      -      1     -      -      -      -      -     -     17
+mcp_gateway    -     3       5      -      -      1     1      -      -      -      1     1      -
+memory         -     1       -      -      -      -     -      -      -      -      -     2      1
+prompts        -     -       -      -      -      -     -      -      -      -      -     -      -
+privacy        -     -       -      -      -      -     -      -      -      -      -     -      -
+runtime        -     -       2      -      -      -     1      -      -      -      -     -      -
+sandbox        -     -       9      -      -      4     -      -      -      -      -     -      -
+skillnet       -     1       4      -      -      -     -      -      -      -      -     -      -
+storage        -     -      13      -      -      -     -      -      -      -      -     -      -
+```
+
+- 从矩阵可识别出 5 个结构层：
+
+```
+Layer 4  api/              ── HTTP 入口/适配层，总 fan-out = 73
+Layer 3  dag_engine/       ── 编排层，总 fan-out = 116（上帝层）
+         dynamic_engine/   ── 动态运行时适配，fan-out = 17
+Layer 2  blackboard/       ── 状态事实源，fan-in = 33
+         mcp_gateway/      ── 工具网关
+         sandbox/          ── Docker 执行边界，17 文件，30 次内部 import
+Layer 1  kag/              ── 知识编译/检索/构建，42 文件（最大层），20 次内部 import
+         skillnet/         ── 技能管理
+         runtime/          ── 分析分类/路由
+         memory/           ── 技能记忆
+Layer 0  common/           ── 基础设施，fan-in = 48（最高，最稳定层）
+         storage/          ── 持久化
+         harness/          ── 治理
+         prompts/          ── 提示词模板（fan-out = 0，最稳定）
+         privacy/          ── 隐私（fan-out = 0，最稳定）
+```
+
+- 循环依赖检测：**0 个文件级循环依赖**（DFS 染色法，179 个文件全量扫描）。这是正向信号。
+
+问题说明：
+
+**A. `dag_engine` 是上帝层。** fan-out = 116，依赖 blackboard 39 次、common 33 次、kag 11 次、memory 5 次、mcp_gateway 4 次、runtime 4 次、dynamic_engine 3 次、skillnet 3 次、storage 3 次。编排层知道所有领域细节，这是"所有逻辑都在编排层"的典型症状。正常架构中编排层应该只依赖抽象/合同，不直接依赖每个领域层的实现。
+
+**B. `api/` 层穿透所有层。** 总 fan-out = 73，依赖 common(16)、dag_engine(15)、storage(14)、blackboard(9)、sandbox(3)、skillnet(2)、dynamic_engine(2)。`api.services.task_flow_service` 单文件 fan-out = 23，是项目最高值。这意味着 API 层不仅做 HTTP 适配，还做任务编排——它是 `dag_graph.py` 之外的第二个 orchestrator。
+
+**C. `common.control_plane` 是危险的巨型工具包。** fan-in = 21（21 个文件依赖它），但它内部包含大量带 `"legacy_dataset_aware_generator"` 默认值的 `ensure_*` 工厂函数。改动一个默认值会影响 21 个消费者。这些默认值正是 legacy 策略族在整个代码库中传播的通道（见 Finding 1-A 的 D 节）。
+
+**D. `kag/` 是最大层但边界模糊。** 42 个文件，fan-out 到 common(20) 和 storage(17)。内部 20 次自引用说明内聚性尚可，但对外的接口不统一——`kag.compiler`（fan-in 8）、`kag.builder.orchestrator`（fan-out 10），哪些是编译、哪些是构建、哪些是检索，对外暴露的公共 API 不清晰。
+
+**E. `api.services.task_flow_service`（fan-out 23）和 `dag_engine.dag_graph`（fan-out 7）抢控制权。** task_flow_service 依赖 23 个内部模块，比 DAG 的 `execute_task_flow()` 还多。这印证了 Finding 1 的判断——DAG 名义上是编排主控，但实际上编排逻辑分散在 DAG、task_flow_service、registry、coder 等多处。
+
+**F. `sandbox/` 内部耦合重。** 17 个文件，30 次内部 import。`sandbox.docker_executor` fan-out = 15。沙箱层虽然有清晰的对外边界（只依赖 common 和 harness），但内部模块之间的耦合需要审视——替换 docker executor 或增加新 runtime backend 时可能触碰大量内部文件。
+
+**G. `prompts/` 和 `privacy/` 是真正的叶子层。** fan-out 均为 0，不被任何其他层依赖（fan-in 也接近 0）。这说明提示词模板和隐私配置是项目中最稳定、最独立的部分，是好信号。
+
+**H. 高层次整体健康。** 无循环依赖、common 层是正确的基础层（fan-in 最高、fan-out 低）、5 层结构清晰可辨。主要问题是 dag_engine 和 api 两层过厚。
+
+为什么重要：
+
+- dag_engine 的 fan-out = 116 意味着：新增一个领域模块、修改 blackboard schema、或调整 knowledge 编译逻辑时，编排层大概率也需要改动
+- 编排层和 API 层之间的控制权竞争会导致：同一个任务流程有两种不同的"正确"实现方式（DAG 路径 vs. task_flow_service 直接调用）
+- common.control_plane 的高 fan-in + legacy 默认值 = 21 个文件通过默认参数隐式依赖旧行为
+- 无循环依赖是当前项目最强的结构性资产，后续重构应保持这个属性
+
+建议方向：
+
+- 让 dag_engine 只依赖抽象合同（AnalystPlan、NodeOutcome），而不是直接依赖 blackboard、kag、memory 的具实现
+- 收窄 `api.services.task_flow_service`：它应该只做 task lifecycle（创建、取消、查询状态），不应该知道 DAG 内部的节点编排细节
+- `common.control_plane` 拆分：`ensure_*` 工厂函数中的默认值集中到一个 `Defaults` 常量模块，让 legacy 默认值的传播范围可见、可控
+- kag 层对外暴露统一 facade（`KagFacade` 或 `KnowledgePipeline`），而不是让 dag_engine 分别 import compiler、builder、retriever 的内部模块
+- sandbox 层内部抽象出 `RuntimeBackend` interface，让 docker_executor 的替换不影响层内其他模块
+
+### 关键指标汇总
+
+| 维度 | 数值 | 评级 |
+| --- | ---: | --- |
+| 总源文件 | 179 | — |
+| 循环依赖 | 0 | 好 |
+| 最高 fan-in | common(48) | 正确：基础层应在顶部 |
+| 最高 fan-out | dag_engine(116) | 危险：上帝层反模式 |
+| 第二大 fan-out | api(73) | 危险：入口层兼做编排 |
+| 最大文件数层 | kag(42) | 需审视：边界是否清晰 |
+| 最高单文件 fan-out | task_flow_service(23) | 危险：隐形第二编排器 |
+| 最稳定层 | prompts, privacy (fan-out=0) | 好：叶子层零依赖 |

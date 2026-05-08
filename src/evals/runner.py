@@ -57,19 +57,14 @@ def run_case(case: EvalCase) -> EvalResult:
         "allowed_tools": list(case.allowed_tools),
     }
     route_result = router_node(state)
-    intent_metadata = dict((route_result.get("execution_intent") or {}).get("metadata") or {})
+    execution_intent = route_result.get("execution_intent") or {}
     observed: dict[str, Any] = {
-        "analysis_mode": intent_metadata.get("analysis_mode"),
-        "final_mode": intent_metadata.get("final_mode"),
-        "routing_stage": intent_metadata.get("routing_stage"),
-        "fine_routing_invoked": bool(intent_metadata.get("fine_routing_invoked")),
-        "routing_degraded": bool(intent_metadata.get("routing_degraded")),
+        "intent": execution_intent.get("intent"),
         "next_actions": list(route_result.get("next_actions") or []),
-        "effective_model_alias": intent_metadata.get("effective_model_alias"),
-        "known_gaps": list(intent_metadata.get("known_gaps") or []),
+        "known_gaps": [],
     }
     checks = {
-        "analysis_mode": observed["analysis_mode"] == case.expected_analysis_mode,
+        "intent": observed["intent"] == case.expected_intent,
         "route": case.expected_route in observed["next_actions"],
     }
     if case.expected_known_gap_substrings:
@@ -129,17 +124,9 @@ def run_seed_evals(*, output_dir: str | Path | None = None) -> dict[str, Any]:
             "total": len(results),
             "passed": sum(1 for item in results if item.passed),
             "failed": sum(1 for item in results if not item.passed),
-            "fine_routing_invocations": sum(
-                1 for item in results if bool(item.observed.get("fine_routing_invoked"))
-            ),
-            "routing_degraded_count": sum(1 for item in results if bool(item.observed.get("routing_degraded"))),
-            "routing_stage_counts": {
-                stage: sum(1 for item in results if item.observed.get("routing_stage") == stage)
-                for stage in ("coarse", "fine", "fallback")
-            },
-            "final_mode_counts": {
-                mode: sum(1 for item in results if item.observed.get("final_mode") == mode)
-                for mode in ("static", "dynamic")
+            "intent_counts": {
+                intent: sum(1 for item in results if item.observed.get("intent") == intent)
+                for intent in ("static_flow", "dynamic_flow")
             },
         },
         "results": [result.to_payload() for result in results],

@@ -143,3 +143,8 @@ config.yaml
 # Local generated analysis artifacts
 /.lite_interpreter_artifacts/
 /output/
+
+# ==========================================
+# Claude Code local session files
+# ==========================================
+.claude/

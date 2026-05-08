@@ -1,30 +1,38 @@
-"""Minimal analyst node for the static execution path."""
+"""Analyst node — sole writer of the frozen ExecutionStrategy.
+
+Uses Instructor + LiteLLM to compile the analysis context into a structured,
+immutable ExecutionStrategy.  No other node may overwrite strategy fields
+after this point.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
-from config.settings import STATIC_EVIDENCE_ALLOWED_DOMAINS
+import instructor
+from litellm import completion
 
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import get_logger
-from src.common.control_plane import ensure_evidence_plan, ensure_execution_strategy
+from src.common.contracts import CapabilityTier, EvidencePlan, ExecutionStrategy
+from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
 from src.memory import MemoryService
-from src.runtime import build_analysis_brief, resolve_runtime_decision
+from src.runtime import build_analysis_brief
 
 logger = get_logger(__name__)
 
+# Instructor-wrapped LiteLLM client — produces Pydantic models directly.
+_analyst_client = instructor.from_litellm(completion)
 
-@dataclass(frozen=True)
-class PreparedAnalysisPlan:
-    """All artifacts the analyst node needs to persist."""
 
-    analysis_brief: dict[str, Any]
-    analysis_plan: str
+def _resolve_analysis_brief_payload(state: DagGraphState, exec_data: Any) -> dict[str, Any] | None:
+    payload = state.get("analysis_brief") if isinstance(state.get("analysis_brief"), dict) else None
+    if payload is None and exec_data.knowledge.analysis_brief.question:
+        return exec_data.knowledge.analysis_brief.model_dump(mode="json")
+    return payload
 
 
 def _format_approved_skill_hints(approved_skills: list[dict[str, Any]]) -> str:
@@ -50,100 +58,127 @@ def _format_approved_skill_hints(approved_skills: list[dict[str, Any]]) -> str:
     return "；".join(parts)
 
 
-def _resolve_analysis_brief_payload(state: DagGraphState, exec_data: Any) -> dict[str, Any] | None:
-    analysis_brief_payload = state.get("analysis_brief") if isinstance(state.get("analysis_brief"), dict) else None
-    if analysis_brief_payload is None and exec_data.knowledge.analysis_brief.question:
-        return exec_data.knowledge.analysis_brief.model_dump(mode="json")
-    return analysis_brief_payload
-
-
-def _build_evidence_summary(
-    *,
+def _build_analyst_messages(
+    query: str,
     analysis_brief: dict[str, Any],
-    refined_context: str,
+    knowledge_snapshot: dict[str, Any],
+    business_context: dict[str, Any],
     approved_skills: list[dict[str, Any]],
-) -> list[str]:
-    evidence_summary: list[str] = []
-    if analysis_brief.get("business_rules"):
-        evidence_summary.append(f"rules={len(analysis_brief['business_rules'])}")
-    if analysis_brief.get("business_metrics"):
-        evidence_summary.append(f"metrics={len(analysis_brief['business_metrics'])}")
-    if analysis_brief.get("dataset_summaries"):
-        evidence_summary.append(f"datasets={len(analysis_brief['dataset_summaries'])}")
-    if refined_context:
-        evidence_summary.append("refined_context=present")
-    if approved_skills:
-        evidence_summary.append(f"approved_skills={len(approved_skills)}")
-    if analysis_brief.get("evidence_refs"):
-        evidence_summary.append(f"evidence_refs={len(analysis_brief['evidence_refs'])}")
-    return evidence_summary
+) -> list[dict[str, str]]:
+    """Build the system + user messages for Instructor → ExecutionStrategy."""
+    datasets = analysis_brief.get("dataset_summaries") or []
+    rules = analysis_brief.get("business_rules") or []
+    metrics = analysis_brief.get("business_metrics") or []
+    filters = analysis_brief.get("business_filters") or []
+    known_gaps = analysis_brief.get("known_gaps") or []
+    evidence_refs = analysis_brief.get("evidence_refs") or []
+    skill_hints = _format_approved_skill_hints(approved_skills)
+
+    system = """You are an analysis planner for a governed data-analysis runtime.
+
+Your job: read the query, data context, and knowledge snapshot, then produce
+a structured ExecutionStrategy that tells the DAG what capability level is
+needed and what kind of analysis code to generate.
+
+## CapabilityTier (capability_tier)
+Choose the *lowest* tier that can satisfy the query:
+
+- static_only: pure local data analysis, no external info needed
+- static_with_network: needs one or two external lookups (web_search / web_fetch)
+  to fill a known gap, then local analysis
+- dynamic_exploration_then_static: needs multi-step open-ended research first,
+  then structured analysis on the results
+- dynamic_only: pure research / summarization — no code generation needed,
+  the exploration result IS the deliverable
+
+## Analysis mode (analysis_mode)
+Pick the analysis type that best matches the data and query:
+- dataset_analysis: structured CSV/TSV/JSON data, profile / aggregate / compare
+- document_rule_audit: business rules / policies / compliance documents
+- hybrid_analysis: mix of structured data + external evidence
+- need_more_inputs: not enough data to proceed
+- dynamic_research_analysis: purely external / open-ended research
+
+## Summary (summary)
+A 2-3 sentence plain-language summary of the plan.  This replaces the old
+free-text analysis_plan for display purposes.
+
+## Evidence plan (evidence_plan)
+If capability_tier is static_with_network or higher, specify search_queries,
+allowed_domains, allowed_capabilities (web_search, web_fetch), and a
+research_mode (none / single_pass / iterative).
+
+## Fallback tier (fallback_tier)
+Optional. If the primary tier fails, declare the next lower tier to try.
+Must be strictly lower capability than capability_tier."""
+
+    user_parts = [
+        f"## 用户查询\n{query}",
+        f"## 分析模式\n{analysis_brief.get('analysis_mode') or 'auto'}",
+        f"## 数据集\n" + ("\n".join(f"- {s}" for s in datasets) if datasets else "无结构化数据"),
+        f"## 业务规则\n" + ("\n".join(f"- {r}" for r in rules) if rules else "无"),
+        f"## 业务指标\n" + ("\n".join(f"- {m}" for m in metrics) if metrics else "无"),
+        f"## 过滤条件\n" + ("\n".join(f"- {f}" for f in filters) if filters else "无"),
+        f"## 已知缺口\n" + ("\n".join(f"- {g}" for g in known_gaps) if known_gaps else "无"),
+        f"## 证据引用\n{', '.join(evidence_refs) if evidence_refs else 'none'}",
+        f"## 可复用技能\n{skill_hints}",
+        f"## 推荐下一步\n{analysis_brief.get('recommended_next_step') or 'auto'}",
+    ]
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n\n".join(user_parts)},
+    ]
 
 
-def _prepare_analysis_plan(
-    *,
-    state: DagGraphState,
-    exec_data: Any,
-    refined_context: str,
-) -> PreparedAnalysisPlan:
-    query = state["input_query"]
-    allowed_tools = list(exec_data.control.task_envelope.allowed_tools) if exec_data.control.task_envelope else []
-    memory_data = MemoryService.recall_skills(
-        tenant_id=exec_data.tenant_id,
-        task_id=exec_data.task_id,
-        workspace_id=exec_data.workspace_id,
+def _compile_execution_strategy(
+    query: str,
+    analysis_brief: dict[str, Any],
+    knowledge_snapshot: dict[str, Any],
+    business_context: dict[str, Any],
+    approved_skills: list[dict[str, Any]],
+    model_alias: str,
+) -> ExecutionStrategy:
+    """Instructor LLM → ExecutionStrategy.  Falls back to STATIC_ONLY on failure."""
+    messages = _build_analyst_messages(
         query=query,
-        stage="analyst",
-        available_capabilities=allowed_tools,
-        match_reason_detail="analyst reused historical skills while drafting the analysis plan",
-    ).memory_data
-    runtime_decision = resolve_runtime_decision(
-        call_purpose="analysis_summary",
-        query=query,
-        state=state,
-        exec_data=exec_data,
-        allowed_tools=allowed_tools,
-    )
-    analysis_brief = (
-        _resolve_analysis_brief_payload(state, exec_data)
-        or build_analysis_brief(
-            query=query,
-            exec_data=exec_data,
-            knowledge_snapshot=exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
-            business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
-            analysis_mode=runtime_decision.analysis_mode,
-            known_gaps=runtime_decision.known_gaps,
-        ).to_payload()
-    )
-    evidence_summary = _build_evidence_summary(
         analysis_brief=analysis_brief,
-        refined_context=refined_context,
-        approved_skills=list(memory_data.approved_skills or []),
+        knowledge_snapshot=knowledge_snapshot,
+        business_context=business_context,
+        approved_skills=approved_skills,
     )
-    analysis_plan = (
-        f"任务类型: {analysis_brief.get('analysis_mode') or runtime_decision.analysis_mode}\n"
-        f"目标: {query}\n"
-        f"证据策略: {runtime_decision.evidence_strategy}\n"
-        f"证据概览: {', '.join(evidence_summary) if evidence_summary else '无额外上下文'}\n"
-        f"数据输入: {'；'.join(analysis_brief.get('dataset_summaries') or ['暂无结构化数据'])}\n"
-        f"规则与口径: {'；'.join(list(analysis_brief.get('business_rules') or []) + list(analysis_brief.get('business_metrics') or []) + list(analysis_brief.get('business_filters') or [])) or '暂无规则/指标/过滤条件'}\n"
-        f"证据引用: {', '.join(analysis_brief.get('evidence_refs') or []) or 'none'}\n"
-        f"已知缺口: {'；'.join(analysis_brief.get('known_gaps') or []) or 'none'}\n"
-        "步骤:\n"
-        "1. 先核对数据结构、业务规则和证据引用是否足以支撑分析结论\n"
-        f"2. 优先评估可复用技能: {_format_approved_skill_hints(memory_data.approved_skills)}\n"
-        "3. 生成一个面向统计、校验、分组和过滤的数据分析代码片段\n"
-        "4. 在执行前进行 AST 审计\n"
-        f"5. {analysis_brief.get('recommended_next_step') or '将执行结果回写黑板与前端事件流'}"
-    )
-    return PreparedAnalysisPlan(
-        analysis_brief=analysis_brief,
-        analysis_plan=analysis_plan,
-    )
+    config = LiteLLMClient.get_model_config(model_alias)
+    try:
+        strategy = _analyst_client.chat.completions.create(
+            model=str(config.params.get("model") or model_alias),
+            response_model=ExecutionStrategy,
+            messages=messages,
+            max_retries=3,
+            temperature=float(config.params.get("temperature", 0.2)),
+        )
+        logger.info(
+            f"[Analyst] plan compiled tier={strategy.capability_tier.value} "
+            f"mode={strategy.analysis_mode} family={strategy.strategy_family}"
+        )
+        return strategy
+    except Exception as exc:
+        logger.error(f"[Analyst] Instructor compilation failed: {exc}")
+        return ExecutionStrategy(
+            capability_tier=CapabilityTier.STATIC_ONLY,
+            analysis_mode=analysis_brief.get("analysis_mode") or "dataset_analysis",
+            summary=f"Plan compilation failed ({exc}), falling back to static analysis.",
+        )
+
+
+def _next_actions_from_tier(tier: CapabilityTier) -> list[str]:
+    if tier == CapabilityTier.STATIC_WITH_NETWORK:
+        return ["static_evidence"]
+    return ["coder"]
 
 
 def analyst_node(state: DagGraphState) -> dict[str, Any]:
     tenant_id = state["tenant_id"]
     task_id = state["task_id"]
+    query = state["input_query"]
     refined_context = str(state.get("refined_context", "") or "")
 
     global_blackboard.update_global_status(
@@ -155,46 +190,50 @@ def analyst_node(state: DagGraphState) -> dict[str, Any]:
     exec_data = execution_blackboard.read(tenant_id, task_id)
     if not exec_data:
         logger.warning(f"[Analyst] 缺少任务 {task_id} 的执行上下文")
-        return {"analysis_plan": "", "next_actions": ["coder"]}
-    prepared = _prepare_analysis_plan(
-        state=state,
-        exec_data=exec_data,
-        refined_context=refined_context,
+        return {"execution_strategy": {}, "next_actions": ["coder"]}
+
+    # Recall approved skills
+    allowed_tools = list(exec_data.control.task_envelope.allowed_tools) if exec_data.control.task_envelope else []
+    memory_data = MemoryService.recall_skills(
+        tenant_id=exec_data.tenant_id,
+        task_id=exec_data.task_id,
+        workspace_id=exec_data.workspace_id,
+        query=query,
+        stage="analyst",
+        available_capabilities=allowed_tools,
+        match_reason_detail="analyst reused historical skills while drafting the analysis plan",
+    ).memory_data
+
+    # Build analysis brief (delegates to existing runtime helpers for context assembly)
+    analysis_brief = (
+        _resolve_analysis_brief_payload(state, exec_data)
+        or build_analysis_brief(
+            query=query,
+            exec_data=exec_data,
+            knowledge_snapshot=exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
+            business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
+            analysis_mode="auto",
+        ).to_payload()
     )
-    runtime_decision = resolve_runtime_decision(
-        call_purpose="analysis_summary",
-        query=state["input_query"],
-        state=state,
-        exec_data=exec_data,
-        allowed_tools=list(exec_data.control.task_envelope.allowed_tools) if exec_data.control.task_envelope else [],
+
+    # Compile immutable ExecutionStrategy via Instructor
+    execution_strategy = _compile_execution_strategy(
+        query=query,
+        analysis_brief=analysis_brief,
+        knowledge_snapshot=exec_data.knowledge.knowledge_snapshot.model_dump(mode="json"),
+        business_context=exec_data.knowledge.business_context.model_dump(mode="json"),
+        approved_skills=list(memory_data.approved_skills or []),
+        model_alias="reasoning_model",
     )
-    evidence_plan = ensure_evidence_plan(
-        {
-            "research_mode": runtime_decision.research_mode,
-            "search_queries": [state["input_query"]] if runtime_decision.research_mode == "single_pass" else [],
-            "allowed_domains": list(STATIC_EVIDENCE_ALLOWED_DOMAINS),
-            "allowed_capabilities": ["web_search", "web_fetch"],
-        },
-        research_mode=runtime_decision.research_mode,
-    )
-    execution_strategy = ensure_execution_strategy(
-        exec_data.static.execution_strategy or {},
-        analysis_mode=prepared.analysis_brief.get("analysis_mode") or runtime_decision.analysis_mode,
-        research_mode=runtime_decision.research_mode,
-        evidence_plan=evidence_plan,
-        legacy_compatibility={
-            "analysis_plan": prepared.analysis_plan,
-            "next_static_steps": list(runtime_decision.next_static_steps),
-        },
-    )
-    exec_data.knowledge.analysis_brief = prepared.analysis_brief
-    exec_data.static.analysis_plan = prepared.analysis_plan
+
+    # Persist
+    exec_data.knowledge.analysis_brief = analysis_brief
     exec_data.static.execution_strategy = execution_strategy
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
-    next_actions = ["static_evidence"] if runtime_decision.research_mode == "single_pass" else ["coder"]
+
+    next_actions = _next_actions_from_tier(execution_strategy.capability_tier)
     return {
-        "analysis_plan": prepared.analysis_plan,
         "execution_strategy": execution_strategy.model_dump(mode="json"),
         "next_actions": next_actions,
     }

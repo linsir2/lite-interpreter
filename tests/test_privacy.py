@@ -68,7 +68,7 @@ def test_build_dynamic_context_prefers_canonical_task_contract_fields():
                 "max_dynamic_steps": 9,
             },
             "execution_intent": {
-                "intent": "dynamic_only",
+                "intent": "dynamic_flow",
                 "destinations": ["dynamic_swarm"],
             },
             # 故意给扁平字段放冲突值，验证优先使用规范契约

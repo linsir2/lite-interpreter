@@ -11,8 +11,6 @@ from config.settings import OUTPUT_DIR
 
 from src.common.contracts import (
     ArtifactEmitSpec,
-    ArtifactPlan,
-    ArtifactSpec,
     ArtifactVerificationResult,
     ComputationStep,
     DebugHint,
@@ -23,17 +21,16 @@ from src.common.contracts import (
     StaticEvidenceBundle,
     StaticProgramSpec,
     StrategyFamily,
-    VerificationPlan,
+    _derive_artifact_plan,
+    _derive_verification_plan,
 )
 from src.common.control_plane import (
     artifact_category_from_path,
-    ensure_artifact_plan,
     ensure_artifact_verification_result,
     ensure_dynamic_resume_overlay,
     ensure_execution_strategy,
     ensure_generator_manifest,
     ensure_static_program_spec,
-    ensure_verification_plan,
     sanitize_artifact_reference,
     static_artifacts,
 )
@@ -76,109 +73,6 @@ def resolve_strategy_family(
     if not structured_count and not document_count:
         return "input_gap_report"
     return "legacy_dataset_aware_generator"
-
-
-def _artifact_spec(
-    artifact_key: str,
-    file_name: str,
-    *,
-    category: str,
-    required: bool = True,
-    summary: str = "",
-    description: str = "",
-) -> ArtifactSpec:
-    return ArtifactSpec(
-        artifact_key=artifact_key,
-        file_name=file_name,
-        category=category,
-        artifact_type=category,
-        format=Path(file_name).suffix.lstrip("."),
-        required=required,
-        summary=summary,
-        description=description,
-    )
-
-
-def artifact_plan_for_family(strategy_family: StrategyFamily) -> ArtifactPlan:
-    required: list[ArtifactSpec]
-    optional: list[ArtifactSpec]
-    notes: list[str]
-    if strategy_family == "dataset_profile":
-        required = [
-            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="数据分析报告"),
-            _artifact_spec("summary_json", "summary.json", category="export", summary="结构化摘要"),
-        ]
-        optional = [
-            _artifact_spec("comparison_csv", "comparison.csv", category="export", required=False, summary="对比导出"),
-        ]
-        notes = ["趋势图不是 v1 强制项；优先保证报告与结构化导出稳定生成。"]
-    elif strategy_family == "document_rule_audit":
-        required = [
-            _artifact_spec("rule_audit_report", "rule_audit_report.md", category="report", summary="规则审计报告"),
-            _artifact_spec("rule_checks_json", "rule_checks.json", category="export", summary="规则检查结果"),
-        ]
-        optional = []
-        notes = ["文档规则审计以报告和规则检查 JSON 作为最小交付面。"]
-    elif strategy_family == "hybrid_reconciliation":
-        required = [
-            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="综合分析报告"),
-            _artifact_spec(
-                "cross_source_findings",
-                "cross_source_findings.json",
-                category="export",
-                summary="跨来源发现",
-            ),
-            _artifact_spec("comparison_csv", "comparison.csv", category="export", summary="用户导向对比导出"),
-        ]
-        optional = []
-        notes = ["v1 用 comparison.csv 代替更重的图表引擎。"]
-    elif strategy_family == "input_gap_report":
-        required = [
-            _artifact_spec("input_gap_report", "input_gap_report.md", category="report", summary="输入缺口报告"),
-        ]
-        optional = [
-            _artifact_spec(
-                "requested_inputs_json",
-                "requested_inputs.json",
-                category="export",
-                required=False,
-                summary="补充输入请求",
-            ),
-        ]
-        notes = ["input_gap_report 禁止产伪图表。"]
-    else:
-        required = [
-            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="兼容报告"),
-            _artifact_spec("summary_json", "summary.json", category="export", summary="兼容摘要"),
-        ]
-        optional = []
-        notes = ["legacy fallback 继续使用 dataset-aware renderer，但产出新 artifact contract。"]
-
-    return ensure_artifact_plan(
-        {
-            "strategy_family": strategy_family,
-            "output_root": "/app/outputs",
-            "required_artifacts": [item.model_dump(mode="json") for item in required],
-            "optional_artifacts": [item.model_dump(mode="json") for item in optional],
-            "notes": notes,
-        },
-        strategy_family=strategy_family,
-    )
-
-
-def verification_plan_for_family(strategy_family: StrategyFamily) -> VerificationPlan:
-    prohibited_extensions = [".png", ".jpg", ".jpeg", ".webp"] if strategy_family == "input_gap_report" else []
-    artifact_plan = artifact_plan_for_family(strategy_family)
-    return ensure_verification_plan(
-        {
-            "strategy_family": strategy_family,
-            "required_artifact_keys": [item.artifact_key for item in artifact_plan.required_artifacts if item.required],
-            "prohibited_extensions": prohibited_extensions,
-            "allowed_output_roots": [str(Path(OUTPUT_DIR).resolve())],
-            "require_declared_filenames": True,
-        },
-        strategy_family=strategy_family,
-    )
 
 
 def _artifact_writer_snippet() -> str:
@@ -406,7 +300,7 @@ def build_static_program_spec(
     strategy_family: StrategyFamily,
     research_mode: str,
 ) -> StaticProgramSpec:
-    artifact_plan = artifact_plan_for_family(strategy_family)
+    artifact_plan = _derive_artifact_plan(strategy_family)
     step_kinds = ["load_datasets", "load_documents"]
     if research_mode == "single_pass":
         step_kinds.append("load_evidence")
@@ -484,7 +378,7 @@ def build_static_generation_bundle(
     *,
     dynamic_resume_overlay: Mapping[str, Any] | DynamicResumeOverlay | None = None,
     repair_plan: Mapping[str, Any] | None = None,
-) -> tuple[str, ExecutionStrategy, GeneratorManifest]:
+) -> tuple[str, GeneratorManifest, StaticProgramSpec | None]:
     existing_strategy_payload = dict(payload.get("execution_strategy") or {})
     resume_overlay = (
         ensure_dynamic_resume_overlay(dynamic_resume_overlay)
@@ -521,32 +415,7 @@ def build_static_generation_bundle(
         strategy_family = existing_strategy_family
     else:
         strategy_family = resolved_strategy_family
-    if repair_plan and str(repair_plan.get("action") or "") == "fallback_to_legacy":
-        strategy_family = "legacy_dataset_aware_generator"
-    artifact_plan = artifact_plan_for_family(strategy_family)
-    verification_plan = verification_plan_for_family(strategy_family)
-    strategy_seed = dict(existing_strategy_payload)
-    strategy_seed["analysis_mode"] = analysis_mode
-    strategy_seed["research_mode"] = research_mode
-    strategy_seed["strategy_family"] = strategy_family
-    strategy_seed["generator_id"] = f"{strategy_family}_generator"
-    execution_strategy = ensure_execution_strategy(
-        strategy_seed,
-        analysis_mode=analysis_mode,
-        research_mode=research_mode,
-        strategy_family=strategy_family,
-        generator_id=f"{strategy_family}_generator",
-        evidence_plan=existing_strategy_payload.get("evidence_plan"),
-        artifact_plan=artifact_plan,
-        verification_plan=verification_plan,
-        repair_plan=repair_plan,
-        resume_overlay=resume_overlay,
-        legacy_compatibility={
-            "analysis_plan": str(payload.get("analysis_plan") or ""),
-            "generation_directives": dict(payload.get("generation_directives") or {}),
-            "next_static_steps": list((resume_overlay.next_static_steps if resume_overlay else []) or []),
-        },
-    )
+    artifact_plan = _derive_artifact_plan(strategy_family)
     expected_keys = [
         *(item.artifact_key for item in artifact_plan.required_artifacts),
         *(item.artifact_key for item in artifact_plan.optional_artifacts),
@@ -560,20 +429,16 @@ def build_static_generation_bundle(
         metadata={"analysis_mode": analysis_mode, "research_mode": research_mode},
     )
     enriched_payload = dict(payload)
-    enriched_payload["execution_strategy"] = execution_strategy.model_dump(mode="json")
     enriched_payload["generator_manifest"] = generator_manifest.model_dump(mode="json")
-    enriched_payload["artifact_plan"] = artifact_plan.model_dump(mode="json")
-    enriched_payload["verification_plan"] = verification_plan.model_dump(mode="json")
     if strategy_family == "legacy_dataset_aware_generator":
         legacy_code = render_dataset_aware_code(enriched_payload)
-        return _inject_artifact_writer(legacy_code), execution_strategy, generator_manifest
+        return _inject_artifact_writer(legacy_code), generator_manifest, None
     program_spec = build_static_program_spec(
         payload=enriched_payload,
         strategy_family=strategy_family,
         research_mode=research_mode,
     )
-    execution_strategy.program_spec = program_spec
-    return compile_static_program(program_spec.model_dump(mode="json"), enriched_payload), execution_strategy, generator_manifest
+    return compile_static_program(program_spec.model_dump(mode="json"), enriched_payload), generator_manifest, program_spec
 
 
 def verify_generated_artifacts(
@@ -582,8 +447,8 @@ def verify_generated_artifacts(
     execution_record: ExecutionRecord | Mapping[str, Any] | None,
 ) -> ArtifactVerificationResult:
     strategy = ensure_execution_strategy(execution_strategy or {})
-    verification_plan = ensure_verification_plan(strategy.verification_plan)
-    artifact_plan = ensure_artifact_plan(strategy.artifact_plan)
+    verification_plan = strategy.verification_plan
+    artifact_plan = strategy.artifact_plan
     artifacts = static_artifacts(execution_record)
     artifact_names = {
         Path(str(item.get("path") or "")).name: item

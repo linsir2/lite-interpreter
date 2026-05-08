@@ -10,9 +10,9 @@ from config.settings import OUTPUT_DIR, UPLOAD_DIR
 
 from src.common.contracts import (
     ArtifactEmitSpec,
-    ArtifactPlan,
     ArtifactRecord,
     ArtifactVerificationResult,
+    CapabilityTier,
     ComputationStep,
     DebugAttemptRecord,
     DebugHint,
@@ -32,7 +32,7 @@ from src.common.contracts import (
     StaticRepairPlan,
     StrategyFamily,
     TaskEnvelope,
-    VerificationPlan,
+    _derive_research_mode,
 )
 
 
@@ -130,9 +130,6 @@ def ensure_execution_intent(
     routing_mode: str | None = None,
     destinations: Iterable[Any] | None = None,
     reason: str = "",
-    complexity_score: float = 0.0,
-    candidate_skills: Iterable[Any] | None = None,
-    dynamic_reason: str | None = None,
 ) -> ExecutionIntent:
     if isinstance(value, ExecutionIntent):
         payload = value.model_dump(mode="json")
@@ -144,22 +141,22 @@ def ensure_execution_intent(
     intent = _normalize_string(payload.get("intent"))
     resolved_routing_mode = _normalize_string(routing_mode or payload.get("routing_mode"), "static")
     if not intent:
-        if destination_values == ["dynamic_swarm"] or resolved_routing_mode == "dynamic":
-            next_static_steps = _normalize_string_list((payload.get("metadata") or {}).get("next_static_steps"))
-            intent = "dynamic_then_static_flow" if next_static_steps else "dynamic_only"
-        else:
-            intent = "static_flow"
-    metadata = dict(payload.get("metadata") or {})
-    if dynamic_reason and "dynamic_reason" not in metadata:
-        metadata["dynamic_reason"] = dynamic_reason
+        intent = "dynamic_flow" if destination_values == ["dynamic_swarm"] or resolved_routing_mode == "dynamic" else "static_flow"
+    # Map legacy intent values to current Literal (backward compat for persisted data)
+    _legacy_intent_map = {
+        "dynamic_only": "dynamic_flow",
+        "dynamic_then_static": "dynamic_flow",
+        "dynamic_then_static_flow": "dynamic_flow",
+        "static_with_network": "static_flow",
+        "static_only": "static_flow",
+    }
+    if intent in _legacy_intent_map:
+        intent = _legacy_intent_map[intent]
     payload.update(
         {
             "intent": intent,
             "destinations": destination_values,
             "reason": _normalize_string(payload.get("reason"), reason),
-            "complexity_score": float(payload.get("complexity_score", complexity_score) or 0.0),
-            "candidate_skills": _normalize_payload_list(payload.get("candidate_skills") or candidate_skills),
-            "metadata": metadata,
         }
     )
     return ExecutionIntent.model_validate(payload)
@@ -204,23 +201,6 @@ def ensure_dynamic_resume_overlay(
         else None
     )
     return DynamicResumeOverlay.model_validate(payload)
-
-
-def ensure_artifact_plan(
-    value: Any = None,
-    *,
-    strategy_family: str = "legacy_dataset_aware_generator",
-    output_root: str = "/app/outputs",
-) -> ArtifactPlan:
-    if isinstance(value, ArtifactPlan):
-        payload = value.model_dump(mode="json")
-    elif isinstance(value, Mapping):
-        payload = dict(value)
-    else:
-        payload = {}
-    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
-    payload.setdefault("output_root", _normalize_string(payload.get("output_root"), output_root))
-    return ArtifactPlan.model_validate(payload)
 
 
 def ensure_evidence_plan(
@@ -284,32 +264,11 @@ def ensure_static_evidence_bundle(
     return StaticEvidenceBundle.model_validate(payload)
 
 
-def ensure_verification_plan(
-    value: Any = None,
-    *,
-    strategy_family: str = "legacy_dataset_aware_generator",
-    required_artifact_keys: Iterable[Any] | None = None,
-) -> VerificationPlan:
-    if isinstance(value, VerificationPlan):
-        payload = value.model_dump(mode="json")
-    elif isinstance(value, Mapping):
-        payload = dict(value)
-    else:
-        payload = {}
-    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
-    payload["required_artifact_keys"] = _normalize_string_list(
-        payload.get("required_artifact_keys") or required_artifact_keys
-    )
-    payload["prohibited_extensions"] = _normalize_string_list(payload.get("prohibited_extensions"))
-    payload["allowed_output_roots"] = _normalize_string_list(payload.get("allowed_output_roots"))
-    return VerificationPlan.model_validate(payload)
-
-
 def ensure_static_program_spec(
     value: Any = None,
     *,
     spec_id: str = "",
-    strategy_family: str = "legacy_dataset_aware_generator",
+    strategy_family: str = "dataset_profile",
     analysis_mode: str = "",
     research_mode: ResearchMode = "none",
 ) -> StaticProgramSpec:
@@ -384,7 +343,7 @@ def ensure_generator_manifest(
     value: Any = None,
     *,
     generator_id: str,
-    strategy_family: str = "legacy_dataset_aware_generator",
+    strategy_family: str = "dataset_profile",
     renderer_id: str = "dataset_aware_renderer",
     fallback_used: bool = False,
     expected_artifact_keys: Iterable[Any] | None = None,
@@ -411,63 +370,40 @@ def ensure_execution_strategy(
     value: Any = None,
     *,
     analysis_mode: str = "",
-    research_mode: ResearchMode = "none",
-    strategy_family: str = "legacy_dataset_aware_generator",
-    generator_id: str = "legacy_dataset_aware_generator",
+    capability_tier: CapabilityTier = CapabilityTier.STATIC_ONLY,
+    fallback_tier: CapabilityTier | None = None,
+    summary: str = "",
     evidence_plan: EvidencePlan | Mapping[str, Any] | None = None,
-    artifact_plan: ArtifactPlan | Mapping[str, Any] | None = None,
-    verification_plan: VerificationPlan | Mapping[str, Any] | None = None,
-    program_spec: StaticProgramSpec | Mapping[str, Any] | None = None,
-    repair_plan: StaticRepairPlan | Mapping[str, Any] | None = None,
-    resume_overlay: DynamicResumeOverlay | Mapping[str, Any] | None = None,
-    legacy_compatibility: Mapping[str, Any] | None = None,
 ) -> ExecutionStrategy:
     if isinstance(value, ExecutionStrategy):
-        payload = value.model_dump(mode="json")
-    elif isinstance(value, Mapping):
+        return value
+    if isinstance(value, Mapping):
         payload = dict(value)
     else:
         payload = {}
     payload.setdefault("analysis_mode", _normalize_string(payload.get("analysis_mode"), analysis_mode))
-    payload.setdefault("research_mode", _normalize_string(payload.get("research_mode"), research_mode))
-    payload.setdefault("strategy_family", _normalize_string(payload.get("strategy_family"), strategy_family))
-    payload.setdefault("generator_id", _normalize_string(payload.get("generator_id"), generator_id))
+    payload.setdefault("capability_tier", _normalize_string(payload.get("capability_tier"), capability_tier))
+    if fallback_tier is not None:
+        payload.setdefault("fallback_tier", fallback_tier)
+    payload.setdefault("summary", _normalize_string(payload.get("summary"), summary))
+    # Derive research_mode from capability_tier for evidence_plan construction
+    tier_raw = payload.get("capability_tier", capability_tier)
+    if isinstance(tier_raw, CapabilityTier):
+        tier = tier_raw
+    else:
+        tier = CapabilityTier(str(tier_raw))
+    derived_rm = _derive_research_mode(tier)
     payload["evidence_plan"] = ensure_evidence_plan(
         payload.get("evidence_plan") or evidence_plan,
-        research_mode=str(payload.get("research_mode") or research_mode),
+        research_mode=derived_rm,
     ).model_dump(mode="json")
-    payload["artifact_plan"] = ensure_artifact_plan(
-        payload.get("artifact_plan") or artifact_plan,
-        strategy_family=str(payload.get("strategy_family") or strategy_family),
-    ).model_dump(mode="json")
-    payload["verification_plan"] = ensure_verification_plan(
-        payload.get("verification_plan") or verification_plan,
-        strategy_family=str(payload.get("strategy_family") or strategy_family),
-    ).model_dump(mode="json")
-    if payload.get("program_spec") is not None or program_spec is not None:
-        payload["program_spec"] = ensure_static_program_spec(
-            payload.get("program_spec") or program_spec,
-            spec_id=str((payload.get("program_spec") or {}).get("spec_id") or ""),
-            strategy_family=str(payload.get("strategy_family") or strategy_family),
-            analysis_mode=str(payload.get("analysis_mode") or analysis_mode),
-            research_mode=str(payload.get("research_mode") or research_mode),
-        ).model_dump(mode="json")
-    if payload.get("repair_plan") is not None or repair_plan is not None:
-        payload["repair_plan"] = ensure_static_repair_plan(
-            payload.get("repair_plan") or repair_plan,
-        ).model_dump(mode="json")
-    if payload.get("resume_overlay") or resume_overlay is not None:
-        payload["resume_overlay"] = ensure_dynamic_resume_overlay(
-            payload.get("resume_overlay") or resume_overlay,
-        ).model_dump(mode="json")
-    payload["legacy_compatibility"] = dict(payload.get("legacy_compatibility") or legacy_compatibility or {})
     return ExecutionStrategy.model_validate(payload)
 
 
 def ensure_artifact_verification_result(
     value: Any = None,
     *,
-    strategy_family: str = "legacy_dataset_aware_generator",
+    strategy_family: str = "dataset_profile",
     passed: bool = False,
 ) -> ArtifactVerificationResult:
     if isinstance(value, ArtifactVerificationResult):
@@ -506,38 +442,19 @@ def execution_intent_reason(execution_intent: ExecutionIntent | Mapping[str, Any
     return ""
 
 
-def execution_intent_candidate_skills(
-    execution_intent: ExecutionIntent | Mapping[str, Any] | None,
-) -> list[dict[str, Any]]:
-    if isinstance(execution_intent, ExecutionIntent):
-        return _normalize_payload_list(execution_intent.candidate_skills)
-    if isinstance(execution_intent, Mapping):
-        return _normalize_payload_list(execution_intent.get("candidate_skills"))
-    return []
-
-
-def execution_intent_dynamic_reason(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> str | None:
-    metadata: Mapping[str, Any] | None = None
-    if isinstance(execution_intent, ExecutionIntent):
-        metadata = execution_intent.metadata
-    elif isinstance(execution_intent, Mapping):
-        metadata = execution_intent.get("metadata") if isinstance(execution_intent.get("metadata"), Mapping) else None
-    if not metadata:
-        return None
-    value = _normalize_string(metadata.get("dynamic_reason"))
-    return value or None
-
-
 def execution_intent_routing_mode(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> str:
     if isinstance(execution_intent, ExecutionIntent):
-        return "dynamic" if execution_intent.intent in {"dynamic_only", "dynamic_then_static_flow"} else "static"
+        return "dynamic" if execution_intent.intent == "dynamic_flow" else "static"
     if isinstance(execution_intent, Mapping):
-        return (
-            "dynamic"
-            if _normalize_string(execution_intent.get("intent")) in {"dynamic_only", "dynamic_then_static_flow"}
-            else "static"
-        )
+        raw_intent = _normalize_string(execution_intent.get("intent"))
+        if raw_intent in {"dynamic_flow", "dynamic_only", "dynamic_then_static", "dynamic_then_static_flow"}:
+            return "dynamic"
     return "static"
+
+
+def execution_intent_dynamic_reason(execution_intent: ExecutionIntent | Mapping[str, Any] | None) -> str:
+    """返回 execution_intent 的 reason 字段，供动态链和 skill harvest 使用。"""
+    return execution_intent_reason(execution_intent)
 
 
 def decision_log_records(

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1300" viewBox="0 0 1400 1300">
+<defs>
+  <marker id="arrowDown" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto" markerUnits="strokeWidth">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/>
+  </marker>
+  <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto" markerUnits="strokeWidth">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+  </marker>
+  <style>
+    text { font-family: Arial, Helvetica, sans-serif; }
+  </style>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="700.0" y="38" font-size="24" fill="#1e40af" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Lite-Interpreter: Financial Analysis Runtime Platform</text>
+<text x="700.0" y="58" font-size="16" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">System Architecture</text>
+<text x="700.0" y="72" font-size="16" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">User</text>
+<circle cx="665.0" cy="68" r="8" fill="none" stroke="#334155" stroke-width="1.5"/>
+<circle cx="665.0" cy="64" r="4" fill="#334155"/>
+<rect x="70" y="100" width="1260" height="70" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="120" font-size="13" fill="#2563eb" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 1 - Product Layer</text>
+<rect x="280" y="122" width="840" height="38" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="135.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">React / Vite Web Frontend</text>
+<text x="700.0" y="153.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">(apps/web)</text>
+<line x1="700.0" y1="80" x2="700.0" y2="100" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrowDown)"/>
+<rect x="70" y="182" width="1260" height="70" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="202" font-size="13" fill="#2563eb" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 2 - Product API Layer</text>
+<rect x="330" y="204" width="740" height="38" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="217.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">/api/app/*</text>
+<text x="700.0" y="235.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">(Starlette + Pydantic)</text>
+<line x1="700.0" y1="170" x2="700.0" y2="182" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrowDown)"/>
+<rect x="70" y="264" width="1260" height="100" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="284" font-size="13" fill="#0d9488" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 3 - Control Layer</text>
+<rect x="310.0" y="292" width="340" height="58" fill="#ffffff" stroke="#0d9488" stroke-width="1.5" rx="8" ry="8"/>
+<text x="480.0" y="315.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Blackboard</text>
+<text x="480.0" y="333.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">Global - Execution - Knowledge - Memory</text>
+<rect x="670.0" y="292" width="200" height="58" fill="#ffffff" stroke="#0d9488" stroke-width="1.5" rx="8" ry="8"/>
+<text x="770.0" y="326.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Event Bus</text>
+<rect x="890.0" y="292" width="200" height="58" fill="#ffffff" stroke="#0d9488" stroke-width="1.5" rx="8" ry="8"/>
+<text x="990.0" y="326.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Event Journal</text>
+<line x1="700.0" y1="252" x2="700.0" y2="264" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrowDown)"/>
+<rect x="70" y="376" width="1260" height="100" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="396" font-size="13" fill="#2563eb" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 4 - Orchestration Layer</text>
+<rect x="400.0" y="396" width="600" height="65" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="433.5" font-size="16" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">DAG Engine</text>
+<rect x="440.0" y="426" width="250" height="28" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.5" rx="8" ry="8"/>
+<text x="565.0" y="445.0" font-size="12" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Static Chain</text>
+<rect x="710.0" y="426" width="250" height="28" fill="#dbeafe" stroke="#60a5fa" stroke-width="1.5" rx="8" ry="8"/>
+<text x="835.0" y="445.0" font-size="12" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Dynamic Chain</text>
+<line x1="700.0" y1="364" x2="700.0" y2="376" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrowDown)"/>
+<rect x="70" y="488" width="1260" height="80" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="508" font-size="13" fill="#7c3aed" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 5 - Dynamic Runtime Layer</text>
+<rect x="500.0" y="510" width="400" height="42" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="536.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">DeerFlow Sidecar</text>
+<path d="M 1000.0 428.5 C 1040.0 428.5, 1040.0 531.0, 900.0 531.0" stroke="#7c3aed" stroke-width="2" fill="none"/>
+<path d="M 500.0 531.0 C 460.0 531.0, 460.0 428.5, 400.0 428.5" stroke="#7c3aed" stroke-width="2" fill="none"/>
+<text x="1045.0" y="474.75" font-size="11" fill="#7c3aed" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Dynamic</text>
+<text x="1045.0" y="487.75" font-size="11" fill="#7c3aed" text-anchor="start" font-weight="normal" font-family="Arial, Helvetica, sans-serif">Research</text>
+<text x="455.0" y="474.75" font-size="11" fill="#7c3aed" text-anchor="end" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Results</text>
+<text x="455.0" y="487.75" font-size="11" fill="#7c3aed" text-anchor="end" font-weight="normal" font-family="Arial, Helvetica, sans-serif">Returned</text>
+<rect x="70" y="580" width="1260" height="110" fill="#ecfdf5" stroke="#059669" stroke-width="1.5" rx="12" ry="12" opacity="0.5"/>
+<text x="85" y="600" font-size="13" fill="#059669" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Layer 6 - Execution &amp; Knowledge Layer</text>
+<rect x="240.0" y="608" width="280" height="58" fill="#ffffff" stroke="#059669" stroke-width="1.5" rx="8" ry="8"/>
+<text x="380.0" y="631.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Sandbox</text>
+<text x="380.0" y="649.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">AST Audit + Docker</text>
+<rect x="540.0" y="608" width="320" height="58" fill="#ffffff" stroke="#059669" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="631.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">KAG Retriever</text>
+<text x="700.0" y="649.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">Knowledge-Augmented Generation</text>
+<rect x="880.0" y="608" width="280" height="58" fill="#ffffff" stroke="#059669" stroke-width="1.5" rx="8" ry="8"/>
+<text x="1020.0" y="631.0" font-size="14" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">SkillNet</text>
+<text x="1020.0" y="649.0" font-size="11" fill="#64748b" text-anchor="middle" font-weight="normal" font-family="Arial, Helvetica, sans-serif">Skill Harvester + Skill Repository</text>
+<line x1="700.0" y1="476" x2="700.0" y2="580" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrowDown)"/>
+<rect x="540.0" y="674" width="320" height="24" fill="#d1fae5" stroke="#059669" stroke-width="1.5" rx="8" ry="8"/>
+<text x="700.0" y="691.0" font-size="10" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Hybrid Search: BM25 + Vector + Graph</text>
+<line x1="700.0" y1="666" x2="700.0" y2="674" stroke="#059669" stroke-width="1.5"/>
+<path d="M 1000.0 461 L 1020.0 608" stroke="#d97706" stroke-width="2" fill="none" marker-end="url(#arrowOrange)"/>
+<text x="1080.0" y="600" font-size="11" fill="#d97706" text-anchor="start" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Successful paths</text>
+<line x1="80" y1="710" x2="1320" y2="710" stroke="#94a3b8" stroke-width="1" stroke-dasharray="6,4"/>
+<text x="700.0" y="726" font-size="14" fill="#475569" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Storage Layer</text>
+<rect x="265.0" y="752" width="250" height="27" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<ellipse cx="390.0" cy="752" rx="125.0" ry="14" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<ellipse cx="390.0" cy="779" rx="125.0" ry="14" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<rect x="265.0" y="779" width="250" height="14" fill="#dbeafe" stroke="none"/>
+<text x="390.0" y="770.5" font-size="12" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Postgres (State)</text>
+<rect x="575.0" y="752" width="250" height="27" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+<ellipse cx="700.0" cy="752" rx="125.0" ry="14" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+<ellipse cx="700.0" cy="779" rx="125.0" ry="14" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+<rect x="575.0" y="779" width="250" height="14" fill="#ccfbf1" stroke="none"/>
+<text x="700.0" y="770.5" font-size="12" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Qdrant (Vectors)</text>
+<rect x="885.0" y="752" width="250" height="27" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<ellipse cx="1010.0" cy="752" rx="125.0" ry="14" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<ellipse cx="1010.0" cy="779" rx="125.0" ry="14" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+<rect x="885.0" y="779" width="250" height="14" fill="#ede9fe" stroke="none"/>
+<text x="1010.0" y="770.5" font-size="12" fill="#334155" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Neo4j (Knowledge Graph)</text>
+<line x1="390.0" y1="695" x2="390.0" y2="738" stroke="#2563eb" stroke-width="1.5" marker-end="url(#arrowDown)"/>
+<line x1="700.0" y1="695" x2="700.0" y2="738" stroke="#0d9488" stroke-width="1.5" marker-end="url(#arrowDown)"/>
+<line x1="1010.0" y1="695" x2="1010.0" y2="738" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrowDown)"/>
+<line x1="35" y1="120" x2="35" y2="680" stroke="#ef4444" stroke-width="3"/>
+<polygon points="29,680 41,680 35,690" fill="#ef4444"/>
+<text x="35" y="112" font-size="11" fill="#ef4444" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Main</text>
+<text x="35" y="126" font-size="11" fill="#ef4444" text-anchor="middle" font-weight="bold" font-family="Arial, Helvetica, sans-serif">Flow</text>
+</svg>

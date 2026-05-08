@@ -355,7 +355,7 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
         caveats.append("业务文档已挂载，但当前最小代码仅输出预览，不做全文语义推理。")
 
     details = {
-        "analysis_plan": exec_data.static.analysis_plan,
+        "analysis_plan": execution_strategy.summary,
         "analysis_brief": analysis_brief_payload,
         "execution_success": execution_success(exec_data.static.execution_record),
         "artifacts": static_artifacts(exec_data.static.execution_record),
@@ -368,8 +368,6 @@ def _build_static_response(task_id: str, exec_data, memory_data) -> dict[str, An
         "program_spec": (
             exec_data.static.program_spec.model_dump(mode="json")
             if getattr(exec_data.static, "program_spec", None)
-            else execution_strategy.program_spec.model_dump(mode="json")
-            if execution_strategy.program_spec
             else None
         ),
         "repair_plan": (

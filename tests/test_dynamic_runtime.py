@@ -25,7 +25,7 @@ def test_dynamic_supervisor_prepares_allowed_run_plan():
     )
     assert plan.governance_decision.allowed is True
     assert plan.request is not None
-    assert plan.execution_intent.intent == "dynamic_only"
+    assert plan.execution_intent.intent == "dynamic_flow"
     assert plan.task_envelope.task_id == "task-supervisor"
 
 
@@ -45,7 +45,7 @@ def test_dynamic_supervisor_builds_denied_patch_for_unknown_tools():
     assert plan.governance_decision.allowed is False
     assert denied_patch["dynamic_status"] == "denied"
     assert denied_patch["dynamic_continuation"] == "finish"
-    assert denied_patch["execution_intent"].intent == "dynamic_only"
+    assert denied_patch["execution_intent"].intent == "dynamic_flow"
 
 
 def test_dynamic_supervisor_context_prefers_execution_state_snapshot_and_history():
@@ -109,7 +109,7 @@ def test_dynamic_supervisor_prefers_router_metadata_over_recomputed_profile():
         },
         {
             "execution_intent": {
-                "intent": "dynamic_only",
+                "intent": "dynamic_flow",
                 "destinations": ["dynamic_swarm"],
                 "metadata": {
                     "analysis_mode": "dynamic_research_analysis",
