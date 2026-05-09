@@ -344,7 +344,7 @@ def ensure_generator_manifest(
     *,
     generator_id: str,
     strategy_family: str = "dataset_profile",
-    renderer_id: str = "dataset_aware_renderer",
+    renderer_id: str = "compiler",
     fallback_used: bool = False,
     expected_artifact_keys: Iterable[Any] | None = None,
     metadata: Mapping[str, Any] | None = None,

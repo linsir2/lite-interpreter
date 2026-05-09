@@ -28,7 +28,7 @@ from src.common.logger import get_logger
 from src.dag_engine.graphstate import DagGraphState
 from src.kag.builder.classifier import DocProcessClass, DocumentClassifier
 from src.kag.builder.orchestrator import KagBuilderOrchestrator
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 from src.kag.retriever.query_engine import QueryEngine
 from src.storage.repository.knowledge_repo import KnowledgeRepo
 

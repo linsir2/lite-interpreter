@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.common import get_logger
-from src.kag.compiler.graph import GraphCompiler
+from src.compiler.kag.graph import GraphCompiler
 from src.storage.schema import EntityNode, KnowledgeTriple
 
 logger = get_logger(__name__)

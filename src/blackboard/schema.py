@@ -28,7 +28,7 @@ from src.common.contracts import (
 )
 from src.common.control_plane import parser_reports_from_documents
 from src.common.utils import get_utc_now
-from src.kag.compiler.types import CompiledKnowledgeState
+from src.compiler.kag.types import CompiledKnowledgeState
 from src.skillnet.skill_schema import SkillReplayCase
 
 
@@ -430,12 +430,9 @@ class NodeOutputPatchState(StrictStateModel):
     raw_retrieved_candidates: list[dict[str, Any]] = Field(default_factory=list)
     knowledge_snapshot: KnowledgeSnapshotState | None = None
     analysis_brief: AnalysisBriefState | None = None
-    analysis_plan: str = ""
     generated_code: str = ""
     execution_strategy: ExecutionStrategy | None = None
     static_evidence_bundle: StaticEvidenceBundle | None = None
-    program_spec: StaticProgramSpec | None = None
-    repair_plan: StaticRepairPlan | None = None
     debug_attempts: list[DebugAttemptRecord] = Field(default_factory=list)
     generator_manifest: GeneratorManifest | None = None
     artifact_verification: ArtifactVerificationResult | None = None
@@ -485,10 +482,6 @@ class NodeOutputPatchState(StrictStateModel):
                 "static_evidence_bundle",
                 StaticEvidenceBundle.model_validate(self.static_evidence_bundle),
             )
-        if self.program_spec is not None and not isinstance(self.program_spec, StaticProgramSpec):
-            object.__setattr__(self, "program_spec", StaticProgramSpec.model_validate(self.program_spec))
-        if self.repair_plan is not None and not isinstance(self.repair_plan, StaticRepairPlan):
-            object.__setattr__(self, "repair_plan", StaticRepairPlan.model_validate(self.repair_plan))
         object.__setattr__(
             self,
             "debug_attempts",

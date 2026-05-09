@@ -9,6 +9,7 @@ from typing import Any
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.task_state_services import KnowledgeStateService
 from src.common import get_utc_now
+from src.common.contracts import FailureType, TerminalVerdict
 from src.common.control_plane import ensure_dynamic_resume_overlay
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
@@ -235,13 +236,15 @@ def _run_material_refresh_actions(
                     node_fn=nodes["summarizer"],
                     state=current_state,
                 )
+                verdict = TerminalVerdict.waiting(
+                    sub_status="结构化数据探查失败，等待人工介入",
+                    failure_type=FailureType.DATA_INSPECTION,
+                    error_message=str(current_state.get("block_reason") or "data inspection blocked"),
+                )
                 return current_state, {
                     **current_state,
                     **summary_state,
-                    "terminal_status": "waiting_for_human",
-                    "terminal_sub_status": "结构化数据探查失败，等待人工介入",
-                    "failure_type": "data_inspection",
-                    "error_message": str(current_state.get("block_reason") or "data inspection blocked"),
+                    **verdict.to_dict(),
                 }
         elif action == "kag_retriever":
             current_state.update(
@@ -257,13 +260,15 @@ def _run_material_refresh_actions(
                     node_fn=nodes["summarizer"],
                     state=current_state,
                 )
+                verdict = TerminalVerdict.waiting(
+                    sub_status="知识构建失败，等待人工介入",
+                    failure_type=FailureType.KNOWLEDGE_INGESTION,
+                    error_message=str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                )
                 return current_state, {
                     **current_state,
                     **summary_state,
-                    "terminal_status": "waiting_for_human",
-                    "terminal_sub_status": "知识构建失败，等待人工介入",
-                    "failure_type": "knowledge_ingestion",
-                    "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                    **verdict.to_dict(),
                 }
             current_state.update(
                 _run_checkpointed_node(
@@ -320,13 +325,15 @@ def _execute_static_flow(
                     node_fn=nodes["summarizer"],
                     state=current_state,
                 )
+                verdict = TerminalVerdict.waiting(
+                    sub_status="结构化数据探查失败，等待人工介入",
+                    failure_type=FailureType.DATA_INSPECTION,
+                    error_message=str(current_state.get("block_reason") or "data inspection blocked"),
+                )
                 return {
                     **current_state,
                     **summary_state,
-                    "terminal_status": "waiting_for_human",
-                    "terminal_sub_status": "结构化数据探查失败，等待人工介入",
-                    "failure_type": "data_inspection",
-                    "error_message": str(current_state.get("block_reason") or "data inspection blocked"),
+                    **verdict.to_dict(),
                 }
         elif action == "kag_retriever":
             current_state.update(
@@ -338,13 +345,15 @@ def _execute_static_flow(
                     node_fn=nodes["summarizer"],
                     state=current_state,
                 )
+                verdict = TerminalVerdict.waiting(
+                    sub_status="知识构建失败，等待人工介入",
+                    failure_type=FailureType.KNOWLEDGE_INGESTION,
+                    error_message=str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                )
                 return {
                     **current_state,
                     **summary_state,
-                    "terminal_status": "waiting_for_human",
-                    "terminal_sub_status": "知识构建失败，等待人工介入",
-                    "failure_type": "knowledge_ingestion",
-                    "error_message": str(current_state.get("block_reason") or "knowledge ingestion blocked"),
+                    **verdict.to_dict(),
                 }
             current_state.update(
                 _run_checkpointed_node(
@@ -383,13 +392,15 @@ def _execute_static_flow(
                 node_fn=nodes["summarizer"],
                 state=current_state,
             )
+            verdict = TerminalVerdict.waiting(
+                sub_status="静态取证失败，等待人工介入",
+                failure_type=FailureType.STATIC_EVIDENCE,
+                error_message=str(current_state.get("block_reason") or "static evidence blocked"),
+            )
             return {
                 **current_state,
                 **summary_state,
-                "terminal_status": "waiting_for_human",
-                "terminal_sub_status": "静态取证失败，等待人工介入",
-                "failure_type": "static_evidence",
-                "error_message": str(current_state.get("block_reason") or "static evidence blocked"),
+                **verdict.to_dict(),
             }
         current_state = _run_evidence_compiler_if_needed(
             current_state=current_state,
@@ -434,12 +445,12 @@ def _execute_static_flow(
             node_fn=nodes["summarizer"],
             state={**current_state, **harvested_state},
         )
+        verdict = TerminalVerdict.ok(sub_status="静态链路完成，跳过沙箱执行")
         return {
             **current_state,
             **harvested_state,
             **summary_state,
-            "terminal_status": "success",
-            "terminal_sub_status": "静态链路完成，跳过沙箱执行",
+            **verdict.to_dict(),
         }
 
     executor_state = _run_checkpointed_node(node_name="executor", node_fn=nodes["executor"], state=current_state)
@@ -471,30 +482,28 @@ def _execute_static_flow(
         and execution_record.get("success")
         and _final_response_requires_human_follow_up(final_response)
     ):
+        verdict = TerminalVerdict.waiting(
+            sub_status="已生成输入缺口报告，等待人工补充资料",
+            failure_type=FailureType.NEED_MORE_INPUTS,
+            error_message="input gap report generated",
+        )
         return {
             **current_state,
-            "terminal_status": "waiting_for_human",
-            "terminal_sub_status": "已生成输入缺口报告，等待人工补充资料",
-            "failure_type": "need_more_inputs",
-            "error_message": "input gap report generated",
+            **verdict.to_dict(),
         }
     if execution_record and execution_record.get("success"):
-        return {
-            **current_state,
-            "terminal_status": "success",
-            "terminal_sub_status": success_sub_status,
-        }
-    return {
-        **current_state,
-        "terminal_status": "failed",
-        "terminal_sub_status": "静态链路执行失败",
-        "failure_type": "executing",
-        "error_message": str(
+        verdict = TerminalVerdict.ok(sub_status=success_sub_status)
+        return {**current_state, **verdict.to_dict()}
+    verdict = TerminalVerdict.fail(
+        sub_status="静态链路执行失败",
+        failure_type=FailureType.EXECUTING,
+        error_message=str(
             execution_record.get("error", "sandbox execution failed")
             if execution_record
             else "sandbox execution result missing"
         ),
-    }
+    )
+    return {**current_state, **verdict.to_dict()}
 
 
 def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -681,40 +690,44 @@ def execute_task_flow(
                     node_fn=nodes["summarizer"],
                     state={**dynamic_state, **harvested_state, **route_result, **state},
                 )
+                verdict = TerminalVerdict.ok(sub_status="动态任务链路执行完成")
                 return {
                     **route_result,
                     **dynamic_state,
                     **harvested_state,
                     **summary_state,
-                    "terminal_status": "success",
-                    "terminal_sub_status": "动态任务链路执行完成",
+                    **verdict.to_dict(),
                 }
             if dynamic_status == "denied":
                 summary_state = nodes["summarizer"]({**dynamic_state, **state})
+                verdict = TerminalVerdict.waiting(
+                    sub_status="动态任务被治理策略阻断，等待人工介入",
+                    failure_type=FailureType.DYNAMIC_GOVERNANCE,
+                    error_message=str(
+                        dynamic_state.get("dynamic_summary") or "dynamic swarm denied by governance policy"
+                    ),
+                )
                 return {
                     **route_result,
                     **dynamic_state,
                     **summary_state,
-                    "terminal_status": "waiting_for_human",
-                    "terminal_sub_status": "动态任务被治理策略阻断，等待人工介入",
-                    "failure_type": "dynamic_governance",
-                    "error_message": str(
-                        dynamic_state.get("dynamic_summary") or "dynamic swarm denied by governance policy"
-                    ),
+                    **verdict.to_dict(),
                 }
             summary_state = _run_checkpointed_node(
                 node_name="summarizer",
                 node_fn=nodes["summarizer"],
                 state={**dynamic_state, **state},
             )
+            verdict = TerminalVerdict.fail(
+                sub_status="动态任务链路未能完成",
+                failure_type=FailureType.DYNAMIC_RUNTIME,
+                error_message=str(dynamic_state.get("dynamic_summary") or "dynamic swarm unavailable"),
+            )
             return {
                 **route_result,
                 **dynamic_state,
                 **summary_state,
-                "terminal_status": "failed",
-                "terminal_sub_status": "动态任务链路未能完成",
-                "failure_type": "dynamic_runtime",
-                "error_message": str(dynamic_state.get("dynamic_summary") or "dynamic swarm unavailable"),
+                **verdict.to_dict(),
             }
         return _execute_static_flow(
             state={**state, **route_result},
@@ -723,10 +736,9 @@ def execute_task_flow(
             success_sub_status="静态链路执行完成",
         )
     except TaskLeaseLostError as exc:
-        return {
-            **state,
-            "terminal_status": "failed",
-            "terminal_sub_status": "任务租约已丢失，本地执行已停止",
-            "failure_type": "lease_lost",
-            "error_message": str(exc),
-        }
+        verdict = TerminalVerdict.fail(
+            sub_status="任务租约已丢失，本地执行已停止",
+            failure_type=FailureType.LEASE_LOST,
+            error_message=str(exc),
+        )
+        return {**state, **verdict.to_dict()}

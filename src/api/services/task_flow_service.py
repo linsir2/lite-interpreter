@@ -26,6 +26,7 @@ from src.blackboard import (
     global_blackboard,
     memory_blackboard,
 )
+from src.common.contracts import TerminalStatus, TerminalVerdict
 from src.common.control_plane import ensure_task_envelope
 from src.common.task_lease_runtime import clear_task_lease_loss, mark_task_lease_lost
 from src.dag_engine.dag_graph import execute_task_flow
@@ -187,11 +188,11 @@ async def _run_task_flow(
                 },
             ),
         )
-        terminal_status = str(final_state.get("terminal_status") or "")
+        verdict = TerminalVerdict.model_validate(final_state)
         memory_data = memory_blackboard.read(tenant_id, task_id) or (
             memory_blackboard.restore(tenant_id, task_id) and memory_blackboard.read(tenant_id, task_id)
         )
-        if terminal_status == "success":
+        if verdict.terminal_status == TerminalStatus.SUCCESS:
             _record_historical_skill_outcomes(
                 tenant_id=tenant_id,
                 workspace_id=workspace_id,
@@ -202,15 +203,15 @@ async def _run_task_flow(
             global_blackboard.update_global_status(
                 task_id=task_id,
                 new_status=GlobalStatus.SUCCESS,
-                sub_status=str(final_state.get("terminal_sub_status") or "任务执行完成"),
+                sub_status=verdict.terminal_sub_status or "任务执行完成",
             )
-        elif terminal_status == "waiting_for_human":
+        elif verdict.terminal_status == TerminalStatus.WAITING_FOR_HUMAN:
             global_blackboard.update_global_status(
                 task_id=task_id,
                 new_status=GlobalStatus.WAITING_FOR_HUMAN,
-                sub_status=str(final_state.get("terminal_sub_status") or "任务等待人工介入"),
-                failure_type=final_state.get("failure_type"),
-                error_message=final_state.get("error_message"),
+                sub_status=verdict.terminal_sub_status or "任务等待人工介入",
+                failure_type=verdict.failure_type,
+                error_message=verdict.error_message,
             )
         else:
             _record_historical_skill_outcomes(
@@ -223,9 +224,9 @@ async def _run_task_flow(
             global_blackboard.update_global_status(
                 task_id=task_id,
                 new_status=GlobalStatus.FAILED,
-                sub_status=str(final_state.get("terminal_sub_status") or "任务执行失败"),
-                failure_type=final_state.get("failure_type"),
-                error_message=final_state.get("error_message"),
+                sub_status=verdict.terminal_sub_status or "任务执行失败",
+                failure_type=verdict.failure_type,
+                error_message=verdict.error_message,
             )
     except Exception as exc:
         global_blackboard.update_global_status(

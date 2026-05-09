@@ -14,7 +14,7 @@ from src.common.control_plane import knowledge_evidence_refs
 from src.common.llm_client import LiteLLMClient
 from src.dag_engine.graphstate import DagGraphState
 from src.kag.builder.fusion import KnowledgeFusion
-from src.kag.compiler import GraphCompilationSummaryState, GraphCompiler, KnowledgeCompilerService
+from src.compiler.kag import GraphCompilationSummaryState, GraphCompiler, KnowledgeCompilerService
 from src.kag.context.compressor import ContextCompressor
 from src.kag.context.formatter import ContextFormatter
 from src.kag.context.selector import ContextSelector

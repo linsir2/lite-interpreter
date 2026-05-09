@@ -81,7 +81,6 @@ def debugger_node(state: DagGraphState) -> dict[str, Any]:
     return {
         "generated_code": exec_data.static.generated_code,
         "static_evidence_bundle": prepared.static_evidence_bundle,
-        "repair_plan": repair_plan.model_dump(mode="json"),
         "debug_attempts": [item.model_dump(mode="json") for item in exec_data.static.debug_attempts],
         "next_actions": ["auditor"],
         "retry_count": retry_count,

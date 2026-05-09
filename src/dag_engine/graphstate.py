@@ -38,7 +38,6 @@ class DagGraphState(TypedDict, total=False):
     token_budget: int
     max_dynamic_steps: int
     routing_mode: str
-    complexity_score: float
     dynamic_reason: str | None
     decision_log: list[dict[str, Any]]
     runtime_backend: str
@@ -62,7 +61,6 @@ class DagGraphState(TypedDict, total=False):
     evidence_material_compiled: bool
     material_refresh_done: bool
     material_refresh_actions: list[str]
-    repair_plan: dict[str, Any]
     debug_attempts: list[dict[str, Any]]
     generator_manifest: dict[str, Any]
     artifact_verification: dict[str, Any]

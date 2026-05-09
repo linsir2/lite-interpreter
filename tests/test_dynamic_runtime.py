@@ -19,7 +19,6 @@ def test_dynamic_supervisor_prepares_allowed_run_plan():
             "workspace_id": "ws-supervisor",
             "input_query": "自己找数据并验证结论",
             "routing_mode": "dynamic",
-            "complexity_score": 0.9,
         },
         {},
     )

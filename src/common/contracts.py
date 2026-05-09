@@ -61,7 +61,6 @@ class ExecutionIntent(BaseModel):
     intent: Literal["static_flow", "dynamic_flow"]
     destinations: list[str] = Field(default_factory=list)
     reason: str = ""
-    complexity_score: float = 0.0
     candidate_skills: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -172,7 +171,6 @@ StrategyFamily = Literal[
     "document_rule_audit",
     "hybrid_reconciliation",
     "input_gap_report",
-    "legacy_dataset_aware_generator",
 ]
 
 
@@ -192,6 +190,82 @@ class CapabilityTier(str, Enum):
     STATIC_WITH_NETWORK = "static_with_network"
     DYNAMIC_EXPLORATION_THEN_STATIC = "dynamic_exploration_then_static"
     DYNAMIC_ONLY = "dynamic_only"
+
+
+class TerminalStatus(str, Enum):
+    """Canonical terminal statuses for DAG execution outcomes."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    WAITING_FOR_HUMAN = "waiting_for_human"
+
+
+class FailureType(str, Enum):
+    """Typed classification for DAG node / task failures."""
+
+    DATA_INSPECTION = "data_inspection"
+    KNOWLEDGE_INGESTION = "knowledge_ingestion"
+    STATIC_EVIDENCE = "static_evidence"
+    NEED_MORE_INPUTS = "need_more_inputs"
+    EXECUTING = "executing"
+    DYNAMIC_GOVERNANCE = "dynamic_governance"
+    DYNAMIC_RUNTIME = "dynamic_runtime"
+    LEASE_LOST = "lease_lost"
+    TASK_FLOW = "task_flow"
+    AUDITING = "auditing"
+
+
+class TerminalVerdict(BaseModel):
+    """Structured terminal decision produced by the DAG orchestrator.
+
+    Returned as a dict via .to_dict() from execute_task_flow();
+    consumers re-validate via model_validate() for typed access.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    terminal_status: TerminalStatus
+    terminal_sub_status: str = ""
+    failure_type: FailureType | None = None
+    error_message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def ok(cls, sub_status: str = "") -> "TerminalVerdict":
+        return cls(terminal_status=TerminalStatus.SUCCESS, terminal_sub_status=sub_status)
+
+    @classmethod
+    def fail(
+        cls,
+        sub_status: str = "",
+        failure_type: FailureType = FailureType.EXECUTING,
+        error_message: str = "",
+    ) -> "TerminalVerdict":
+        return cls(
+            terminal_status=TerminalStatus.FAILED,
+            terminal_sub_status=sub_status,
+            failure_type=failure_type,
+            error_message=error_message,
+        )
+
+    @classmethod
+    def waiting(
+        cls,
+        sub_status: str = "",
+        failure_type: FailureType = FailureType.DATA_INSPECTION,
+        error_message: str = "",
+    ) -> "TerminalVerdict":
+        return cls(
+            terminal_status=TerminalStatus.WAITING_FOR_HUMAN,
+            terminal_sub_status=sub_status,
+            failure_type=failure_type,
+            error_message=error_message,
+        )
+
+
+NodeOutcome = dict[str, Any]  # DAG node function return contract; validated by _run_checkpointed_node
 
 
 def _derive_research_mode(tier: CapabilityTier) -> str:
@@ -365,6 +439,13 @@ class StaticProgramSpec(BaseModel):
     evidence_bundle: StaticEvidenceBundle | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_strategy_family(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and data.get("strategy_family") == "legacy_dataset_aware_generator":
+            return {**dict(data), "strategy_family": "dataset_profile"}
+        return data
+
 
 class StaticRepairPlan(BaseModel):
     """Debugger-owned bounded repair instruction for one failed static attempt.
@@ -400,11 +481,18 @@ class GeneratorManifest(BaseModel):
 
     generator_id: str
     strategy_family: StrategyFamily = "dataset_profile"
-    renderer_id: str = "dataset_aware_renderer"
+    renderer_id: str = "compiler"
     fallback_used: bool = False
     expected_artifact_keys: list[str] = Field(default_factory=list)
     generated_at: datetime = Field(default_factory=get_utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_strategy_family(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and data.get("strategy_family") == "legacy_dataset_aware_generator":
+            return {**dict(data), "strategy_family": "dataset_profile"}
+        return data
 
 
 class DynamicResumeOverlay(BaseModel):
@@ -419,6 +507,13 @@ class DynamicResumeOverlay(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
     strategy_family: StrategyFamily | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_strategy_family(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and data.get("strategy_family") == "legacy_dataset_aware_generator":
+            return {**dict(data), "strategy_family": "dataset_profile"}
+        return data
+
 
 class ArtifactVerificationResult(BaseModel):
     """Post-execution verification result for an artifact plan."""
@@ -430,6 +525,13 @@ class ArtifactVerificationResult(BaseModel):
     unexpected_artifacts: list[str] = Field(default_factory=list)
     failure_reasons: list[str] = Field(default_factory=list)
     debug_hints: list[RepairHint] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_strategy_family(cls, data: Any) -> Any:
+        if isinstance(data, Mapping) and data.get("strategy_family") == "legacy_dataset_aware_generator":
+            return {**dict(data), "strategy_family": "dataset_profile"}
+        return data
 
 
 def _artifact_spec(
@@ -488,11 +590,11 @@ def _derive_artifact_plan(strategy_family: StrategyFamily) -> ArtifactPlan:
         notes = ["input_gap_report 禁止产伪图表。"]
     else:
         required = [
-            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="兼容报告"),
-            _artifact_spec("summary_json", "summary.json", category="export", summary="兼容摘要"),
+            _artifact_spec("analysis_report", "analysis_report.md", category="report", summary="数据分析报告"),
+            _artifact_spec("summary_json", "summary.json", category="export", summary="结构化摘要"),
         ]
         optional = []
-        notes = ["legacy fallback 继续使用 dataset-aware renderer，但产出新 artifact contract。"]
+        notes = ["未知策略族，使用默认 artifact contract。"]
 
     return ArtifactPlan(
         strategy_family=strategy_family,

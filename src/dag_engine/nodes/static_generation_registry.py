@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-
-from config.settings import OUTPUT_DIR
 
 from src.common.contracts import (
     ArtifactEmitSpec,
     ArtifactVerificationResult,
     ComputationStep,
     DebugHint,
-    DynamicResumeOverlay,
     ExecutionRecord,
     ExecutionStrategy,
     GeneratorManifest,
@@ -22,284 +18,27 @@ from src.common.contracts import (
     StaticProgramSpec,
     StrategyFamily,
     _derive_artifact_plan,
-    _derive_verification_plan,
 )
 from src.common.control_plane import (
     artifact_category_from_path,
     ensure_artifact_verification_result,
-    ensure_dynamic_resume_overlay,
-    ensure_execution_strategy,
     ensure_generator_manifest,
     ensure_static_program_spec,
     sanitize_artifact_reference,
     static_artifacts,
 )
-from src.dag_engine.nodes.static_codegen_renderer import render_dataset_aware_code
 from src.dag_engine.nodes.static_program_compiler import compile_static_program
 
 _STATIC_ARTIFACT_SUFFIXES = {".md", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".csv", ".json", ".tsv"}
 
 
-def resolve_strategy_family(
-    *,
-    analysis_mode: str,
-    structured_count: int,
-    document_count: int,
-    has_business_signals: bool = False,
-) -> StrategyFamily:
-    normalized = str(analysis_mode or "").strip()
-    if normalized in {"", "static"}:
-        if structured_count and has_business_signals:
-            return "hybrid_reconciliation"
-        if structured_count:
-            return "dataset_profile"
-        if document_count or has_business_signals:
-            return "document_rule_audit"
-        return "input_gap_report"
-    if normalized == "document_rule_analysis":
-        return "document_rule_audit"
-    if normalized == "hybrid_analysis":
-        return "hybrid_reconciliation"
-    if normalized == "need_more_inputs":
-        return "input_gap_report"
-    if normalized == "dynamic_research_analysis":
-        return "hybrid_reconciliation"
-    if normalized == "dataset_analysis":
-        return "hybrid_reconciliation" if has_business_signals else "dataset_profile"
-    if structured_count and document_count:
-        return "hybrid_reconciliation"
-    if document_count and not structured_count:
-        return "document_rule_audit"
-    if not structured_count and not document_count:
-        return "input_gap_report"
-    return "legacy_dataset_aware_generator"
-
-
-def _artifact_writer_snippet() -> str:
-    return textwrap.dedent(
-        """
-        artifact_plan = dict((payload.get("execution_strategy") or {}).get("artifact_plan") or {})
-        artifact_specs = list(artifact_plan.get("required_artifacts") or []) + list(artifact_plan.get("optional_artifacts") or [])
-        output_root = Path(str(artifact_plan.get("output_root") or "/app/outputs"))
-        try:
-            output_root.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            output_root = Path("/tmp/lite_interpreter_artifacts")
-            output_root.mkdir(parents=True, exist_ok=True)
-
-        def _artifact_path(file_name):
-            return output_root / str(file_name).strip()
-
-        def _write_text_artifact(file_name, content):
-            path = _artifact_path(file_name)
-            path.write_text(str(content), encoding="utf-8")
-            return path
-
-        def _write_json_artifact(file_name, content):
-            path = _artifact_path(file_name)
-            path.write_text(json.dumps(content, ensure_ascii=False, indent=2), encoding="utf-8")
-            return path
-
-        def _write_csv_artifact(file_name, headers, rows):
-            path = _artifact_path(file_name)
-            with path.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=headers)
-                writer.writeheader()
-                for row in rows:
-                    writer.writerow({header: row.get(header, "") for header in headers})
-            return path
-
-        def _take_strings(values, limit=8):
-            return [str(item).strip() for item in list(values or [])[:limit] if str(item).strip()]
-
-        def _report_lines(title):
-            findings = _take_strings(result.get("derived_findings"), limit=12)
-            rule_checks = list(result.get("rule_checks") or [])
-            metric_checks = list(result.get("metric_checks") or [])
-            filter_checks = list(result.get("filter_checks") or [])
-            datasets = list(result.get("datasets") or [])
-            documents = list(result.get("documents") or [])
-            lines = [
-                f"# {title}",
-                "",
-                f"- query: {payload.get('query', '')}",
-                f"- analysis_mode: {payload.get('analysis_mode', '')}",
-                f"- strategy_family: {(payload.get('execution_strategy') or {}).get('strategy_family', '')}",
-                "",
-                "## Key Findings",
-            ]
-            if findings:
-                lines.extend([f"- {item}" for item in findings])
-            else:
-                lines.append("- 暂无结构化发现。")
-            lines.extend(
-                [
-                    "",
-                    "## Coverage",
-                    f"- datasets: {len(datasets)}",
-                    f"- documents: {len(documents)}",
-                    f"- rule_checks: {len(rule_checks)}",
-                    f"- metric_checks: {len(metric_checks)}",
-                    f"- filter_checks: {len(filter_checks)}",
-                ]
-            )
-            if datasets:
-                lines.extend(["", "## Datasets"])
-                for dataset in datasets[:5]:
-                    lines.append(
-                        f"- {dataset.get('file_name', 'dataset')}: rows={dataset.get('row_count', 0)}, columns={', '.join((dataset.get('columns') or [])[:6])}"
-                    )
-            if documents:
-                lines.extend(["", "## Documents"])
-                for document in documents[:5]:
-                    lines.append(
-                        f"- {document.get('file_name', 'document')}: keyword_hits={', '.join((document.get('keyword_hits') or [])[:6]) or 'none'}"
-                    )
-            return "\\n".join(lines) + "\\n"
-
-        def _comparison_rows():
-            rows = []
-            for dataset in list(result.get("datasets") or [])[:5]:
-                for profile in list(dataset.get("numeric_profiles") or [])[:4]:
-                    rows.append(
-                        {
-                            "dataset": dataset.get("file_name", ""),
-                            "column": profile.get("column", ""),
-                            "mean": profile.get("mean", ""),
-                            "min": profile.get("min", ""),
-                            "max": profile.get("max", ""),
-                        }
-                    )
-                for summary in list(dataset.get("group_summaries") or [])[:2]:
-                    for group_name, group_value, group_count in list(summary.get("top_groups") or [])[:3]:
-                        rows.append(
-                            {
-                                "dataset": dataset.get("file_name", ""),
-                                "column": summary.get("group_by", ""),
-                                "mean": group_value,
-                                "min": group_count,
-                                "max": summary.get("measure", ""),
-                            }
-                        )
-            return rows
-
-        def _cross_source_findings():
-            findings = []
-            for item in _take_strings(result.get("derived_findings"), limit=12):
-                findings.append({"kind": "derived_finding", "message": item})
-            for check in list(result.get("rule_checks") or [])[:6]:
-                findings.append(
-                    {
-                        "kind": "rule_check",
-                        "rule": check.get("rule", ""),
-                        "issue_count": check.get("issue_count", 0),
-                        "warnings": list(check.get("warnings") or []),
-                    }
-                )
-            return findings
-
-        generated_artifacts = []
-        strategy_family = str((payload.get("execution_strategy") or {}).get("strategy_family") or "")
-
-        def _register_artifact(spec, path, summary):
-            generated_artifacts.append(
-                {
-                    "key": spec.get("artifact_key", ""),
-                    "name": path.name,
-                    "path": str(path),
-                    "type": spec.get("artifact_type", spec.get("category", "artifact")),
-                    "category": spec.get("category", "diagnostic"),
-                    "summary": summary,
-                }
-            )
-
-        specs_by_key = {str(item.get("artifact_key") or ""): item for item in artifact_specs}
-        report_title = "Analysis Report"
-        if strategy_family == "document_rule_audit":
-            report_title = "Rule Audit Report"
-        elif strategy_family == "input_gap_report":
-            report_title = "Input Gap Report"
-
-        if "analysis_report" in specs_by_key:
-            spec = specs_by_key["analysis_report"]
-            path = _write_text_artifact(spec.get("file_name"), _report_lines(report_title))
-            _register_artifact(spec, path, spec.get("summary", "analysis report"))
-        if "summary_json" in specs_by_key:
-            spec = specs_by_key["summary_json"]
-            path = _write_json_artifact(
-                spec.get("file_name"),
-                {
-                    "query": payload.get("query", ""),
-                    "analysis_mode": payload.get("analysis_mode", ""),
-                    "key_findings": _take_strings(result.get("derived_findings"), limit=12),
-                    "dataset_count": len(list(result.get("datasets") or [])),
-                    "document_count": len(list(result.get("documents") or [])),
-                },
-            )
-            _register_artifact(spec, path, spec.get("summary", "summary json"))
-        if "rule_audit_report" in specs_by_key:
-            spec = specs_by_key["rule_audit_report"]
-            path = _write_text_artifact(spec.get("file_name"), _report_lines(report_title))
-            _register_artifact(spec, path, spec.get("summary", "rule audit report"))
-        if "rule_checks_json" in specs_by_key:
-            spec = specs_by_key["rule_checks_json"]
-            path = _write_json_artifact(spec.get("file_name"), list(result.get("rule_checks") or []))
-            _register_artifact(spec, path, spec.get("summary", "rule checks"))
-        if "cross_source_findings" in specs_by_key:
-            spec = specs_by_key["cross_source_findings"]
-            path = _write_json_artifact(spec.get("file_name"), _cross_source_findings())
-            _register_artifact(spec, path, spec.get("summary", "cross source findings"))
-        if "comparison_csv" in specs_by_key:
-            spec = specs_by_key["comparison_csv"]
-            rows = _comparison_rows()
-            if not rows:
-                rows = [{"dataset": "", "column": "", "mean": "", "min": "", "max": ""}]
-            path = _write_csv_artifact(spec.get("file_name"), ["dataset", "column", "mean", "min", "max"], rows)
-            _register_artifact(spec, path, spec.get("summary", "comparison csv"))
-        if "input_gap_report" in specs_by_key:
-            spec = specs_by_key["input_gap_report"]
-            known_gaps = _take_strings((payload.get("analysis_brief") or {}).get("known_gaps"), limit=12)
-            if not known_gaps:
-                known_gaps = ["当前输入不足以完成稳定分析，请补充结构化数据或规则文档。"]
-            report = "\\n".join(
-                [
-                    "# Input Gap Report",
-                    "",
-                    "## Missing Inputs",
-                    *[f"- {item}" for item in known_gaps],
-                    "",
-                    "## Suggested Next Step",
-                    f"- {(payload.get('analysis_brief') or {}).get('recommended_next_step', '补充输入后重新执行')}",
-                    "",
-                ]
-            )
-            path = _write_text_artifact(spec.get("file_name"), report)
-            _register_artifact(spec, path, spec.get("summary", "input gap report"))
-        if "requested_inputs_json" in specs_by_key:
-            spec = specs_by_key["requested_inputs_json"]
-            path = _write_json_artifact(
-                spec.get("file_name"),
-                {
-                    "known_gaps": _take_strings((payload.get("analysis_brief") or {}).get("known_gaps"), limit=12),
-                    "recommended_next_step": (payload.get("analysis_brief") or {}).get("recommended_next_step", ""),
-                },
-            )
-            _register_artifact(spec, path, spec.get("summary", "requested inputs"))
-
-        result["generated_artifacts"] = generated_artifacts
-        result["execution_strategy"] = payload.get("execution_strategy", {})
-        result["generator_manifest"] = payload.get("generator_manifest", {})
-        print(json.dumps(result, ensure_ascii=False))
-        """
-    ).strip()
-
-
-def build_static_program_spec(
+def _build_fallback_program_spec(
     *,
     payload: Mapping[str, Any],
     strategy_family: StrategyFamily,
     research_mode: str,
 ) -> StaticProgramSpec:
+    """Build StaticProgramSpec for the template compiler fallback path."""
     artifact_plan = _derive_artifact_plan(strategy_family)
     step_kinds = ["load_datasets", "load_documents"]
     if research_mode == "single_pass":
@@ -366,79 +105,46 @@ def build_static_program_spec(
     )
 
 
-def _inject_artifact_writer(legacy_code: str) -> str:
-    final_print = "print(json.dumps(result, ensure_ascii=False))"
-    if final_print not in legacy_code:
-        return legacy_code
-    return legacy_code.replace(final_print, _artifact_writer_snippet())
-
-
 def build_static_generation_bundle(
     payload: Mapping[str, Any],
     *,
-    dynamic_resume_overlay: Mapping[str, Any] | DynamicResumeOverlay | None = None,
-    repair_plan: Mapping[str, Any] | None = None,
-) -> tuple[str, GeneratorManifest, StaticProgramSpec | None]:
-    existing_strategy_payload = dict(payload.get("execution_strategy") or {})
-    resume_overlay = (
-        ensure_dynamic_resume_overlay(dynamic_resume_overlay)
-        if dynamic_resume_overlay is not None
-        else None
-    )
-    analysis_mode = str(payload.get("analysis_mode") or existing_strategy_payload.get("analysis_mode") or "").strip()
-    research_mode = str(payload.get("research_mode") or existing_strategy_payload.get("research_mode") or "none").strip() or "none"
-    structured_count = len(list(payload.get("structured_dataset_summaries") or []))
-    if not structured_count:
-        structured_count = len([item for item in list(payload.get("input_mounts") or []) if item.get("kind") == "structured_dataset"])
-    document_count = len([item for item in list(payload.get("input_mounts") or []) if item.get("kind") == "business_document"])
-    business_context = dict(payload.get("business_context") or {})
-    compiled_knowledge = dict(payload.get("compiled_knowledge") or {})
-    has_business_signals = bool(
-        list(business_context.get("rules") or [])
-        or list(business_context.get("metrics") or [])
-        or list(business_context.get("filters") or [])
-        or list(compiled_knowledge.get("rule_specs") or [])
-        or list(compiled_knowledge.get("metric_specs") or [])
-        or list(compiled_knowledge.get("filter_specs") or [])
-    )
-    resolved_strategy_family = resolve_strategy_family(
-        analysis_mode=analysis_mode,
-        structured_count=structured_count,
-        document_count=document_count,
-        has_business_signals=has_business_signals,
-    )
-    existing_strategy_family = str(existing_strategy_payload.get("strategy_family") or "").strip()
-    overlay_strategy_family = str(getattr(resume_overlay, "strategy_family", "") or "").strip()
-    if overlay_strategy_family:
-        strategy_family = overlay_strategy_family
-    elif existing_strategy_family and existing_strategy_family != "legacy_dataset_aware_generator":
-        strategy_family = existing_strategy_family
-    else:
-        strategy_family = resolved_strategy_family
-    artifact_plan = _derive_artifact_plan(strategy_family)
+    execution_strategy: ExecutionStrategy,
+) -> tuple[str, GeneratorManifest, StaticProgramSpec]:
+    """Template-based fallback code generator.
+
+    Consumes the analyst's frozen ExecutionStrategy directly — no re-derivation
+    of strategy_family.  Only called when LLM codegen fails.
+    """
+    strategy_family = execution_strategy.strategy_family
+    artifact_plan = execution_strategy.artifact_plan
+
     expected_keys = [
-        *(item.artifact_key for item in artifact_plan.required_artifacts),
-        *(item.artifact_key for item in artifact_plan.optional_artifacts),
+        spec.artifact_key
+        for spec in [*artifact_plan.required_artifacts, *artifact_plan.optional_artifacts]
     ]
     generator_manifest = ensure_generator_manifest(
-        generator_id=f"{strategy_family}_generator",
+        generator_id=execution_strategy.generator_id,
         strategy_family=strategy_family,
-        renderer_id="dataset_aware_renderer",
-        fallback_used=strategy_family == "legacy_dataset_aware_generator",
+        renderer_id="compiler",
+        fallback_used=True,
         expected_artifact_keys=expected_keys,
-        metadata={"analysis_mode": analysis_mode, "research_mode": research_mode},
+        metadata={
+            "analysis_mode": execution_strategy.analysis_mode,
+            "research_mode": execution_strategy.research_mode,
+        },
     )
     enriched_payload = dict(payload)
     enriched_payload["generator_manifest"] = generator_manifest.model_dump(mode="json")
-    if strategy_family == "legacy_dataset_aware_generator":
-        legacy_code = render_dataset_aware_code(enriched_payload)
-        return _inject_artifact_writer(legacy_code), generator_manifest, None
-    program_spec = build_static_program_spec(
+    program_spec = _build_fallback_program_spec(
         payload=enriched_payload,
         strategy_family=strategy_family,
-        research_mode=research_mode,
+        research_mode=execution_strategy.research_mode,
     )
-    return compile_static_program(program_spec.model_dump(mode="json"), enriched_payload), generator_manifest, program_spec
+    return (
+        compile_static_program(program_spec.model_dump(mode="json"), enriched_payload),
+        generator_manifest,
+        program_spec,
+    )
 
 
 def verify_generated_artifacts(
@@ -446,6 +152,8 @@ def verify_generated_artifacts(
     execution_strategy: ExecutionStrategy | Mapping[str, Any] | None,
     execution_record: ExecutionRecord | Mapping[str, Any] | None,
 ) -> ArtifactVerificationResult:
+    from src.common.control_plane import ensure_execution_strategy
+
     strategy = ensure_execution_strategy(execution_strategy or {})
     verification_plan = strategy.verification_plan
     artifact_plan = strategy.artifact_plan

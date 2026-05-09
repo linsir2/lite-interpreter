@@ -76,17 +76,7 @@ summarizer / presenter 当前固定排序：
 - `.jpeg`
 - `.webp`
 
-### `legacy_dataset_aware_generator`
-
-必选：
-
-- `analysis_report.md`
-- `summary.json`
-
-说明：
-
-- 这是 fallback，不是推荐主路径
-- 仍然必须满足新 artifact contract
+（注：`legacy_dataset_aware_generator` 已删除，不再作为有效策略族。）
 
 ## 3. 验证规则
 

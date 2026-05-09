@@ -44,7 +44,6 @@
 - `document_rule_audit`
 - `hybrid_reconciliation`
 - `input_gap_report`
-- `legacy_dataset_aware_generator`
 
 ### `generator_id`
 
@@ -83,18 +82,18 @@
 
 - 类型：`StaticProgramSpec | null`
 - 作用：coder 的主输入 IR
-- 当前位置：
-  - 非 legacy family 优先走 `program_spec -> compiler`
-  - `legacy_dataset_aware_generator` 仍走 fallback renderer
+- 当前位置：始终走 `program_spec -> compiler`
 
 ### `repair_plan`
 
 - 类型：`StaticRepairPlan | null`
 - 作用：debugger 的单次修复指令
 - 当前动作：
-  - `fallback_to_legacy`
   - `simplify_program`
   - `drop_external_evidence`
+  - `patch_evidence_plan`
+  - `patch_artifact_plan`
+  - `retry_with_evidence`
 
 ### `resume_overlay`
 
@@ -102,13 +101,7 @@
 - 作用：把动态链 -> 静态链 handoff 从 legacy metadata 中独立出来
 - v1 仍然与 `next_static_steps` 双写
 
-### `legacy_compatibility`
-
-- 作用：显式记录还在兼容哪些旧字段
-- v1 至少包含：
-  - `analysis_plan`
-  - `generation_directives`
-  - `next_static_steps`
+（注：`legacy_compatibility` 字段已删除。）
 
 ## 2. 当前落点
 

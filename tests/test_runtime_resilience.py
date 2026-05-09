@@ -449,7 +449,7 @@ def test_execute_task_flow_reuses_completed_node_checkpoints():
                     },
                     "analyst": {
                         "status": "completed",
-                        "output_patch": {"analysis_plan": "plan", "next_actions": ["coder"]},
+                        "output_patch": {"execution_strategy": {}, "next_actions": ["coder"]},
                     },
                 }
             },

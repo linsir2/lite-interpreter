@@ -15,7 +15,7 @@ from src.blackboard import build_strict_state_report
 from src.common.llm_client import LiteLLMClient
 from src.common.utils import module_available
 from src.dynamic_engine.runtime_backends import list_runtime_manifests
-from src.kag.compiler.lexicon import LexiconCompiler
+from src.compiler.kag.lexicon import LexiconCompiler
 from src.mcp_gateway import default_mcp_server
 from src.runtime.guidance_runner import probe_guidance_runtime
 from src.sandbox.security_explainer import build_security_policy_summary

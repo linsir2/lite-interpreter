@@ -8,10 +8,10 @@ from src.common.contracts import StaticEvidenceBundle, StaticEvidenceRecord
 from src.dag_engine.nodes.evidence_compiler_node import evidence_compiler_node
 from src.kag.builder.entity_extractor import EntityExtractor
 from src.kag.builder.relation_extractor import RelationExtractor
-from src.kag.compiler import GraphCompiler, KnowledgeCompilerService, LexiconMatcher, SpecCompiler, SpecParseError
-from src.kag.compiler.generated.KnowledgeSpecLexer import KnowledgeSpecLexer
-from src.kag.compiler.generated.KnowledgeSpecParser import KnowledgeSpecParser
-from src.kag.compiler.types import EvidenceCompilationInput
+from src.compiler.kag import GraphCompiler, KnowledgeCompilerService, LexiconMatcher, SpecCompiler, SpecParseError
+from src.compiler.kag.generated.KnowledgeSpecLexer import KnowledgeSpecLexer
+from src.compiler.kag.generated.KnowledgeSpecParser import KnowledgeSpecParser
+from src.compiler.kag.types import EvidenceCompilationInput
 from src.storage.schema import EntityNode
 
 
@@ -107,7 +107,7 @@ def test_relation_extractor_emits_validated_triples_with_provenance():
 
 
 def test_external_evidence_compiler_keeps_text_only_records_as_hits(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.kag.compiler.evidence.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("src.compiler.kag.evidence.OUTPUT_DIR", str(tmp_path))
 
     patch = KnowledgeCompilerService.compile_external_evidence(
         EvidenceCompilationInput(
@@ -136,7 +136,7 @@ def test_external_evidence_compiler_keeps_text_only_records_as_hits(tmp_path, mo
 
 
 def test_external_evidence_compiler_materializes_complete_fact_rows(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.kag.compiler.evidence.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("src.compiler.kag.evidence.OUTPUT_DIR", str(tmp_path))
 
     patch = KnowledgeCompilerService.compile_external_evidence(
         EvidenceCompilationInput(
@@ -184,7 +184,7 @@ def test_external_evidence_compiler_materializes_complete_fact_rows(tmp_path, mo
 
 
 def test_external_evidence_compiler_extracts_business_context_delta(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.kag.compiler.evidence.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("src.compiler.kag.evidence.OUTPUT_DIR", str(tmp_path))
 
     patch = KnowledgeCompilerService.compile_external_evidence(
         EvidenceCompilationInput(
@@ -206,7 +206,7 @@ def test_external_evidence_compiler_extracts_business_context_delta(tmp_path, mo
 
 
 def test_evidence_compiler_node_persists_static_dataset_patch(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.kag.compiler.evidence.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("src.compiler.kag.evidence.OUTPUT_DIR", str(tmp_path))
 
     tenant_id = "tenant_node_static"
     task_id = f"task_node_static_{uuid.uuid4().hex}"
@@ -252,7 +252,7 @@ def test_evidence_compiler_node_persists_static_dataset_patch(tmp_path, monkeypa
 
 
 def test_evidence_compiler_node_uses_dynamic_resume_findings_for_hits(tmp_path, monkeypatch):
-    monkeypatch.setattr("src.kag.compiler.evidence.OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr("src.compiler.kag.evidence.OUTPUT_DIR", str(tmp_path))
 
     tenant_id = "tenant_node_dynamic"
     task_id = f"task_node_dynamic_{uuid.uuid4().hex}"

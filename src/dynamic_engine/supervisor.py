@@ -207,7 +207,6 @@ class DynamicSupervisor:
                 "open_questions": list((execution_intent.metadata or {}).get("open_questions") or []),
                 "strategy_family": (execution_intent.metadata or {}).get("strategy_family"),
                 "routing_mode": task_envelope.metadata.get("routing_mode", "dynamic"),
-                "complexity_score": execution_intent.complexity_score,
                 "dynamic_reason": execution_intent_dynamic_reason(execution_intent),
                 "governance_profile": governance_decision.profile,
                 "analysis_mode": analysis_mode,

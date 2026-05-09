@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 
 
 class ContextFormatter:

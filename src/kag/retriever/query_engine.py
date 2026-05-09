@@ -7,7 +7,7 @@ from config.settings import MAX_RETRIEVAL_TOP_K, RERANK_CANDIDATE_LIMIT
 from src.blackboard.schema import RetrievalPlan
 from src.common import EvidencePacket
 from src.common.logger import get_logger
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 
 from .budget import enforce_budget
 from .cache import RetrievalCache

@@ -46,7 +46,6 @@ def coder_node(state: DagGraphState) -> dict[str, Any]:
     return {
         "generated_code": prepared.generated_code,
         "static_evidence_bundle": prepared.static_evidence_bundle,
-        "repair_plan": prepared.repair_plan,
         "generator_manifest": prepared.generator_manifest,
         "input_mounts": prepared.input_mounts,
         "next_actions": ["auditor"],

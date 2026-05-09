@@ -12,7 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 from src.common import generate_uuid, get_logger
-from src.kag.compiler.lexicon import LexiconMatcher
+from src.compiler.kag.lexicon import LexiconMatcher
 from src.storage.schema import EntityNode
 
 logger = get_logger(__name__)

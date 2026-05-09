@@ -12,7 +12,7 @@ import yaml
 from config.settings import LITELLM_CONFIG_PATH
 
 from src.common.logger import get_logger
-from src.kag.compiler.types import LLMHealthStatus
+from src.compiler.kag.types import LLMHealthStatus
 
 logger = get_logger(__name__)
 

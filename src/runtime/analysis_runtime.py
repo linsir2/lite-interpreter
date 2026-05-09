@@ -20,7 +20,7 @@ import yaml
 from config.settings import ANALYSIS_RUNTIME_POLICY_PATH
 
 from src.common.llm_client import LiteLLMClient
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 from src.runtime.guidance_runner import run_route_selection
 
 

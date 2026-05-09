@@ -8,7 +8,7 @@ from config.settings import COMPRESSION_RATIO, CONTEXT_MAX_TOKENS, CONTEXT_MODEL
 
 from src.common import count_text_tokens_exact
 from src.common.llm_client import LiteLLMClient
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 
 
 class ContextCompressor:

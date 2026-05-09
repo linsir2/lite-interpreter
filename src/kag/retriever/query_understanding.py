@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from src.common.logger import get_logger
-from src.kag.compiler import KnowledgeCompilerService, SpecParseError
+from src.compiler.kag import KnowledgeCompilerService, SpecParseError
 
 logger = get_logger(__name__)
 

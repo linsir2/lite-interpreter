@@ -6,7 +6,7 @@ import re
 
 from config.settings import RERANK_CANDIDATE_LIMIT, RERANK_CANDIDATE_MULTIPLIER
 
-from src.kag.compiler import KnowledgeCompilerService
+from src.compiler.kag import KnowledgeCompilerService
 
 
 class KeywordReranker:

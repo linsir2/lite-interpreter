@@ -8,8 +8,8 @@ from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
 from src.dag_engine.graphstate import DagGraphState
-from src.kag.compiler.service import KnowledgeCompilerService
-from src.kag.compiler.types import EvidenceCompilationInput
+from src.compiler.kag.service import KnowledgeCompilerService
+from src.compiler.kag.types import EvidenceCompilationInput
 
 
 def _unique_strings(values: list[str]) -> list[str]:

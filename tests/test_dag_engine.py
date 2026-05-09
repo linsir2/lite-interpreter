@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from src.blackboard import ExecutionData, MemoryData, execution_blackboard, global_blackboard, memory_blackboard
 from src.common import ExecutionRecord
+from src.common.contracts import ExecutionStrategy
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
 from src.dag_engine.dag_graph import _run_evidence_compiler_if_needed, execute_task_flow
 from src.dag_engine.nodes.analyst_node import analyst_node
@@ -227,7 +228,6 @@ def test_dynamic_swarm_and_harvester_form_minimal_closed_loop():
                 "workspace_id": "ws_hybrid",
                 "input_query": "自己找数据并验证预测结论",
                 "routing_mode": "dynamic",
-                "complexity_score": 0.8,
             }
         )
     harvested_state = skill_harvester_node(
@@ -281,7 +281,6 @@ def test_dynamic_swarm_denies_unknown_tool_requests():
             "workspace_id": "ws_denied",
             "input_query": "帮我联网调研后执行结果",
             "routing_mode": "dynamic",
-            "complexity_score": 0.9,
             "allowed_tools": ["shell_exec"],
         }
     )
@@ -775,7 +774,6 @@ def test_dynamic_swarm_does_not_duplicate_trace_when_runtime_event_has_source():
                 "workspace_id": "ws_dynamic_trace_dedupe",
                 "input_query": "自己找数据并验证预测结论",
                 "routing_mode": "dynamic",
-                "complexity_score": 0.8,
             }
         )
 
@@ -838,7 +836,6 @@ def test_dynamic_swarm_node_aborts_when_lease_is_lost_mid_event(monkeypatch):
                 "workspace_id": "ws_dynamic_lease_abort",
                 "input_query": "自己找数据并验证预测结论",
                 "routing_mode": "dynamic",
-                "complexity_score": 0.8,
                 "lease_owner_id": "owner-a",
             }
         )
@@ -1365,7 +1362,11 @@ def test_static_nodes_form_minimal_safe_chain():
     assert state["execution_strategy"]
     assert state["execution_strategy"]["summary"]
     assert state["execution_strategy"]["capability_tier"]
-    state.update(coder_node(state))
+    with patch(
+        "src.common.llm_client.LiteLLMClient.chat",
+        side_effect=ConnectionError("test: force template fallback"),
+    ):
+        state.update(coder_node(state))
     assert "print(" in state["generated_code"]
     assert "generated_artifacts" in state["generated_code"]
     assert "rule_checks" in state["generated_code"]
@@ -1492,10 +1493,10 @@ def test_debugger_node_regenerates_with_repair_plan():
 
     persisted = execution_blackboard.read(tenant_id, task_id)
     assert result["next_actions"] == ["auditor"]
-    assert result["repair_plan"]["action"] == "simplify_program"
     assert "print(" in result["generated_code"]
     assert persisted is not None
     assert persisted.static.repair_plan is not None
+    assert persisted.static.repair_plan.action == "simplify_program"
     assert persisted.static.debug_attempts
 
 
@@ -1549,8 +1550,9 @@ def test_executor_node_requests_debugger_when_required_artifacts_are_missing(tmp
     assert persisted.static.artifact_verification.passed is False
 
 
-def test_static_generation_bundle_honors_dynamic_overlay_strategy_family():
-    _code, manifest, program_spec = build_static_generation_bundle(
+def test_static_generation_bundle_uses_execution_strategy_family():
+    execution_strategy = ExecutionStrategy(analysis_mode="document_rule_analysis")
+    _code, manifest, _program_spec = build_static_generation_bundle(
         {
             "query": "分析销售数据",
             "analysis_mode": "dataset_analysis",
@@ -1561,20 +1563,19 @@ def test_static_generation_bundle_honors_dynamic_overlay_strategy_family():
             "structured_dataset_summaries": [{"file_name": "sales.csv"}],
             "input_mounts": [{"kind": "structured_dataset", "container_path": "/app/inputs/sales.csv"}],
         },
-        dynamic_resume_overlay={
-            "continuation": "resume_static",
-            "strategy_family": "document_rule_audit",
-        },
+        execution_strategy=execution_strategy,
     )
 
     assert manifest.strategy_family == "document_rule_audit"
+    assert manifest.fallback_used is True
 
 
-def test_static_generation_bundle_falls_back_when_overlay_strategy_is_invalid():
-    _code, manifest, program_spec = build_static_generation_bundle(
+def test_static_generation_bundle_fallback_manifest_marks_fallback_used():
+    execution_strategy = ExecutionStrategy(analysis_mode="dataset_analysis")
+    _code, manifest, _program_spec = build_static_generation_bundle(
         {
             "query": "分析销售数据",
-            "analysis_mode": "dataset_analysis",
+            "analysis_mode": "static",
             "research_mode": "none",
             "analysis_brief": {},
             "business_context": {},
@@ -1582,28 +1583,26 @@ def test_static_generation_bundle_falls_back_when_overlay_strategy_is_invalid():
             "structured_dataset_summaries": [{"file_name": "sales.csv"}],
             "input_mounts": [{"kind": "structured_dataset", "container_path": "/app/inputs/sales.csv"}],
         },
-        dynamic_resume_overlay={
-            "continuation": "resume_static",
-            "strategy_family": "not_a_strategy",
-        },
+        execution_strategy=execution_strategy,
     )
 
     assert manifest.strategy_family == "dataset_profile"
+    assert manifest.fallback_used is True
 
 
-def test_static_generation_bundle_reads_strategy_from_metadata_fallback():
-    tenant_id = "tenant-metadata-overlay"
-    task_id = global_blackboard.create_task(tenant_id, "ws-metadata-overlay", "placeholder")
+def test_coder_node_reads_strategy_from_exec_data_static():
+    tenant_id = "tenant-coder-strategy"
+    task_id = global_blackboard.create_task(tenant_id, "ws-coder-strategy", "placeholder")
     execution_blackboard.write(
         tenant_id,
         task_id,
         ExecutionData(
             tenant_id=tenant_id,
             task_id=task_id,
-            workspace_id="ws-metadata-overlay",
+            workspace_id="ws-coder-strategy",
             static={
                 "execution_strategy": {
-                    "analysis_mode": "dataset_analysis",
+                    "analysis_mode": "document_rule_analysis",
                 },
             },
         ),
@@ -1613,16 +1612,8 @@ def test_static_generation_bundle_reads_strategy_from_metadata_fallback():
         {
             "tenant_id": tenant_id,
             "task_id": task_id,
-            "workspace_id": "ws-metadata-overlay",
+            "workspace_id": "ws-coder-strategy",
             "input_query": "分析销售数据",
-            "dynamic_continuation": "resume_static",
-            "execution_intent": {
-                "metadata": {
-                    "next_static_steps": ["coder"],
-                    "strategy_family": "document_rule_audit",
-                    "recommended_static_action": "生成规则审计",
-                }
-            },
         }
     )
 
@@ -1675,7 +1666,7 @@ def test_build_dataset_aware_code_executes_with_compiled_signal_globals():
         "input_mounts": [],
         "structured_dataset_summaries": [],
     }
-    code = build_dataset_aware_code(payload)
+    code = build_dataset_aware_code(payload, execution_strategy=ExecutionStrategy(analysis_mode="static"))
     namespace: dict[str, object] = {}
     exec(code, namespace)
     result = namespace["result"]
@@ -1807,7 +1798,7 @@ def test_build_dataset_aware_code_includes_directive_driven_sections():
         },
     }
 
-    code = build_dataset_aware_code(payload)
+    code = build_dataset_aware_code(payload, execution_strategy=ExecutionStrategy(analysis_mode="static"))
 
     assert "generation_directives = payload.get(" in code
     assert "DerivedFindingsCollector" in code
@@ -1852,7 +1843,7 @@ def test_build_dataset_aware_code_uses_compiled_terms_for_document_keyword_hits(
         ],
         "structured_dataset_summaries": [],
     }
-    code = build_dataset_aware_code(payload)
+    code = build_dataset_aware_code(payload, execution_strategy=ExecutionStrategy(analysis_mode="static"))
     namespace: dict[str, object] = {}
     exec(code, namespace)
     result = namespace["result"]
@@ -1904,7 +1895,7 @@ def test_build_dataset_aware_code_uses_spec_terms_for_metric_and_filter_checks(t
         ],
         "structured_dataset_summaries": [],
     }
-    code = build_dataset_aware_code(payload)
+    code = build_dataset_aware_code(payload, execution_strategy=ExecutionStrategy(analysis_mode="static"))
     namespace: dict[str, object] = {}
     exec(code, namespace)
     result = namespace["result"]
@@ -1954,7 +1945,7 @@ def test_build_dataset_aware_code_supports_json_structured_inputs(tmp_path):
         ],
         "structured_dataset_summaries": [],
     }
-    code = build_dataset_aware_code(payload)
+    code = build_dataset_aware_code(payload, execution_strategy=ExecutionStrategy(analysis_mode="static"))
     namespace: dict[str, object] = {}
     exec(code, namespace)
     result = namespace["result"]
@@ -1972,7 +1963,12 @@ def test_debugger_node_rewrites_safe_fallback():
             tenant_id=tenant_id,
             task_id=task_id,
             workspace_id="ws_debug",
-            static={"latest_error_traceback": "bad import"},
+            static={
+                "latest_error_traceback": "bad import",
+                "execution_strategy": {
+                    "analysis_mode": "dataset_analysis",
+                },
+            },
         ),
     )
     state = debugger_node(
