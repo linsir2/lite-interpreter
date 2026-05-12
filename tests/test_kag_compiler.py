@@ -194,7 +194,7 @@ def test_external_evidence_compiler_extracts_business_context_delta(tmp_path, mo
             workspace_id="ws_context",
             task_id="task_context",
             findings=["RULE: 合同必须上传\nMETRIC: 按合同统计审批时效\nFILTER: 仅看2024年"],
-            artifact_refs=["deerflow:thread-1"],
+            artifact_refs=["trace:thread-1"],
         )
     )
 
@@ -270,7 +270,7 @@ def test_evidence_compiler_node_uses_dynamic_resume_findings_for_hits(tmp_path, 
             "workspace_id": workspace_id,
             "input_query": "整理外部研究结论",
             "evidence_compiler_source": "dynamic_resume",
-            "dynamic_research_findings": ["这是文本研究发现，没有结构化字段。"],
+            "dynamic_open_questions": ["这是文本研究发现，没有结构化字段。"],
             "dynamic_artifacts": ["/tmp/report.md"],
         }
     )

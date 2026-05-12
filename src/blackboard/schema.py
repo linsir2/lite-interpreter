@@ -160,7 +160,7 @@ class DynamicTraceEventState(StrictStateModel):
     source_event_type: str | None = None
     agent_name: str = "runtime"
     step_name: str = "runtime_step"
-    source: str = "dynamic_swarm"
+    source: str = "dynamic"
     message: str | None = None
     artifact_refs: list[str] = Field(default_factory=list)
     tool_call: dict[str, Any] | None = None
@@ -453,10 +453,6 @@ class NodeOutputPatchState(StrictStateModel):
     dynamic_trace: list[DynamicTraceEventState] = Field(default_factory=list)
     dynamic_trace_refs: list[str] = Field(default_factory=list)
     dynamic_artifacts: list[str] = Field(default_factory=list)
-    dynamic_research_findings: list[str] = Field(default_factory=list)
-    dynamic_evidence_refs: list[str] = Field(default_factory=list)
-    dynamic_open_questions: list[str] = Field(default_factory=list)
-    dynamic_suggested_static_actions: list[str] = Field(default_factory=list)
     recommended_static_skill: dict[str, Any] | None = None
     final_response: dict[str, Any] = Field(default_factory=dict)
     decision_log: list[dict[str, Any]] = Field(default_factory=list)
@@ -747,10 +743,6 @@ class ExecutionDynamicState(StrictStateModel):
     trace: list[DynamicTraceEventState] = Field(default_factory=list)
     trace_refs: list[str] = Field(default_factory=list)
     artifacts: list[str] = Field(default_factory=list)
-    research_findings: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
-    suggested_static_actions: list[str] = Field(default_factory=list)
     recommended_static_skill: dict[str, Any] | None = None
 
     @model_validator(mode="after")

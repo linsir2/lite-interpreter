@@ -13,7 +13,7 @@ import instructor
 from litellm import completion
 
 from src.common import get_logger
-from src.common.contracts import CapabilityTier, EvidencePlan, ExecutionStrategy
+from src.common.contracts import EvidencePlan, ExecutionStrategy, IterationMode, NetworkMode
 from src.common.llm_client import LiteLLMClient
 
 logger = get_logger(__name__)
@@ -52,16 +52,23 @@ Your job: read the query, data context, and knowledge snapshot, then produce
 a structured ExecutionStrategy that tells the DAG what capability level is
 needed and what kind of analysis code to generate.
 
-## CapabilityTier (capability_tier)
-Choose the *lowest* tier that can satisfy the query:
+## Network mode (network_mode)
+How much network access the task needs:
 
-- static_only: pure local data analysis, no external info needed
-- static_with_network: needs one or two external lookups (web_search / web_fetch)
-  to fill a known gap, then local analysis
-- dynamic_exploration_then_static: needs multi-step open-ended research first,
-  then structured analysis on the results
-- dynamic_only: pure research / summarization — no code generation needed,
-  the exploration result IS the deliverable
+- none: pure local data analysis, no external info needed
+- bounded: one or more STRUCTURED lookups. Analyst specifies the search
+  queries and domain; evidence is collected iteratively with a clear
+  termination condition (e.g. "fill the tariff rate lookup table").
+- open: multi-step open-ended research — LLM autonomously decides what to
+  search, where to fetch, and when to stop. This triggers the dynamic
+  exploration node.
+
+## Iteration mode (iteration_mode)
+How many static-chain passes are needed:
+
+- single_pass: one analyst → coder → executor round is enough
+- multi_round: need multiple passes. Analyst reviews RoundOutput after each
+  pass and decides whether another round is needed (additional_rounds).
 
 ## Analysis mode (analysis_mode)
 Pick the analysis type that best matches the data and query:
@@ -72,17 +79,14 @@ Pick the analysis type that best matches the data and query:
 - dynamic_research_analysis: purely external / open-ended research
 
 ## Summary (summary)
-A 2-3 sentence plain-language summary of the plan.  This replaces the old
+A 2-3 sentence plain-language summary of the plan. This replaces the old
 free-text analysis_plan for display purposes.
 
 ## Evidence plan (evidence_plan)
-If capability_tier is static_with_network or higher, specify search_queries,
-allowed_domains, allowed_capabilities (web_search, web_fetch), and a
-research_mode (none / single_pass / iterative).
+If network_mode is bounded or open, specify search_queries, allowed_domains,
+allowed_capabilities (web_search, web_fetch).
+"""
 
-## Fallback tier (fallback_tier)
-Optional. If the primary tier fails, declare the next lower tier to try.
-Must be strictly lower capability than capability_tier."""
 
 
 def _build_analyst_messages(
@@ -91,6 +95,7 @@ def _build_analyst_messages(
     knowledge_snapshot: dict[str, Any],
     business_context: dict[str, Any],
     approved_skills: list[dict[str, Any]],
+    previous_round_summary: str = "",
 ) -> list[dict[str, str]]:
     datasets = analysis_brief.get("dataset_summaries") or []
     rules = analysis_brief.get("business_rules") or []
@@ -112,6 +117,8 @@ def _build_analyst_messages(
         f"## 可复用技能\n{skill_hints}",
         f"## 推荐下一步\n{analysis_brief.get('recommended_next_step') or 'auto'}",
     ]
+    if previous_round_summary:
+        user_parts.append(f"## 上一轮执行结果\n{previous_round_summary}")
     return [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": "\n\n".join(user_parts)},
@@ -129,10 +136,11 @@ def compile_plan(
     business_context: dict[str, Any],
     approved_skills: list[dict[str, Any]],
     model_alias: str = "reasoning_model",
+    previous_round_summary: str = "",
 ) -> ExecutionStrategy:
     """Compile analysis context into a frozen ExecutionStrategy via Instructor.
 
-    Returns STATIC_ONLY fallback on LLM failure — the DAG can still proceed.
+    Returns STATIC_ONLY fallback on LLM failure -- the DAG can still proceed.
     """
     messages = _build_analyst_messages(
         query=query,
@@ -140,6 +148,7 @@ def compile_plan(
         knowledge_snapshot=knowledge_snapshot,
         business_context=business_context,
         approved_skills=approved_skills,
+        previous_round_summary=previous_round_summary,
     )
     config = LiteLLMClient.get_model_config(model_alias)
     try:
@@ -151,14 +160,16 @@ def compile_plan(
             temperature=float(config.params.get("temperature", 0.2)),
         )
         logger.info(
-            f"[PlanCompiler] tier={strategy.capability_tier.value} "
+            f"[PlanCompiler] network={strategy.network_mode.value} "
+            f"iteration={strategy.iteration_mode.value} "
             f"mode={strategy.analysis_mode} family={strategy.strategy_family}"
         )
         return strategy
     except Exception as exc:
         logger.error(f"[PlanCompiler] Instructor compilation failed: {exc}")
         return ExecutionStrategy(
-            capability_tier=CapabilityTier.STATIC_ONLY,
+            network_mode=NetworkMode.NONE,
+            iteration_mode=IterationMode.SINGLE_PASS,
             analysis_mode=analysis_brief.get("analysis_mode") or "dataset_analysis",
             summary=f"Plan compilation failed ({exc}), falling back to static analysis.",
         )

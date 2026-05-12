@@ -32,6 +32,22 @@ def _summarize_payload(payload: dict[str, Any]) -> str:
         if records:
             parts.append(f"- 外部证据记录({len(records)})")
 
+    # External structured knowledge from dynamic exploration (ADR-005 Phase 2)
+    external_knowledge = payload.get("external_knowledge") or []
+    if external_knowledge:
+        lookup_tables = [ek for ek in external_knowledge if ek.get("kind") == "lookup_table"]
+        numeric_facts = [ek for ek in external_knowledge if ek.get("kind") == "numeric_fact"]
+        textual_findings = [ek for ek in external_knowledge if ek.get("kind") == "textual_finding"]
+        if lookup_tables:
+            names = [t.get("table_name", "?") for t in lookup_tables]
+            parts.append(f"- 结构化查询表({len(lookup_tables)}): {', '.join(names)}")
+        if numeric_facts:
+            facts = [f"{f.get('entity', '?')}.{f.get('metric', '?')}={f.get('value', '?')}" for f in numeric_facts]
+            parts.append(f"- 数值事实({len(numeric_facts)}): {', '.join(facts[:10])}")
+        if textual_findings:
+            topics = [t.get("topic", "?") for t in textual_findings]
+            parts.append(f"- 文本研究发现({len(textual_findings)}): {', '.join(topics[:5])}")
+
     compiled_knowledge = payload.get("compiled_knowledge") or {}
     rule_specs = compiled_knowledge.get("rule_specs") or []
     metric_specs = compiled_knowledge.get("metric_specs") or []
@@ -94,8 +110,9 @@ def build_codegen_prompt(
 
 ## Hard Constraints (MUST satisfy)
 
-### Capability Level
-- capability_tier: {execution_strategy.capability_tier.value}
+### Network & Iteration Mode
+- network_mode: {execution_strategy.network_mode.value}
+- iteration_mode: {execution_strategy.iteration_mode.value}
 - analysis_mode: {execution_strategy.analysis_mode}
 - strategy_family: {execution_strategy.strategy_family}
 

@@ -38,12 +38,6 @@ DEFAULT_RULES = [
         reason="Legacy local frontend preferences from the retired product surface.",
     ),
     ResidueRule(
-        relative_path=".deer-flow",
-        category=REVIEW_FIRST,
-        delete_allowed=False,
-        reason="Local DeerFlow state; inspect before deleting because it may still be useful.",
-    ),
-    ResidueRule(
         relative_path=".omx",
         category=REVIEW_FIRST,
         delete_allowed=False,
@@ -65,7 +59,7 @@ DEFAULT_RULES = [
         relative_path="config.yaml",
         category=REVIEW_FIRST,
         delete_allowed=False,
-        reason="Possible local sidecar config residue; inspect before deleting.",
+        reason="Possible local config residue; inspect before deleting.",
     ),
 ]
 

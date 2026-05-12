@@ -152,7 +152,7 @@ def static_evidence_node(state: DagGraphState) -> dict[str, Any]:
                     "domain": str(response.get("domain") or ""),
                     "snippet": str(response.get("text") or "")[:400],
                     "content_type": str(response.get("content_type") or ""),
-                    "text": str(response.get("text") or "")[:4000],
+                    "text": str(response.get("text") or ""),
                     "status": "ok",
                 }
             )

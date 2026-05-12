@@ -44,7 +44,7 @@ def test_skill_harvester_derives_required_capabilities_from_governance():
             },
             "execution_intent": {
                 "intent": "dynamic_flow",
-                "destinations": ["dynamic_swarm"],
+                "destinations": ["dynamic"],
                 "reason": "dynamic",
             },
             "decision_log": [

@@ -343,9 +343,9 @@ def matches_execution_stream_record(
     if execution_id != runtime_execution_id:
         return False
 
-    if topic == EventTopic.UI_TASK_TRACE_UPDATE.value and payload.get("source") in {"dynamic_swarm", "demo"}:
+    if topic == EventTopic.UI_TASK_TRACE_UPDATE.value and payload.get("source") in {"dynamic", "demo"}:
         return True
-    if topic == EventTopic.UI_TASK_GOVERNANCE_UPDATE.value and payload.get("source") in {"dynamic_swarm", "demo"}:
+    if topic == EventTopic.UI_TASK_GOVERNANCE_UPDATE.value and payload.get("source") in {"dynamic", "demo"}:
         return True
     if topic == EventTopic.SYS_TASK_FINISHED.value and trace_id == execution_data.task_id:
         return True

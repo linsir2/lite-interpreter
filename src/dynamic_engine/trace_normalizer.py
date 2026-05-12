@@ -65,7 +65,7 @@ class TraceNormalizer:
         return "progress"
 
     @classmethod
-    def build_execution_event(cls, event: dict[str, Any], *, source: str = "dynamic_swarm") -> ExecutionEvent:
+    def build_execution_event(cls, event: dict[str, Any], *, source: str = "dynamic") -> ExecutionEvent:
         if cls._is_canonical_event(event):
             return ExecutionEvent.model_validate(event)
 
@@ -114,6 +114,6 @@ class TraceNormalizer:
         )
 
     @staticmethod
-    def normalize_runtime_event(event: dict[str, Any], *, source: str = "dynamic_swarm") -> dict[str, Any]:
+    def normalize_runtime_event(event: dict[str, Any], *, source: str = "dynamic") -> dict[str, Any]:
         execution_event = TraceNormalizer.build_execution_event(event, source=source)
         return execution_event.model_dump(mode="json")

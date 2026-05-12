@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from src.mcp_gateway.tools.sandbox_exec_tool import build_input_mount_manifest
@@ -44,6 +44,7 @@ class StaticCodegenPayload:
     static_evidence_bundle: dict[str, Any]
     structured_dataset_summaries: list[dict[str, Any]]
     generation_directives: dict[str, Any]
+    external_knowledge: list[dict[str, Any]] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -304,6 +305,13 @@ def build_static_codegen_payload(*, exec_data: Any, state: Mapping[str, Any], in
             for item in exec_data.inputs.structured_datasets
         ],
         generation_directives=directives.to_payload(),
+        external_knowledge=list(
+            getattr(
+                getattr(exec_data.dynamic, "resume_overlay", None),
+                "external_knowledge",
+                None,
+            ) or []
+        ),
     )
     return payload.to_payload()
 

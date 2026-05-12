@@ -45,7 +45,7 @@ def test_runtime_decision_classifies_dynamic_research():
     assert decision.routing_mode == "dynamic"
     assert decision.final_mode == "dynamic"
     assert decision.coarse_mode == "dynamic"
-    assert decision.destinations == ("dynamic_swarm",)
+    assert decision.destinations == ("dynamic",)
     assert decision.continuation == "finish"
     assert decision.next_static_steps == ()
     assert decision.requires_external_research is True
@@ -62,7 +62,7 @@ def test_runtime_decision_routes_macro_outlook_queries_to_dynamic_research():
 
     assert decision.analysis_mode == "dynamic_research_analysis"
     assert decision.final_mode == "dynamic"
-    assert decision.destinations == ("dynamic_swarm",)
+    assert decision.destinations == ("dynamic",)
 
 
 def test_runtime_decision_prefers_document_rule_analysis_for_rule_only_query():

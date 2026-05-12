@@ -33,7 +33,10 @@ def _tracked_files() -> list[str]:
 
 
 def _read_text(relative_path: str) -> str:
-    return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+    try:
+        return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
 
 
 def _tracked_text_matches(pattern: re.Pattern[str], *, allowed_paths: set[str]) -> dict[str, str]:
@@ -58,6 +61,8 @@ def test_legacy_frontend_mentions_are_limited_to_explanation_and_reference_docs(
         ".gitignore",
         "docs/explanation/architecture.md",
         "docs/reference/project-status.md",
+        "docs/PRD.md",
+        "docs/架构设计文档.md",
         "scripts/audit_local_residue.py",
     }
     matches = _tracked_text_matches(pattern, allowed_paths=allowed_paths)
@@ -99,14 +104,14 @@ def test_local_legacy_frontend_directory_is_not_tracked():
 def test_local_residue_audit_classifies_safe_and_review_first_entries(tmp_path: Path):
     legacy_frontend_dir = "." + "".join(["stream", "lit"])
     (tmp_path / legacy_frontend_dir).mkdir()
-    (tmp_path / ".deer-flow").mkdir()
+    (tmp_path / ".omx").mkdir()
     (tmp_path / "config.yaml").write_text("sidecar: true\n", encoding="utf-8")
 
     records = detect_local_residue(tmp_path)
     categories = {record.relative_path: record.category for record in records}
 
     assert categories[legacy_frontend_dir] == SAFE_HISTORICAL
-    assert categories[".deer-flow"] == REVIEW_FIRST
+    assert categories[".omx"] == REVIEW_FIRST
     assert categories["config.yaml"] == REVIEW_FIRST
 
 

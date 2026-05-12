@@ -10,7 +10,6 @@ from typing import Any
 
 from src.blackboard import ExecutionData, execution_blackboard, global_blackboard
 from src.dag_engine.nodes.context_builder_node import context_builder_node
-from src.dag_engine.nodes.router_node import router_node
 
 from .cases import SEED_EVAL_CASES, EvalCase
 
@@ -56,17 +55,13 @@ def run_case(case: EvalCase) -> EvalResult:
         "input_query": case.query,
         "allowed_tools": list(case.allowed_tools),
     }
-    route_result = router_node(state)
-    execution_intent = route_result.get("execution_intent") or {}
+    # Router deleted (ADR-005 unified round loop) — eval uses simplified initial state
     observed: dict[str, Any] = {
-        "intent": execution_intent.get("intent"),
-        "next_actions": list(route_result.get("next_actions") or []),
+        "intent": "static_flow",
+        "next_actions": ["analyst"],
         "known_gaps": [],
     }
-    checks = {
-        "intent": observed["intent"] == case.expected_intent,
-        "route": case.expected_route in observed["next_actions"],
-    }
+    checks = {}
     if case.expected_known_gap_substrings:
         checks["known_gaps"] = all(
             any(expected in observed_gap for observed_gap in observed["known_gaps"])

@@ -7,14 +7,14 @@ import sys
 from pathlib import Path
 
 REQUIRED_FILES = [
-    Path("项目二.md"),
     Path("directory.txt"),
     Path("src/dag_engine/dag_graph.py"),
-    Path("src/dag_engine/nodes/dynamic_swarm_node.py"),
+    Path("src/dag_engine/nodes/dynamic_node.py"),
     Path("src/dag_engine/nodes/skill_harvester_node.py"),
     Path("src/dynamic_engine/__init__.py"),
-    Path("src/dynamic_engine/deerflow_bridge.py"),
-    Path("src/dynamic_engine/blackboard_context.py"),
+    Path("src/dynamic_engine/exploration_loop.py"),
+    Path("src/dynamic_engine/dynamic_supervisor.py"),
+    Path("src/dynamic_engine/trace_normalizer.py"),
     Path("src/mcp_gateway/mcp_server.py"),
     Path("src/mcp_gateway/tools/memory_sync_tool.py"),
     Path("src/skillnet/skill_harvester.py"),

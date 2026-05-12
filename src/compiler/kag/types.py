@@ -2,12 +2,52 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.common.contracts import StaticEvidenceRecord
 from src.storage.schema import KnowledgeTriple
+
+
+# ---- External knowledge structurization (ADR-005 Phase 2) -------------------
+
+
+class LookupTable(BaseModel):
+    """Structured table extracted from a web page (e.g. tariff schedule)."""
+
+    kind: Literal["lookup_table"] = "lookup_table"
+    table_name: str
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    source_url: str = ""
+    source_sha256: str = ""
+
+
+class NumericFact(BaseModel):
+    """Single numeric data point with entity/metric/unit/period attribution."""
+
+    kind: Literal["numeric_fact"] = "numeric_fact"
+    entity: str
+    metric: str
+    value: float
+    unit: str = ""
+    period: str = ""
+    source_url: str = ""
+    source_sha256: str = ""
+
+
+class TextualFinding(BaseModel):
+    """Free-text finding that doesn't fit a table or numeric shape."""
+
+    kind: Literal["textual_finding"] = "textual_finding"
+    topic: str = ""
+    summary: str
+    source_url: str = ""
+    source_sha256: str = ""
+
+
+ExternalKnowledge = Union[LookupTable, NumericFact, TextualFinding]
 
 
 class CompilerStateModel(BaseModel):

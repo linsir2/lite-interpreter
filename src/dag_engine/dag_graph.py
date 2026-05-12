@@ -7,72 +7,16 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from src.blackboard.execution_blackboard import execution_blackboard
-from src.blackboard.task_state_services import KnowledgeStateService
 from src.common import get_utc_now
 from src.common.contracts import FailureType, TerminalVerdict
 from src.common.control_plane import ensure_dynamic_resume_overlay
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.dag_exceptions import TaskLeaseLostError
-from src.runtime import build_analysis_brief
 
 NodeMap = Mapping[str, Callable[[dict[str, Any]], dict[str, Any]]]
 _WAITING_FOR_HUMAN_OUTPUT_KEYS = {"input_gap_report", "requested_inputs_json"}
 _WAITING_FOR_HUMAN_OUTPUT_NAMES = {"input_gap_report.md", "requested_inputs.json"}
 
-
-def _next_actions(state: dict[str, object]) -> list[str]:
-    actions = [str(item) for item in (state.get("next_actions", []) or []) if str(item)]
-    filtered = [item for item in actions if item in {"executor", "debugger", "skill_harvester"}]
-    return filtered or []
-
-
-def _resume_overlay_from_state(state: Mapping[str, Any], execution_data: Any | None = None) -> dict[str, Any]:
-    dynamic_state = getattr(execution_data, "dynamic", None)
-    execution_metadata = dict((state.get("execution_intent") or {}).get("metadata") or {})
-    overlay_source = (
-        state.get("dynamic_resume_overlay")
-        or (
-            dynamic_state.resume_overlay.model_dump(mode="json")
-            if getattr(dynamic_state, "resume_overlay", None)
-            else None
-        )
-        or {
-            "continuation": state.get("dynamic_continuation")
-            or getattr(dynamic_state, "continuation", None)
-            or "finish",
-            "next_static_steps": (
-                state.get("dynamic_next_static_steps")
-                or execution_metadata.get("next_static_steps")
-                or getattr(dynamic_state, "next_static_steps", None)
-                or []
-            ),
-            "skip_static_steps": execution_metadata.get("skip_static_steps") or [],
-            "evidence_refs": state.get("dynamic_evidence_refs")
-            or execution_metadata.get("evidence_refs")
-            or getattr(dynamic_state, "evidence_refs", None)
-            or [],
-            "suggested_static_actions": state.get("dynamic_suggested_static_actions")
-            or execution_metadata.get("suggested_static_actions")
-            or getattr(dynamic_state, "suggested_static_actions", None)
-            or [],
-            "recommended_static_action": execution_metadata.get("recommended_static_action") or "",
-            "open_questions": state.get("dynamic_open_questions")
-            or execution_metadata.get("open_questions")
-            or getattr(dynamic_state, "open_questions", None)
-            or [],
-            "strategy_family": execution_metadata.get("strategy_family"),
-        }
-    )
-    overlay = ensure_dynamic_resume_overlay(
-        overlay_source,
-        skip_static_steps=execution_metadata.get("skip_static_steps") or [],
-        evidence_refs=execution_metadata.get("evidence_refs") or [],
-        suggested_static_actions=execution_metadata.get("suggested_static_actions") or [],
-        recommended_static_action=str(execution_metadata.get("recommended_static_action") or ""),
-        open_questions=execution_metadata.get("open_questions") or [],
-        strategy_family=execution_metadata.get("strategy_family"),
-    )
-    return overlay.model_dump(mode="json")
 
 
 def _normalize_output_patch(value: Any) -> dict[str, Any]:
@@ -290,362 +234,228 @@ def _run_material_refresh_actions(
     return current_state, None
 
 
-def _execute_static_flow(
+_MAX_STATIC_ROUNDS = 3
+
+
+def _execute_round(
     *,
-    state: dict[str, Any],
-    next_actions: list[str],
+    current_state: dict[str, Any],
     nodes: NodeMap,
-    success_sub_status: str,
+    round_idx: int,
 ) -> dict[str, Any]:
-    current_state: dict[str, Any] = {**state, "next_actions": next_actions}
-    resume_overlay = ensure_dynamic_resume_overlay(state.get("dynamic_resume_overlay") or {})
+    """Execute one round of the unified loop.
+
+    Phases:
+    0. Dynamic resume overlay (checked every round)
+    1. Pre-analyst data prep (data_inspector, kag_retriever)
+    2. Analyst → produces next_actions
+    3. Execute analyst's actions (static_evidence, coder, dynamic)
+    4. Auditor + intra-round debugger
+    5. Executor → RoundOutput (or dynamic flag)
+    6. Skill harvesting
+    """
+    r = str(round_idx)
+
+    # ── Phase 0: Dynamic resume overlay ──
+    resume_overlay = ensure_dynamic_resume_overlay(current_state.get("dynamic_resume_overlay") or {})
     is_dynamic_resume = resume_overlay.continuation == "resume_static"
-    skip_static_steps = set(resume_overlay.skip_static_steps)
-    requested_static_steps = set(next_actions)
+    skip_steps: set[str] = set()
+    overlay_actions: list[str] = []
     if is_dynamic_resume:
         current_state = _run_evidence_compiler_if_needed(
-            current_state=current_state,
-            nodes=nodes,
-            source="dynamic_resume",
+            current_state=current_state, nodes=nodes, source="dynamic_resume"
         )
         current_state, terminal_result = _run_material_refresh_actions(
-            current_state=current_state,
-            nodes=nodes,
+            current_state=current_state, nodes=nodes,
         )
         if terminal_result is not None:
             return terminal_result
-    for action in next_actions:
-        if action == "data_inspector":
+        skip_steps = set(resume_overlay.skip_static_steps)
+        # Filter overlay's next_static_steps to valid resume targets
+        for step in resume_overlay.next_static_steps or []:
+            if step in ("analyst", "coder"):
+                overlay_actions.append(step)
+
+    # ── Phase 1: Pre-analyst data prep ──
+    for action in current_state.get("next_actions", []):
+        if action == "data_inspector" and action not in skip_steps:
             current_state.update(
-                _run_checkpointed_node(node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state)
+                _run_checkpointed_node(
+                    node_name="data_inspector", node_fn=nodes["data_inspector"], state=current_state
+                )
             )
             if current_state.get("blocked"):
                 summary_state = _run_checkpointed_node(
-                    node_name="summarizer",
-                    node_fn=nodes["summarizer"],
-                    state=current_state,
+                    node_name="summarizer", node_fn=nodes["summarizer"], state=current_state
                 )
                 verdict = TerminalVerdict.waiting(
                     sub_status="结构化数据探查失败，等待人工介入",
                     failure_type=FailureType.DATA_INSPECTION,
                     error_message=str(current_state.get("block_reason") or "data inspection blocked"),
                 )
-                return {
-                    **current_state,
-                    **summary_state,
-                    **verdict.to_dict(),
-                }
-        elif action == "kag_retriever":
+                return {**current_state, **summary_state, **verdict.to_dict(), "terminal_status": "waiting_for_human"}
+        elif action == "kag_retriever" and action not in skip_steps:
             current_state.update(
-                _run_checkpointed_node(node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state)
+                _run_checkpointed_node(
+                    node_name="kag_retriever", node_fn=nodes["kag_retriever"], state=current_state
+                )
             )
             if current_state.get("blocked"):
                 summary_state = _run_checkpointed_node(
-                    node_name="summarizer",
-                    node_fn=nodes["summarizer"],
-                    state=current_state,
+                    node_name="summarizer", node_fn=nodes["summarizer"], state=current_state
                 )
                 verdict = TerminalVerdict.waiting(
                     sub_status="知识构建失败，等待人工介入",
                     failure_type=FailureType.KNOWLEDGE_INGESTION,
                     error_message=str(current_state.get("block_reason") or "knowledge ingestion blocked"),
                 )
-                return {
-                    **current_state,
-                    **summary_state,
-                    **verdict.to_dict(),
-                }
+                return {**current_state, **summary_state, **verdict.to_dict(), "terminal_status": "waiting_for_human"}
             current_state.update(
                 _run_checkpointed_node(
                     node_name="context_builder", node_fn=nodes["context_builder"], state=current_state
                 )
             )
 
-    should_run_analyst = "analyst" not in skip_static_steps and (
+    # ── Phase 2: Analyst ──
+    # During dynamic resume: analyst runs only if overlay requests it or forced by material_refresh.
+    # In static mode: analyst always runs (it's the router).
+    run_analyst = (
         not is_dynamic_resume
-        or not requested_static_steps
-        or "analyst" in requested_static_steps
+        or "analyst" in overlay_actions
         or current_state.get("force_analyst_after_material_refresh")
     )
-    if should_run_analyst:
-        current_state.update(_run_checkpointed_node(node_name="analyst", node_fn=nodes["analyst"], state=current_state))
-    should_run_static_evidence = (
-        not is_dynamic_resume
-        and "static_evidence" not in skip_static_steps
-        and current_state.get("next_actions") == ["static_evidence"]
-    )
-    if should_run_static_evidence:
-        static_evidence_node = nodes.get("static_evidence")
-        if static_evidence_node is None:
-            current_state["next_actions"] = ["coder"]
-        else:
-            current_state.update(
-                _run_checkpointed_node(
-                    node_name="static_evidence",
-                    node_fn=static_evidence_node,
-                    state=current_state,
-                )
-            )
-        if current_state.get("blocked"):
-            summary_state = _run_checkpointed_node(
-                node_name="summarizer",
-                node_fn=nodes["summarizer"],
-                state=current_state,
-            )
-            verdict = TerminalVerdict.waiting(
-                sub_status="静态取证失败，等待人工介入",
-                failure_type=FailureType.STATIC_EVIDENCE,
-                error_message=str(current_state.get("block_reason") or "static evidence blocked"),
-            )
-            return {
-                **current_state,
-                **summary_state,
-                **verdict.to_dict(),
-            }
-        current_state = _run_evidence_compiler_if_needed(
-            current_state=current_state,
-            nodes=nodes,
-            source="static_evidence",
-        )
-        current_state, terminal_result = _run_material_refresh_actions(
-            current_state=current_state,
-            nodes=nodes,
-        )
-        if terminal_result is not None:
-            return terminal_result
-        if current_state.get("force_analyst_after_material_refresh") and "analyst" not in skip_static_steps:
-            current_state.update(
-                _run_checkpointed_node(
-                    node_name="analyst:material_refresh",
-                    node_fn=nodes["analyst"],
-                    state=current_state,
-                )
-            )
-    should_run_coder = "coder" not in skip_static_steps and (
-        not is_dynamic_resume or "coder" in requested_static_steps or should_run_analyst or should_run_static_evidence
-    )
-    if should_run_coder:
-        current_state.update(_run_checkpointed_node(node_name="coder", node_fn=nodes["coder"], state=current_state))
+    if "analyst" in skip_steps:
+        run_analyst = False  # explicit skip overrides
 
-    audit_state = _run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state)
+    if run_analyst:
+        analyst_result = _run_checkpointed_node(
+            node_name=f"analyst:r{r}", node_fn=nodes["analyst"], state=current_state
+        )
+        current_state.update(analyst_result)
+        new_actions = list(analyst_result.get("next_actions", []) or [])
+    else:
+        # Use overlay's filtered next_static_steps (pre-analyst steps already filtered out)
+        new_actions = [a for a in overlay_actions if a != "analyst"]
+    current_state["next_actions"] = new_actions
+
+    # ── Phase 3: Execute analyst's actions ──
+    has_coder = False
+    has_dynamic = False
+    for action in new_actions:
+        if action == "static_evidence" and action not in skip_steps and not is_dynamic_resume:
+            static_evidence_node = nodes.get("static_evidence")
+            if static_evidence_node is not None:
+                current_state.update(
+                    _run_checkpointed_node(
+                        node_name=f"static_evidence:r{r}", node_fn=static_evidence_node, state=current_state
+                    )
+                )
+            if current_state.get("blocked"):
+                summary_state = _run_checkpointed_node(
+                    node_name="summarizer", node_fn=nodes["summarizer"], state=current_state
+                )
+                verdict = TerminalVerdict.waiting(
+                    sub_status="静态取证失败，等待人工介入",
+                    failure_type=FailureType.STATIC_EVIDENCE,
+                    error_message=str(current_state.get("block_reason") or "static evidence blocked"),
+                )
+                return {**current_state, **summary_state, **verdict.to_dict(), "terminal_status": "waiting_for_human"}
+            current_state = _run_evidence_compiler_if_needed(
+                current_state=current_state, nodes=nodes, source="static_evidence"
+            )
+            current_state, terminal_result = _run_material_refresh_actions(
+                current_state=current_state, nodes=nodes,
+            )
+            if terminal_result is not None:
+                return terminal_result
+            if current_state.get("force_analyst_after_material_refresh"):
+                current_state.update(
+                    _run_checkpointed_node(
+                        node_name=f"analyst:r{r}:material_refresh", node_fn=nodes["analyst"], state=current_state
+                    )
+                )
+                # After material refresh, coder runs (analyst re-ran, evidence is compiled)
+                if "coder" not in skip_steps:
+                    current_state.update(
+                        _run_checkpointed_node(
+                            node_name=f"coder:r{r}", node_fn=nodes["coder"], state=current_state
+                        )
+                    )
+                    has_coder = True
+        elif action == "coder" and action not in skip_steps:
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name=f"coder:r{r}", node_fn=nodes["coder"], state=current_state
+                )
+            )
+            has_coder = True
+        elif action == "dynamic":
+            has_dynamic = True
+
+    # During dynamic resume, if analyst ran and no coder was explicitly requested,
+    # auto-run coder (preserving legacy contract: analyst implies coder on reentry)
+    if is_dynamic_resume and "analyst" not in skip_steps and not has_coder and "coder" not in skip_steps:
+        current_state.update(
+            _run_checkpointed_node(
+                node_name=f"coder:r{r}", node_fn=nodes["coder"], state=current_state
+            )
+        )
+        has_coder = True
+
+    # ── Phase 4: Auditor + intra-round debugger ──
+    audit_state = _run_checkpointed_node(
+        node_name=f"auditor:r{r}", node_fn=nodes["auditor"], state=current_state
+    )
     current_state.update(audit_state)
     if audit_state.get("next_actions") == ["debugger"]:
         current_state.update(
-            _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
+            _run_checkpointed_node(
+                node_name=f"debugger:r{r}", node_fn=nodes["debugger"], state=current_state
+            )
         )
-        current_state.update(_run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state))
-    if current_state.get("next_actions") == ["skill_harvester"]:
-        harvested_state = _run_checkpointed_node(
-            node_name="skill_harvester",
-            node_fn=nodes["skill_harvester"],
-            state=current_state,
-        )
-        summary_state = _run_checkpointed_node(
-            node_name="summarizer",
-            node_fn=nodes["summarizer"],
-            state={**current_state, **harvested_state},
-        )
-        verdict = TerminalVerdict.ok(sub_status="静态链路完成，跳过沙箱执行")
-        return {
-            **current_state,
-            **harvested_state,
-            **summary_state,
-            **verdict.to_dict(),
-        }
-
-    executor_state = _run_checkpointed_node(node_name="executor", node_fn=nodes["executor"], state=current_state)
-    current_state.update(executor_state)
-    if executor_state.get("next_actions") == ["debugger"]:
         current_state.update(
-            _run_checkpointed_node(node_name="debugger", node_fn=nodes["debugger"], state=current_state)
+            _run_checkpointed_node(
+                node_name=f"auditor:r{r}:post_debug", node_fn=nodes["auditor"], state=current_state
+            )
         )
-        current_state.update(_run_checkpointed_node(node_name="auditor", node_fn=nodes["auditor"], state=current_state))
-        if current_state.get("next_actions") == ["executor"]:
+
+    # ── Phase 5: Executor → RoundOutput (or dynamic flag) ──
+    if has_coder and not has_dynamic:
+        executor_state = _run_checkpointed_node(
+            node_name=f"executor:r{r}", node_fn=nodes["executor"], state=current_state
+        )
+        current_state.update(executor_state)
+        round_output = executor_state.get("round_output", {})
+
+        # Intra-round debugger (post-executor verification failure)
+        if round_output.get("termination_reason") == "verification_failed":
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name=f"debugger:r{r}:post_exec", node_fn=nodes["debugger"], state=current_state
+                )
+            )
+            current_state.update(
+                _run_checkpointed_node(
+                    node_name=f"auditor:r{r}:post_exec", node_fn=nodes["auditor"], state=current_state
+                )
+            )
             executor_state = _run_checkpointed_node(
-                node_name="executor",
-                node_fn=nodes["executor"],
-                state=current_state,
+                node_name=f"executor:r{r}:retry", node_fn=nodes["executor"], state=current_state
             )
             current_state.update(executor_state)
+            round_output = executor_state.get("round_output", {})
+    elif has_dynamic:
+        round_output = {"round_index": round_idx, "additional_rounds": 0, "requires_dynamic": True}
+    else:
+        round_output = {"round_index": round_idx, "additional_rounds": 0, "requires_dynamic": False}
+
+    # ── Phase 6: Skill harvesting ──
     harvested_state = _run_checkpointed_node(
-        node_name="skill_harvester",
-        node_fn=nodes["skill_harvester"],
-        state=current_state,
+        node_name=f"skill_harvester:r{r}", node_fn=nodes["skill_harvester"], state=current_state
     )
     current_state.update(harvested_state)
-    summary_state = _run_checkpointed_node(node_name="summarizer", node_fn=nodes["summarizer"], state=current_state)
-    current_state.update(summary_state)
-    execution_record = executor_state.get("execution_record")
-    final_response = summary_state.get("final_response") or current_state.get("final_response") or {}
-    if (
-        execution_record
-        and execution_record.get("success")
-        and _final_response_requires_human_follow_up(final_response)
-    ):
-        verdict = TerminalVerdict.waiting(
-            sub_status="已生成输入缺口报告，等待人工补充资料",
-            failure_type=FailureType.NEED_MORE_INPUTS,
-            error_message="input gap report generated",
-        )
-        return {
-            **current_state,
-            **verdict.to_dict(),
-        }
-    if execution_record and execution_record.get("success"):
-        verdict = TerminalVerdict.ok(sub_status=success_sub_status)
-        return {**current_state, **verdict.to_dict()}
-    verdict = TerminalVerdict.fail(
-        sub_status="静态链路执行失败",
-        failure_type=FailureType.EXECUTING,
-        error_message=str(
-            execution_record.get("error", "sandbox execution failed")
-            if execution_record
-            else "sandbox execution result missing"
-        ),
-    )
-    return {**current_state, **verdict.to_dict()}
 
-
-def _merge_dynamic_research_into_static_state(state: dict[str, Any]) -> dict[str, Any]:
-    tenant_id = str(state.get("tenant_id", ""))
-    task_id = str(state.get("task_id", ""))
-    query = str(state.get("input_query", ""))
-    try:
-        execution_data = KnowledgeStateService.load(tenant_id, task_id)
-    except ValueError:
-        resume_overlay = _resume_overlay_from_state(state)
-        next_actions = [
-            item
-            for item in list(resume_overlay.get("next_static_steps") or ["analyst"])
-            if item not in set(resume_overlay.get("skip_static_steps") or [])
-        ]
-        refined_context = "\n".join(
-            f"- 研究发现: {str(item).strip()}"
-            for item in list(state.get("dynamic_research_findings") or [])[:5]
-            if str(item).strip()
-        ).strip()
-        recommended_next_step = (
-            str(resume_overlay.get("recommended_static_action") or "").strip()
-            or (list(resume_overlay.get("suggested_static_actions") or []) or ["生成静态分析计划"])[0]
-        )
-        return {
-            "knowledge_snapshot": {},
-            "analysis_brief": {
-                "question": query,
-                "analysis_mode": "dynamic_research_analysis",
-                "dataset_summaries": [],
-                "business_rules": [],
-                "business_metrics": [],
-                "business_filters": [],
-                "evidence_refs": list(resume_overlay.get("evidence_refs") or state.get("dynamic_evidence_refs") or []),
-                "known_gaps": list(resume_overlay.get("open_questions") or state.get("dynamic_open_questions") or []),
-                "recommended_next_step": recommended_next_step,
-            },
-            "refined_context": refined_context,
-            "next_actions": next_actions,
-            "dynamic_resume_overlay": resume_overlay,
-        }
-
-    resume_overlay = _resume_overlay_from_state(state, execution_data)
-    dynamic_summary = str(state.get("dynamic_summary") or execution_data.dynamic.summary or "").strip()
-    research_findings = [
-        str(item).strip()
-        for item in list(state.get("dynamic_research_findings") or execution_data.dynamic.research_findings or [])
-        if str(item).strip()
-    ]
-    if dynamic_summary and dynamic_summary not in research_findings:
-        research_findings.insert(0, dynamic_summary)
-    evidence_refs = [
-        str(item).strip()
-        for item in list(resume_overlay.get("evidence_refs") or execution_data.dynamic.evidence_refs or [])
-        if str(item).strip()
-    ]
-    artifact_refs = [
-        str(item).strip()
-        for item in list(state.get("dynamic_artifacts") or execution_data.dynamic.artifacts or [])
-        if str(item).strip()
-    ]
-    open_questions = [
-        str(item).strip()
-        for item in list(resume_overlay.get("open_questions") or execution_data.dynamic.open_questions or [])
-        if str(item).strip()
-    ]
-    suggested_static_actions = [
-        str(item).strip()
-        for item in list(
-            resume_overlay.get("suggested_static_actions") or execution_data.dynamic.suggested_static_actions or []
-        )
-        if str(item).strip()
-    ]
-    next_actions = [
-        item
-        for item in list(resume_overlay.get("next_static_steps") or ["analyst"])
-        if item not in set(resume_overlay.get("skip_static_steps") or [])
-    ]
-
-    knowledge_snapshot_payload = execution_data.knowledge.knowledge_snapshot.model_dump(mode="json")
-    existing_hits = list(knowledge_snapshot_payload.get("hits") or [])
-    dynamic_hits = [
-        {
-            "chunk_id": f"dynamic:{task_id}:{index}",
-            "text": finding,
-            "score": 1.0,
-            "source": "dynamic_swarm",
-            "retrieval_type": "dynamic_research",
-        }
-        for index, finding in enumerate(research_findings, start=1)
-    ]
-    knowledge_snapshot_payload["hits"] = [*existing_hits, *dynamic_hits]
-    combined_evidence = []
-    for value in list(knowledge_snapshot_payload.get("evidence_refs") or []) + evidence_refs + artifact_refs:
-        text = str(value).strip()
-        if text and text not in combined_evidence:
-            combined_evidence.append(text)
-    knowledge_snapshot_payload["evidence_refs"] = combined_evidence
-    metadata = dict(knowledge_snapshot_payload.get("metadata") or {})
-    metadata["dynamic_research"] = {
-        "finding_count": len(research_findings),
-        "open_question_count": len(open_questions),
-        "artifact_count": len(artifact_refs),
-    }
-    knowledge_snapshot_payload["metadata"] = metadata
-
-    recommended_next_step = str(resume_overlay.get("recommended_static_action") or "").strip()
-    if not recommended_next_step:
-        recommended_next_step = (
-            suggested_static_actions[0]
-            if suggested_static_actions
-            else "基于动态研究结果生成静态分析计划并准备模板化执行代码"
-        )
-    brief = build_analysis_brief(
-        query=query,
-        exec_data=execution_data,
-        knowledge_snapshot=knowledge_snapshot_payload,
-        business_context=execution_data.knowledge.business_context.model_dump(mode="json"),
-        analysis_mode="dynamic_research_analysis",
-        known_gaps=open_questions,
-        recommended_next_step=recommended_next_step,
-    )
-    brief_payload = brief.to_payload()
-    KnowledgeStateService.update_snapshot_and_brief(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        knowledge_snapshot=knowledge_snapshot_payload,
-        analysis_brief=brief_payload,
-    )
-    refined_context = "\n".join(
-        [
-            *(f"- 研究发现: {item}" for item in research_findings[:5]),
-            *(f"- 证据引用: {item}" for item in combined_evidence[:5]),
-        ]
-    ).strip()
-    return {
-        "knowledge_snapshot": knowledge_snapshot_payload,
-        "analysis_brief": brief_payload,
-        "refined_context": refined_context,
-        "next_actions": next_actions,
-        "dynamic_resume_overlay": resume_overlay,
-    }
+    return {**current_state, "round_output": round_output}
 
 
 def execute_task_flow(
@@ -653,88 +463,73 @@ def execute_task_flow(
     *,
     nodes: NodeMap,
 ) -> dict[str, Any]:
-    """Run the canonical static/dynamic task flow."""
+    """Unified round loop — no more static_flow / dynamic_flow branching.
 
+    Every task enters the same loop. Analyst drives routing via next_actions;
+    RoundOutput from executor determines continuation or termination.
+    """
     try:
-        route_result = _run_checkpointed_node(node_name="router", node_fn=nodes["router"], state=state)
-        next_actions = list(route_result.get("next_actions", []) or [])
-        if next_actions == ["dynamic_swarm"]:
-            dynamic_state = _run_checkpointed_node(
-                node_name="dynamic_swarm",
-                node_fn=nodes["dynamic_swarm"],
-                state={**state, **route_result},
-            )
-            dynamic_status = str(dynamic_state.get("dynamic_status") or "")
-            continuation = str(dynamic_state.get("dynamic_continuation") or "finish")
-            if dynamic_status == "completed":
-                if continuation == "resume_static":
-                    merged_state = _merge_dynamic_research_into_static_state({**state, **route_result, **dynamic_state})
-                    static_result = _execute_static_flow(
-                        state={**state, **route_result, **dynamic_state, **merged_state},
-                        next_actions=list(merged_state.get("next_actions") or []),
-                        nodes=nodes,
-                        success_sub_status="动态研究回流后静态链执行完成",
-                    )
-                    if static_result.get("terminal_status") == "success":
-                        static_result["dynamic_status"] = dynamic_status
-                        static_result["dynamic_summary"] = dynamic_state.get("dynamic_summary")
-                    return static_result
+        for round_idx in range(_MAX_STATIC_ROUNDS):
+            state["round_index"] = round_idx
+            result = _execute_round(current_state=state, nodes=nodes, round_idx=round_idx)
+            state.update(result)
 
-                harvested_state = _run_checkpointed_node(
-                    node_name="skill_harvester",
-                    node_fn=nodes["skill_harvester"],
-                    state={**dynamic_state, **route_result, **state},
+            if result.get("terminal_status"):
+                return {**state, **result}
+
+            round_output = result.get("round_output") or {}
+            if round_output.get("additional_rounds", 0) > 0:
+                continue
+            if round_output.get("requires_dynamic"):
+                dynamic_result = _run_checkpointed_node(
+                    node_name="dynamic", node_fn=nodes["dynamic"], state=state
                 )
-                summary_state = _run_checkpointed_node(
-                    node_name="summarizer",
-                    node_fn=nodes["summarizer"],
-                    state={**dynamic_state, **harvested_state, **route_result, **state},
-                )
-                verdict = TerminalVerdict.ok(sub_status="动态任务链路执行完成")
-                return {
-                    **route_result,
-                    **dynamic_state,
-                    **harvested_state,
-                    **summary_state,
-                    **verdict.to_dict(),
-                }
-            if dynamic_status == "denied":
-                summary_state = nodes["summarizer"]({**dynamic_state, **state})
-                verdict = TerminalVerdict.waiting(
-                    sub_status="动态任务被治理策略阻断，等待人工介入",
-                    failure_type=FailureType.DYNAMIC_GOVERNANCE,
-                    error_message=str(
-                        dynamic_state.get("dynamic_summary") or "dynamic swarm denied by governance policy"
-                    ),
-                )
-                return {
-                    **route_result,
-                    **dynamic_state,
-                    **summary_state,
-                    **verdict.to_dict(),
-                }
-            summary_state = _run_checkpointed_node(
-                node_name="summarizer",
-                node_fn=nodes["summarizer"],
-                state={**dynamic_state, **state},
+                state.update(dynamic_result)
+                if state.get("dynamic_continuation") == "resume_static":
+                    continue
+                break
+            break
+
+        # Terminal: summarizer + verdict
+        summary_state = _run_checkpointed_node(
+            node_name="summarizer", node_fn=nodes["summarizer"], state=state
+        )
+        state.update(summary_state)
+        dynamic_status = str(state.get("dynamic_status") or "")
+        execution_record = state.get("execution_record")
+        final_response = state.get("final_response") or {}
+
+        if dynamic_status == "denied":
+            verdict = TerminalVerdict.waiting(
+                sub_status="动态任务被治理策略阻断，等待人工介入",
+                failure_type=FailureType.DYNAMIC_GOVERNANCE,
+                error_message=str(state.get("dynamic_summary") or "dynamic swarm denied by governance policy"),
             )
+        elif dynamic_status == "unavailable":
             verdict = TerminalVerdict.fail(
                 sub_status="动态任务链路未能完成",
                 failure_type=FailureType.DYNAMIC_RUNTIME,
-                error_message=str(dynamic_state.get("dynamic_summary") or "dynamic swarm unavailable"),
+                error_message=str(state.get("dynamic_summary") or "dynamic swarm unavailable"),
             )
-            return {
-                **route_result,
-                **dynamic_state,
-                **summary_state,
-                **verdict.to_dict(),
-            }
-        return _execute_static_flow(
-            state={**state, **route_result},
-            next_actions=next_actions,
-            nodes=nodes,
-            success_sub_status="静态链路执行完成",
-        )
+        elif execution_record and execution_record.get("success") and _final_response_requires_human_follow_up(final_response):
+            verdict = TerminalVerdict.waiting(
+                sub_status="已生成输入缺口报告，等待人工补充资料",
+                failure_type=FailureType.NEED_MORE_INPUTS,
+                error_message="input gap report generated",
+            )
+        elif execution_record and execution_record.get("success"):
+            verdict = TerminalVerdict.ok(sub_status="任务执行完成")
+        else:
+            verdict = TerminalVerdict.fail(
+                sub_status="任务执行失败",
+                failure_type=FailureType.EXECUTING,
+                error_message=str(
+                    execution_record.get("error", "sandbox execution failed")
+                    if execution_record
+                    else "sandbox execution result missing"
+                ),
+            )
+        return {**state, **verdict.to_dict()}
     except TaskLeaseLostError as exc:
         verdict = TerminalVerdict.fail(
             sub_status="任务租约已丢失，本地执行已停止",

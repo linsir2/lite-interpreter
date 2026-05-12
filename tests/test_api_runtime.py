@@ -31,16 +31,16 @@ def test_list_runtimes_returns_runtime_summaries():
     assert response.status_code == 200
     body = json.loads(response.body.decode())
     assert body["runtimes"]
-    assert body["runtimes"][0]["runtime_id"] == "deerflow"
+    assert body["runtimes"][0]["runtime_id"] == "native"
     assert any(domain["domain_id"] == "research" for domain in body["runtimes"][0]["domains"])
 
 
 def test_get_runtime_capabilities_returns_manifest():
-    response = asyncio.run(get_runtime_capabilities(_make_request("/api/runtimes/deerflow/capabilities", "deerflow")))
+    response = asyncio.run(get_runtime_capabilities(_make_request("/api/runtimes/native/capabilities", "native")))
     assert response.status_code == 200
     body = json.loads(response.body.decode())
-    assert body["runtime_id"] == "deerflow"
-    assert "sidecar" in body["runtime_modes"]
+    assert body["runtime_id"] == "native"
+    assert "in_process" in body["runtime_modes"]
 
 
 def test_get_runtime_capabilities_returns_404_for_missing_runtime():

@@ -12,9 +12,10 @@ from src.common.contracts import (
     ArtifactEmitSpec,
     ArtifactRecord,
     ArtifactVerificationResult,
-    CapabilityTier,
     ComputationStep,
     DebugAttemptRecord,
+    IterationMode,
+    NetworkMode,
     DebugHint,
     DecisionRecord,
     DynamicResumeOverlay,
@@ -24,7 +25,6 @@ from src.common.contracts import (
     ExecutionStrategy,
     GeneratorManifest,
     RepairHint,
-    ResearchMode,
     StaticEvidenceBundle,
     StaticEvidenceRecord,
     StaticEvidenceRequest,
@@ -141,7 +141,7 @@ def ensure_execution_intent(
     intent = _normalize_string(payload.get("intent"))
     resolved_routing_mode = _normalize_string(routing_mode or payload.get("routing_mode"), "static")
     if not intent:
-        intent = "dynamic_flow" if destination_values == ["dynamic_swarm"] or resolved_routing_mode == "dynamic" else "static_flow"
+        intent = "dynamic_flow" if destination_values == ["dynamic"] or resolved_routing_mode == "dynamic" else "static_flow"
     # Map legacy intent values to current Literal (backward compat for persisted data)
     _legacy_intent_map = {
         "dynamic_only": "dynamic_flow",
@@ -206,7 +206,7 @@ def ensure_dynamic_resume_overlay(
 def ensure_evidence_plan(
     value: Any = None,
     *,
-    research_mode: ResearchMode = "none",
+    research_mode: str = "none",
 ) -> EvidencePlan:
     if isinstance(value, EvidencePlan):
         payload = value.model_dump(mode="json")
@@ -226,7 +226,7 @@ def ensure_static_evidence_request(
     value: Any = None,
     *,
     query: str = "",
-    research_mode: ResearchMode = "none",
+    research_mode: str = "none",
 ) -> StaticEvidenceRequest:
     if isinstance(value, StaticEvidenceRequest):
         payload = value.model_dump(mode="json")
@@ -270,7 +270,7 @@ def ensure_static_program_spec(
     spec_id: str = "",
     strategy_family: str = "dataset_profile",
     analysis_mode: str = "",
-    research_mode: ResearchMode = "none",
+    research_mode: str = "none",
 ) -> StaticProgramSpec:
     if isinstance(value, StaticProgramSpec):
         payload = value.model_dump(mode="json")
@@ -370,8 +370,8 @@ def ensure_execution_strategy(
     value: Any = None,
     *,
     analysis_mode: str = "",
-    capability_tier: CapabilityTier = CapabilityTier.STATIC_ONLY,
-    fallback_tier: CapabilityTier | None = None,
+    network_mode: NetworkMode = NetworkMode.NONE,
+    iteration_mode: IterationMode = IterationMode.SINGLE_PASS,
     summary: str = "",
     evidence_plan: EvidencePlan | Mapping[str, Any] | None = None,
 ) -> ExecutionStrategy:
@@ -382,17 +382,14 @@ def ensure_execution_strategy(
     else:
         payload = {}
     payload.setdefault("analysis_mode", _normalize_string(payload.get("analysis_mode"), analysis_mode))
-    payload.setdefault("capability_tier", _normalize_string(payload.get("capability_tier"), capability_tier))
-    if fallback_tier is not None:
-        payload.setdefault("fallback_tier", fallback_tier)
+    payload.setdefault("network_mode", network_mode.value if isinstance(network_mode, NetworkMode) else str(network_mode))
+    payload.setdefault("iteration_mode", iteration_mode.value if isinstance(iteration_mode, IterationMode) else str(iteration_mode))
     payload.setdefault("summary", _normalize_string(payload.get("summary"), summary))
-    # Derive research_mode from capability_tier for evidence_plan construction
-    tier_raw = payload.get("capability_tier", capability_tier)
-    if isinstance(tier_raw, CapabilityTier):
-        tier = tier_raw
-    else:
-        tier = CapabilityTier(str(tier_raw))
-    derived_rm = _derive_research_mode(tier)
+    # Derive research_mode from network_mode for evidence_plan construction
+    nm = payload.get("network_mode", network_mode)
+    if isinstance(nm, str):
+        nm = NetworkMode(nm)
+    derived_rm = _derive_research_mode(nm)
     payload["evidence_plan"] = ensure_evidence_plan(
         payload.get("evidence_plan") or evidence_plan,
         research_mode=derived_rm,

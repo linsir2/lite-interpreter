@@ -123,10 +123,8 @@ embedding_cache.json
 processed_hashes.json
 page_heavy_data.json
 global_alias_map.json
-sidecar.json
 seed_eval_report.json
 seed_eval_report.md
-
 # ==========================================
 # Frontend / misc tool caches
 # ==========================================
@@ -137,8 +135,7 @@ apps/web/tailwind.config.js
 apps/web/tailwind.config.d.ts
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
-# Local DeerFlow / ad-hoc config
-.deer-flow/
+# Local config residue
 config.yaml
 .gstack/
 

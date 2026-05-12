@@ -120,14 +120,6 @@ class ExecutionStateService:
             execution_data.dynamic.trace_refs = list(trace_refs)
         if artifacts is not None:
             execution_data.dynamic.artifacts = list(artifacts)
-        if research_findings is not None:
-            execution_data.dynamic.research_findings = list(research_findings)
-        if evidence_refs is not None:
-            execution_data.dynamic.evidence_refs = list(evidence_refs)
-        if open_questions is not None:
-            execution_data.dynamic.open_questions = list(open_questions)
-        if suggested_static_actions is not None:
-            execution_data.dynamic.suggested_static_actions = list(suggested_static_actions)
         if recommended_static_skill is not None:
             execution_data.dynamic.recommended_static_skill = dict(recommended_static_skill)
         return cls.persist(execution_data)

@@ -116,19 +116,10 @@ STATIC_EVIDENCE_MAX_REDIRECTS: Final[int] = _env_int("STATIC_EVIDENCE_MAX_REDIRE
 STATIC_EVIDENCE_MAX_SEARCH_RESULTS: Final[int] = _env_int("STATIC_EVIDENCE_MAX_SEARCH_RESULTS", 3)
 TAVILY_API_KEY: Final[str] = _env_str("TAVILY_API_KEY", "")
 
-# Dynamic engine / DeerFlow integration
-# DeerFlow is expected to be installed as a Python package such as
-# the `deerflow` package built from DeerFlow's official harness source, not
-# vendored into this repository.
-DEERFLOW_CLIENT_MODULE = os.getenv("DEERFLOW_CLIENT_MODULE", "deerflow.client").strip()
-DEERFLOW_RUNTIME_MODE = _env_str("DEERFLOW_RUNTIME_MODE", "sidecar")
-DEERFLOW_SIDECAR_URL = _env_str("DEERFLOW_SIDECAR_URL", "")
-DEERFLOW_SIDECAR_TIMEOUT = _env_int("DEERFLOW_SIDECAR_TIMEOUT", 300)
-DEERFLOW_CONFIG_PATH = _env_str("DEERFLOW_CONFIG_PATH", str(PROJECT_ROOT / "config" / "deerflow_sidecar.yaml"))
-DEERFLOW_MODEL_NAME = _env_str("DEERFLOW_MODEL_NAME", "")
-DEERFLOW_MAX_EVENTS = _env_int("DEERFLOW_MAX_EVENTS", 64)
-DEERFLOW_MAX_STEPS = _env_int("DEERFLOW_MAX_STEPS", 6)
-DEERFLOW_RECURSION_LIMIT = _env_int("DEERFLOW_RECURSION_LIMIT", 32)
+# Native dynamic exploration
+DYNAMIC_NATIVE_MAX_STEPS: Final[int] = _env_int("DYNAMIC_NATIVE_MAX_STEPS", 6)
+DYNAMIC_NATIVE_TIMEOUT: Final[int] = _env_int("DYNAMIC_NATIVE_TIMEOUT", 300)
+DYNAMIC_NATIVE_MODEL: Final[str] = _env_str("DYNAMIC_NATIVE_MODEL", "reasoning_model")
 
 # 存储层
 # Postgres 关系型数据库

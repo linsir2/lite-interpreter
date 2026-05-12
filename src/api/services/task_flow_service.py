@@ -36,11 +36,10 @@ from src.dag_engine.nodes.coder_node import coder_node
 from src.dag_engine.nodes.context_builder_node import context_builder_node
 from src.dag_engine.nodes.data_inspector import data_inspector_node
 from src.dag_engine.nodes.debugger_node import debugger_node
-from src.dag_engine.nodes.dynamic_swarm_node import dynamic_swarm_node
+from src.dag_engine.nodes.dynamic_node import dynamic_node
 from src.dag_engine.nodes.evidence_compiler_node import evidence_compiler_node
 from src.dag_engine.nodes.executor_node import executor_node
 from src.dag_engine.nodes.kag_retriever import kag_retriever_node
-from src.dag_engine.nodes.router_node import router_node
 from src.dag_engine.nodes.skill_harvester_node import skill_harvester_node
 from src.dag_engine.nodes.static_evidence_node import static_evidence_node
 from src.dag_engine.nodes.summarizer_node import summarizer_node
@@ -171,8 +170,7 @@ async def _run_task_flow(
                 execute_task_flow,
                 {**state, "execution_snapshot": execution_data.model_dump(mode="json")},
                 nodes={
-                    "router": router_node,
-                    "dynamic_swarm": dynamic_swarm_node,
+                    "dynamic": dynamic_node,
                     "skill_harvester": skill_harvester_node,
                     "summarizer": summarizer_node,
                     "data_inspector": data_inspector_node,

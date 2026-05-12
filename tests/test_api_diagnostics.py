@@ -35,7 +35,7 @@ def test_get_diagnostics_returns_environment_and_dependency_summary():
     assert body["service"] == "lite-interpreter-api"
     assert "lite_interpreter_env_active" in body["environment"]
     assert "runtime_mode" in body["environment"]
-    assert "deerflow_client_importable" in body["dependencies"]
+    assert body["environment"]["runtime_mode"] == "native"
     assert "postgres_driver" in body["dependencies"]
     assert "postgres_driver_error" in body["dependencies"]
     assert "mcp_tool_count" in body["capabilities"]
@@ -63,17 +63,16 @@ def test_get_diagnostics_returns_environment_and_dependency_summary():
     assert "fast_model" in body["llm_health"]
     assert "guidance_health" in body
     assert "compiler_health" in body
+    assert "dynamic_exploration" in body
+    assert body["dynamic_exploration"]["max_steps"] >= 1
 
 
-def test_get_conformance_returns_runtime_summary():
+def test_get_conformance_returns_native_runtime_summary():
     response = asyncio.run(get_conformance(_make_request("/api/conformance")))
     assert response.status_code == 200
     body = json.loads(response.body.decode())
     assert body["status"] == "ok"
-    assert body["summary"]["runtime_capability_manifest"] is True
     assert body["summary"]["execution_resource_layer"] is True
     assert body["summary"]["execution_event_model"] == "canonical"
-    assert body["runtimes"]
-    assert body["runtimes"][0]["runtime_id"] == "deerflow"
-    assert "supports_attach_stream" in body["runtimes"][0]
-    assert "supports_resume" in body["runtimes"][0]
+    assert body["summary"]["runtime_backend"] == "native_exploration_loop"
+    assert isinstance(body["tools"], list)

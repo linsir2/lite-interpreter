@@ -53,7 +53,7 @@ def build_dynamic_skill_candidate(
     ]
     metadata = {
         "trace_count": len(normalized_trace_records),
-        "source": "dynamic_swarm",
+        "source": "dynamic",
     }
     normalized_capabilities = capability_registry.normalize_names(required_capabilities or [])
     return DynamicSkillCandidate(

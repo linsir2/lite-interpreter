@@ -639,7 +639,7 @@ def classify_analysis_task(
             known_gaps.append("需要一次受控外部取证")
         analysis_mode = coarse_analysis_mode if final_mode == "dynamic" else static_analysis_mode
         profile_key = analysis_mode
-        destinations = ("dynamic_swarm",) if final_mode == "dynamic" else static_destinations
+        destinations = ("dynamic",) if final_mode == "dynamic" else static_destinations
         continuation = "resume_static" if final_mode == "dynamic" and requires_static_execution else "finish"
         next_static_steps = static_destinations if continuation == "resume_static" else ()
         decision_reason = coarse_reasons[0]

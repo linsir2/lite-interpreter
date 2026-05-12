@@ -52,10 +52,11 @@ def _build_compilation_input(
         artifact_refs: list[str] = []
     else:
         records = []
+        overlay = getattr(execution_data.dynamic, "resume_overlay", None)
         findings = _unique_strings(
             [
-                *[str(item) for item in list(state.get("dynamic_research_findings") or [])],
-                *[str(item) for item in list(execution_data.dynamic.research_findings or [])],
+                *[str(item) for item in list(state.get("dynamic_open_questions") or [])],
+                *[str(item) for item in list(overlay.open_questions if overlay else [])],
             ]
         )
         artifact_refs = _unique_strings(
@@ -63,7 +64,7 @@ def _build_compilation_input(
                 *[str(item) for item in list(state.get("dynamic_artifacts") or [])],
                 *[str(item) for item in list(state.get("dynamic_evidence_refs") or [])],
                 *[str(item) for item in list(execution_data.dynamic.artifacts or [])],
-                *[str(item) for item in list(execution_data.dynamic.evidence_refs or [])],
+                *[str(item) for item in list(overlay.evidence_refs if overlay else [])],
             ]
         )
     return EvidenceCompilationInput(
@@ -114,6 +115,16 @@ def evidence_compiler_node(state: DagGraphState) -> dict[str, Any]:
     if not knowledge_snapshot.workspace_id:
         knowledge_snapshot.workspace_id = str(state.get("workspace_id") or execution_data.workspace_id)
     knowledge_snapshot.hits = _unique_hits(knowledge_snapshot.hits, patch.knowledge_hits)
+
+    # Merge external_knowledge from dynamic resume_overlay (ADR-005 Phase 2)
+    overlay = getattr(execution_data.dynamic, "resume_overlay", None)
+    ek_list: list[dict[str, Any]] = list(getattr(overlay, "external_knowledge", None) or [])
+    if ek_list:
+        knowledge_snapshot.hits = _unique_hits(
+            knowledge_snapshot.hits,
+            [{**ek, "type": f"external_{ek.get('kind', 'finding')}"} for ek in ek_list],
+        )
+
     knowledge_snapshot.evidence_refs = _unique_strings([*knowledge_snapshot.evidence_refs, *patch.evidence_refs])
 
     execution_blackboard.write(tenant_id, task_id, execution_data)

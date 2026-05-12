@@ -1,27 +1,14 @@
-"""Dynamic execution adapters for DeerFlow-backed sub-agents."""
+"""Dynamic execution engine — native exploration loop + trace normalization."""
 
-from src.dynamic_engine.blackboard_context import (
-    DynamicContextEnvelope,
-    build_dynamic_context,
-)
-from src.dynamic_engine.deerflow_bridge import (
-    DeerflowBridge,
-    DeerflowTaskRequest,
-    DeerflowTaskResult,
-)
-from src.dynamic_engine.runtime_backends import get_runtime_manifest, list_runtime_manifests
-from src.dynamic_engine.supervisor import DynamicRunPlan, DynamicSupervisor
+from src.dynamic_engine.dynamic_supervisor import DynamicPlan, DynamicSupervisor
+from src.dynamic_engine.exploration_loop import ExplorationResult, ExplorationStep, run_exploration_loop
 from src.dynamic_engine.trace_normalizer import TraceNormalizer
 
 __all__ = [
-    "DynamicContextEnvelope",
-    "build_dynamic_context",
-    "DynamicRunPlan",
+    "DynamicPlan",
     "DynamicSupervisor",
-    "DeerflowBridge",
-    "DeerflowTaskRequest",
-    "DeerflowTaskResult",
+    "ExplorationResult",
+    "ExplorationStep",
     "TraceNormalizer",
-    "get_runtime_manifest",
-    "list_runtime_manifests",
+    "run_exploration_loop",
 ]

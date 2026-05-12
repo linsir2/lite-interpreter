@@ -114,7 +114,7 @@ class ExecutionEvent(BaseModel):
     source_event_type: str | None = None
     agent_name: str
     step_name: str
-    source: str = "dynamic_swarm"
+    source: str = "dynamic"
     message: str | None = None
     artifact_refs: list[str] = Field(default_factory=list)
     tool_call: dict[str, Any] | None = None
@@ -174,22 +174,24 @@ StrategyFamily = Literal[
 ]
 
 
-ResearchMode = Literal["none", "single_pass", "iterative"]
+class NetworkMode(str, Enum):
+    """How much network access this task needs. Replaces old CapabilityTier.
 
-
-class CapabilityTier(str, Enum):
-    """Capability gradient — how much runtime power the task needs.
-
-    Filled by analyst; router does NOT set this.  Router only decides
-    static_flow vs dynamic_flow at the DAG-entry level; analyst then
-    declares the specific tier and any per-tier skip_static_steps via
-    DynamicResumeOverlay so the DAG can skip nodes without changing topology.
+    Analyst is the sole writer; router uses this only for coarse routing.
     """
 
-    STATIC_ONLY = "static_only"
-    STATIC_WITH_NETWORK = "static_with_network"
-    DYNAMIC_EXPLORATION_THEN_STATIC = "dynamic_exploration_then_static"
-    DYNAMIC_ONLY = "dynamic_only"
+    NONE = "none"         # 纯本地数据，不需联网
+    BOUNDED = "bounded"   # 结构化查询：analyst 指定查询集和域，逐轮填表
+    OPEN = "open"         # 开放探索：LLM 自主决定搜什么、去哪搜、何时停
+
+
+class IterationMode(str, Enum):
+    """How many static-chain passes this task needs."""
+
+    SINGLE_PASS = "single_pass"   # 单次静态链
+    MULTI_ROUND = "multi_round"   # 多轮静态链（analyst 每轮决定是否继续）
+
+
 
 
 class TerminalStatus(str, Enum):
@@ -268,22 +270,33 @@ class TerminalVerdict(BaseModel):
 NodeOutcome = dict[str, Any]  # DAG node function return contract; validated by _run_checkpointed_node
 
 
-def _derive_research_mode(tier: CapabilityTier) -> str:
+def _derive_research_mode(network_mode: NetworkMode) -> str:
     return {
-        CapabilityTier.STATIC_ONLY: "none",
-        CapabilityTier.STATIC_WITH_NETWORK: "single_pass",
-        CapabilityTier.DYNAMIC_EXPLORATION_THEN_STATIC: "iterative",
-        CapabilityTier.DYNAMIC_ONLY: "iterative",
-    }.get(tier, "none")
+        NetworkMode.NONE: "none",
+        NetworkMode.BOUNDED: "single_pass",
+        NetworkMode.OPEN: "iterative",
+    }.get(network_mode, "none")
 
 
-def _derive_execution_intent(tier: CapabilityTier) -> str:
-    return {
-        CapabilityTier.STATIC_ONLY: "static_flow",
-        CapabilityTier.STATIC_WITH_NETWORK: "static_flow",
-        CapabilityTier.DYNAMIC_EXPLORATION_THEN_STATIC: "dynamic_flow",
-        CapabilityTier.DYNAMIC_ONLY: "dynamic_flow",
-    }.get(tier, "static_flow")
+def _derive_execution_intent(network_mode: NetworkMode) -> str:
+    if network_mode == NetworkMode.OPEN:
+        return "dynamic_flow"
+    return "static_flow"
+
+
+class RoundOutput(BaseModel):
+    """executor → analyst inter-round semantic handoff.
+
+    Carries structured conclusions so the next-round analyst doesn't
+    start from scratch.  Writable ONLY by executor_node; read by analyst.
+    """
+
+    round_index: int
+    key_findings: str = ""
+    artifacts_produced: list[str] = Field(default_factory=list)
+    additional_rounds: int = 0
+    requires_dynamic: bool = False
+    termination_reason: str = ""
 
 
 ArtifactCategory = Literal["report", "chart", "export", "diagnostic"]
@@ -316,7 +329,7 @@ class StaticEvidenceRequest(BaseModel):
     """Request envelope for one static evidence collection pass."""
 
     query: str = ""
-    research_mode: ResearchMode = "none"
+    research_mode: str = "none"
     search_queries: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
     allowed_domains: list[str] = Field(default_factory=list)
@@ -352,7 +365,7 @@ class StaticEvidenceBundle(BaseModel):
 class EvidencePlan(BaseModel):
     """Planner-owned specification for one bounded static evidence pass."""
 
-    research_mode: ResearchMode = "none"
+    research_mode: str = "none"
     search_queries: list[str] = Field(default_factory=list)
     urls: list[str] = Field(default_factory=list)
     allowed_capabilities: list[str] = Field(default_factory=list)
@@ -432,7 +445,7 @@ class StaticProgramSpec(BaseModel):
     spec_id: str
     strategy_family: StrategyFamily = "dataset_profile"
     analysis_mode: str = ""
-    research_mode: ResearchMode = "none"
+    research_mode: str = "none"
     steps: list[ComputationStep] = Field(default_factory=list)
     artifact_emits: list[ArtifactEmitSpec] = Field(default_factory=list)
     debug_hints: list[DebugHint] = Field(default_factory=list)
@@ -506,6 +519,7 @@ class DynamicResumeOverlay(BaseModel):
     recommended_static_action: str = ""
     open_questions: list[str] = Field(default_factory=list)
     strategy_family: StrategyFamily | None = None
+    external_knowledge: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -643,17 +657,17 @@ class ExecutionStrategy(BaseModel):
     """Immutable execution-strategy truth source. Analyst is the sole writer.
 
     Analyst-written fields:
-        - capability_tier  — how much runtime power the task needs
-        - fallback_tier    — fallback if the primary tier fails
+        - network_mode     — how much network access needed (NONE/BOUNDED/OPEN)
+        - iteration_mode   — single_pass or multi_round
         - analysis_mode    — what type of analysis (dataset_analysis, etc.)
         - summary          — human-readable plan summary
         - evidence_plan    — external evidence collection spec
 
     Derived fields (@computed_field, never stored):
-        - research_mode      — from capability_tier
+        - research_mode      — from network_mode
         - strategy_family    — from analysis_mode
         - generator_id       — from strategy_family
-        - execution_intent   — from capability_tier
+        - execution_intent   — from network_mode
         - artifact_plan      — from strategy_family
         - verification_plan  — from strategy_family
     """
@@ -661,8 +675,8 @@ class ExecutionStrategy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     # ---- Analyst-written plan fields ----
-    capability_tier: CapabilityTier = CapabilityTier.STATIC_ONLY
-    fallback_tier: CapabilityTier | None = None
+    network_mode: NetworkMode = NetworkMode.NONE
+    iteration_mode: IterationMode = IterationMode.SINGLE_PASS
     analysis_mode: str = ""
     summary: str = ""
     evidence_plan: EvidencePlan = Field(default_factory=EvidencePlan)
@@ -671,7 +685,7 @@ class ExecutionStrategy(BaseModel):
     @computed_field
     @property
     def research_mode(self) -> str:
-        return _derive_research_mode(self.capability_tier)
+        return _derive_research_mode(self.network_mode)
 
     @computed_field
     @property
@@ -686,7 +700,7 @@ class ExecutionStrategy(BaseModel):
     @computed_field
     @property
     def execution_intent(self) -> str:
-        return _derive_execution_intent(self.capability_tier)
+        return _derive_execution_intent(self.network_mode)
 
     @computed_field
     @property
@@ -701,25 +715,18 @@ class ExecutionStrategy(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_old_checkpoint(cls, data: Any) -> Any:
-        """Infer new fields from old stored fields so legacy checkpoints load."""
+        """Strip computed fields and ensure new fields have defaults for old checkpoints."""
         if not isinstance(data, Mapping):
             return data
         d = dict(data)
-        # Strip old stored fields that are now @computed_field
         for key in (
             "research_mode", "strategy_family", "generator_id", "execution_intent",
             "artifact_plan", "verification_plan",
+            "capability_tier", "fallback_tier",  # deleted fields
         ):
             d.pop(key, None)
-        # Infer capability_tier from old research_mode if missing
-        if "capability_tier" not in d or not d.get("capability_tier"):
-            old_rm = str(data.get("research_mode") or "")
-            if old_rm == "iterative":
-                d["capability_tier"] = CapabilityTier.DYNAMIC_ONLY
-            elif old_rm == "single_pass":
-                d["capability_tier"] = CapabilityTier.STATIC_WITH_NETWORK
-            else:
-                d.setdefault("capability_tier", CapabilityTier.STATIC_ONLY)
+        d.setdefault("network_mode", NetworkMode.NONE.value)
+        d.setdefault("iteration_mode", IterationMode.SINGLE_PASS.value)
         return d
 
 

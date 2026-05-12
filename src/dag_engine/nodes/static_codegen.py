@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.common import get_logger
-from src.common.contracts import CapabilityTier, ExecutionStrategy
+from src.common.contracts import ExecutionStrategy
 from src.common.control_plane import ensure_generator_manifest
 from src.compiler.code_compiler import build_codegen_prompt
 from src.dag_engine.nodes.static_codegen_payload import (
@@ -66,14 +66,16 @@ def _validate_code(code: str) -> None:
     compile(code, "<llm_codegen>", "exec")
 
 
-def _select_codegen_model(capability_tier: CapabilityTier) -> str:
-    """Select the appropriate LLM model alias for the capability tier.
+def _select_codegen_model(network_mode) -> str:
+    """Select the appropriate LLM model alias from network mode.
 
-    Simple static analysis (dataset_profile, input_gap_report) can use
-    a faster model; complex or evidence-dependent strategies benefit
-    from a reasoning model.
+    No network or bounded queries can use a fast model;
+    open-ended exploration benefits from a reasoning model.
     """
-    if capability_tier in {CapabilityTier.STATIC_ONLY, CapabilityTier.STATIC_WITH_NETWORK}:
+    from src.common.contracts import NetworkMode
+
+    nm = NetworkMode(network_mode) if isinstance(network_mode, str) else network_mode
+    if nm in {NetworkMode.NONE, NetworkMode.BOUNDED}:
         return "fast_model"
     return "reasoning_model"
 
@@ -106,7 +108,7 @@ def prepare_static_codegen(
         )
         from src.common.llm_client import LiteLLMClient
 
-        model_alias = _select_codegen_model(execution_strategy.capability_tier)
+        model_alias = _select_codegen_model(execution_strategy.network_mode)
         raw_response = LiteLLMClient.chat(
             alias=model_alias,
             messages=[

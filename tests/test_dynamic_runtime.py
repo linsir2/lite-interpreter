@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from src.dynamic_engine.runtime_backends import (
-    build_deerflow_runtime_manifest,
-    get_runtime_manifest,
-    list_runtime_manifests,
+from unittest.mock import patch
+
+from src.common import ExecutionIntent
+from src.dynamic_engine.dynamic_supervisor import DynamicPlan, DynamicSupervisor
+from src.dynamic_engine.exploration_loop import (
+    ExplorationResult,
+    ExplorationStep,
+    _parse_final_answer,
+    _truncate_result,
+    run_exploration_loop,
 )
-from src.dynamic_engine.supervisor import DynamicSupervisor
 from src.dynamic_engine.trace_normalizer import TraceNormalizer
 
 
@@ -23,7 +28,6 @@ def test_dynamic_supervisor_prepares_allowed_run_plan():
         {},
     )
     assert plan.governance_decision.allowed is True
-    assert plan.request is not None
     assert plan.execution_intent.intent == "dynamic_flow"
     assert plan.task_envelope.task_id == "task-supervisor"
 
@@ -47,7 +51,7 @@ def test_dynamic_supervisor_builds_denied_patch_for_unknown_tools():
     assert denied_patch["execution_intent"].intent == "dynamic_flow"
 
 
-def test_dynamic_supervisor_context_prefers_execution_state_snapshot_and_history():
+def test_dynamic_supervisor_context_uses_knowledge_and_decision_log():
     plan = DynamicSupervisor.prepare(
         {
             "tenant_id": "tenant-context",
@@ -57,17 +61,6 @@ def test_dynamic_supervisor_context_prefers_execution_state_snapshot_and_history
             "routing_mode": "dynamic",
         },
         {
-            "task_envelope": {
-                "task_id": "task-context",
-                "tenant_id": "tenant-context",
-                "workspace_id": "ws-context",
-                "input_query": "自己找数据并验证结论",
-                "governance_profile": "reviewer",
-                "allowed_tools": ["knowledge_query"],
-                "redaction_rules": ["foo@example.com"],
-                "max_dynamic_steps": 9,
-                "metadata": {"routing_mode": "dynamic", "runtime_backend": "deerflow"},
-            },
             "knowledge_snapshot": {
                 "rewritten_query": "验证 结论",
                 "evidence_refs": ["chunk-9"],
@@ -87,17 +80,11 @@ def test_dynamic_supervisor_context_prefers_execution_state_snapshot_and_history
         },
     )
 
-    assert plan.context_envelope is not None
-    assert plan.task_envelope.governance_profile == "reviewer"
-    assert plan.task_envelope.allowed_tools == ["knowledge_query"]
-    assert plan.task_envelope.max_dynamic_steps == 9
-    assert plan.context_envelope.knowledge_snapshot["evidence_refs"] == ["chunk-9"]
-    assert plan.context_envelope.memory_snapshot["task_id"] == "task-context"
-    assert len(plan.context_envelope.constraints["decision_log"]) == 2
-    assert plan.context_envelope.constraints["decision_log"][0]["reasons"] == ["previous decision"]
+    assert plan.context is not None
+    assert plan.context["knowledge_snapshot"]["evidence_refs"] == ["chunk-9"]
 
 
-def test_dynamic_supervisor_prefers_router_metadata_over_recomputed_profile():
+def test_dynamic_supervisor_prefers_canonical_task_envelope_fields():
     plan = DynamicSupervisor.prepare(
         {
             "tenant_id": "tenant-runtime-inherit",
@@ -105,37 +92,66 @@ def test_dynamic_supervisor_prefers_router_metadata_over_recomputed_profile():
             "workspace_id": "ws-runtime-inherit",
             "input_query": "分析销售数据并总结趋势",
             "routing_mode": "dynamic",
+            "governance_profile": "reviewer",
+            "max_dynamic_steps": 5,
         },
-        {
-            "execution_intent": {
-                "intent": "dynamic_flow",
-                "destinations": ["dynamic_swarm"],
-                "metadata": {
-                    "analysis_mode": "dynamic_research_analysis",
-                    "evidence_strategy": "external_research",
-                    "effective_model_alias": "reasoning_model",
-                    "effective_tools": ["web_search"],
-                },
-            }
-        },
+        {},
     )
 
-    assert plan.request is not None
-    assert plan.request.metadata["analysis_mode"] == "dynamic_research_analysis"
-    assert plan.request.metadata["evidence_strategy"] == "external_research"
-    assert plan.request.metadata["effective_model_alias"] == "reasoning_model"
+    assert plan.task_envelope.governance_profile == "reviewer"
+    assert plan.task_envelope.max_dynamic_steps == 5
+
+
+def test_dynamic_supervisor_build_context_includes_execution_intent_metadata():
+    task_envelope = plan = DynamicSupervisor.prepare(
+        {
+            "tenant_id": "tenant-meta",
+            "task_id": "task-meta",
+            "workspace_id": "ws-meta",
+            "input_query": "分析销售数据",
+            "routing_mode": "dynamic",
+        },
+        {},
+    ).task_envelope
+
+    from src.harness import GovernanceDecision
+
+    ctx = DynamicSupervisor.build_context(
+        state={
+            "tenant_id": "tenant-meta",
+            "task_id": "task-meta",
+            "workspace_id": "ws-meta",
+            "input_query": "分析销售数据",
+        },
+        execution_state={},
+        task_envelope=task_envelope,
+        governance_decision=GovernanceDecision(
+            action="dynamic",
+            profile="reviewer",
+            mode="standard",
+            allowed=True,
+            risk_level="low",
+            risk_score=0.1,
+            reasons=["test"],
+            allowed_tools=["knowledge_query"],
+        ),
+    )
+
+    assert ctx["runtime_backend"] == "native"
+    assert ctx["routing_mode"] == "dynamic"
+    assert "knowledge_query" in ctx["allowed_tools"]
 
 
 def test_trace_normalizer_enriches_runtime_event():
     normalized = TraceNormalizer.normalize_runtime_event(
         {
-            "agent_name": "deerflow",
+            "agent_name": "exploration",
             "step_name": "research",
             "event_type": "completed",
             "payload": {"foo": "bar"},
         }
     )
-    assert normalized["source"] == "dynamic_swarm"
+    assert normalized["source"] == "dynamic"
     assert normalized["step_name"] == "research"
     assert normalized["payload"]["foo"] == "bar"
     assert normalized["event_type"] == "progress"
@@ -145,7 +161,7 @@ def test_trace_normalizer_enriches_runtime_event():
 def test_trace_normalizer_maps_ai_message_and_artifact_events_to_v2():
     text_event = TraceNormalizer.normalize_runtime_event(
         {
-            "agent_name": "deerflow",
+            "agent_name": "exploration",
             "step_name": "answer",
             "event_type": "messages-tuple",
             "payload": {"type": "ai", "content": "hello"},
@@ -153,7 +169,7 @@ def test_trace_normalizer_maps_ai_message_and_artifact_events_to_v2():
     )
     artifact_event = TraceNormalizer.normalize_runtime_event(
         {
-            "agent_name": "deerflow",
+            "agent_name": "exploration",
             "step_name": "artifact_step",
             "event_type": "values",
             "payload": {"artifacts": [{"path": "/tmp/report.md"}]},
@@ -169,7 +185,7 @@ def test_trace_normalizer_maps_ai_message_and_artifact_events_to_v2():
 def test_trace_normalizer_maps_tool_call_payloads_to_v2():
     start_event = TraceNormalizer.normalize_runtime_event(
         {
-            "agent_name": "deerflow",
+            "agent_name": "exploration",
             "step_name": "search_start",
             "event_type": "values",
             "payload": {"tool_name": "web_search", "tool_call_id": "call-1", "arguments": {"q": "lite interpreter"}},
@@ -177,7 +193,7 @@ def test_trace_normalizer_maps_tool_call_payloads_to_v2():
     )
     result_event = TraceNormalizer.normalize_runtime_event(
         {
-            "agent_name": "deerflow",
+            "agent_name": "exploration",
             "step_name": "search_result",
             "event_type": "values",
             "payload": {
@@ -194,19 +210,228 @@ def test_trace_normalizer_maps_tool_call_payloads_to_v2():
     assert result_event["event_type"] == "tool_result"
     assert result_event["tool_call"]["result"]["items"] == 3
 
-def test_deerflow_runtime_manifest_describes_capabilities():
-    manifest = build_deerflow_runtime_manifest(max_steps=8)
-    assert manifest.runtime_id == "deerflow"
-    assert "sidecar" in manifest.runtime_modes
-    assert any(domain.domain_id == "research" and domain.supported for domain in manifest.domains)
-    sandbox_domain = next(domain for domain in manifest.domains if domain.domain_id == "sandbox_execution")
-    assert sandbox_domain.supported is False
-    assert "max_steps=8" in manifest.limitations[0]
+
+def test_exploration_result_parses_final_answer_sections():
+    content = """### Summary
+Research complete — found relevant data.
+
+### Open Questions
+- Question one remains
+- Question two outstanding
+
+### Next Steps
+analyst, coder
+
+### Evidence References
+- https://example.com/report
+- https://data.gov/stats
+"""
+    structured = _parse_final_answer(content, "resume_static")
+    assert structured["open_questions"] == ["Question one remains", "Question two outstanding"]
+    assert structured["next_static_steps"] == ["analyst", "coder"]
+    assert structured["evidence_refs"] == ["https://example.com/report", "https://data.gov/stats"]
+    assert structured["continuation"] == "resume_static"
 
 
-def test_runtime_manifest_helpers_expose_deerflow_only():
-    listed = list_runtime_manifests()
-    assert listed
-    assert listed[0].runtime_id == "deerflow"
-    manifest = get_runtime_manifest("deerflow")
-    assert manifest.runtime_id == "deerflow"
+def test_exploration_result_parses_empty_sections():
+    content = """### Summary
+Nothing found.
+"""
+    structured = _parse_final_answer(content, "finish")
+    assert structured["open_questions"] == []
+    assert structured["next_static_steps"] == []
+    assert structured["evidence_refs"] == []
+
+
+def test_truncate_result_handles_none():
+    assert _truncate_result(None) == "(no result)"
+
+
+def test_truncate_result_handles_long_output():
+    long_text = "x" * 3000
+    result = _truncate_result({"text": long_text})
+    assert len(result) <= 2500
+    assert "[truncated" in result
+
+
+def test_exploration_step_records_tool_results():
+    step = ExplorationStep(
+        step_index=0,
+        tool_name="web_search",
+        tool_args={"query": "test"},
+        tool_result_summary="Found 3 results",
+        success=True,
+    )
+    assert step.step_index == 0
+    assert step.tool_name == "web_search"
+    assert step.success is True
+
+
+def test_exploration_result_to_state_patch_includes_overlay_fields():
+    result = ExplorationResult(
+        summary="Test summary",
+        continuation="finish",
+        next_static_steps=["coder"],
+        evidence_refs=["https://example.com"],
+        open_questions=["Unresolved question"],
+        suggested_static_actions=["generate report"],
+    )
+    patch = result.to_state_patch()
+    assert patch["dynamic_status"] == "completed"
+    assert patch["dynamic_summary"] == "Test summary"
+    assert patch["dynamic_continuation"] == "finish"
+    assert "dynamic_resume_overlay" in patch
+
+
+def test_exploration_loop_no_tools_available_returns_early():
+    result = run_exploration_loop(
+        query="test query",
+        context={},
+        allowed_tools=["nonexistent_tool"],
+        max_steps=1,
+    )
+    assert result.summary == "No exploration tools available for this task."
+    assert result.continuation == "finish"
+
+
+def test_exploration_loop_llm_unavailable_returns_gracefully(monkeypatch):
+    def fake_completion(**kwargs):
+        raise ConnectionError("LLM unavailable")
+
+    monkeypatch.setattr(
+        "src.common.llm_client.LiteLLMClient.completion",
+        fake_completion,
+    )
+
+    # Mock MCP server at the source to provide tools
+    def fake_list_tools():
+        return [{"name": "web_search", "description": "Search the web"}]
+
+    monkeypatch.setattr(
+        "src.mcp_gateway.mcp_server.default_mcp_server",
+        type("FakeMCPServer", (), {"list_tools": staticmethod(fake_list_tools)})(),
+    )
+
+    result = run_exploration_loop(
+        query="test query",
+        context={},
+        allowed_tools=[],
+        max_steps=3,
+    )
+    assert "LLM unavailable" in result.summary
+    assert len(result.trace_events) == 1
+    assert result.trace_events[0]["event_type"] == "error"
+
+
+def test_exploration_loop_llm_returns_final_answer_without_tool_calls(monkeypatch):
+    def fake_completion(**kwargs):
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": """### Summary
+All done.
+### Open Questions
+### Next Steps
+none
+### Evidence References
+""",
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "src.common.llm_client.LiteLLMClient.completion",
+        fake_completion,
+    )
+
+    def fake_list_tools():
+        return [{"name": "web_search", "description": "Search the web"}]
+
+    monkeypatch.setattr(
+        "src.mcp_gateway.mcp_server.default_mcp_server",
+        type("FakeMCPServer", (), {"list_tools": staticmethod(fake_list_tools)})(),
+    )
+
+    result = run_exploration_loop(
+        query="test query",
+        context={},
+        allowed_tools=[],
+        max_steps=3,
+    )
+    assert "All done" in result.summary
+    assert len(result.steps) == 0  # No tool calls
+
+
+def test_exploration_loop_step_budget_exhausted_forces_summary(monkeypatch):
+    call_count = {"count": 0}
+
+    def fake_completion(**kwargs):
+        call_count["count"] += 1
+        if call_count["count"] <= 2:  # two calls → two tool-call rounds
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Let me search.",
+                            "tool_calls": [
+                                {
+                                    "id": f"call-{call_count['count']}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "web_search",
+                                        "arguments": '{"query": "test"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        # Third call (budget exhausted) → summary
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "### Summary\nBudget exhausted, here is what I found.\n",
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "src.common.llm_client.LiteLLMClient.completion",
+        fake_completion,
+    )
+
+    def fake_list_tools():
+        return [{"name": "web_search", "description": "Search the web"}]
+
+    def fake_call_tool(name, arguments=None, context=None):
+        return {"items": [{"title": "result", "snippet": "data"}]}
+
+    monkeypatch.setattr(
+        "src.mcp_gateway.mcp_server.default_mcp_server",
+        type(
+            "FakeMCPServer",
+            (),
+            {
+                "list_tools": staticmethod(fake_list_tools),
+                "call_tool": staticmethod(fake_call_tool),
+            },
+        )(),
+    )
+
+    result = run_exploration_loop(
+        query="test query",
+        context={},
+        allowed_tools=[],
+        max_steps=2,
+    )
+    assert "Budget exhausted" in result.summary
+    assert len(result.steps) == 2
+    assert result.trace_events[-1]["budget_exhausted"] is True

@@ -56,7 +56,7 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         description="External research style tasks should escalate to the bounded dynamic node.",
         query="帮我分析这份财报，并结合宏观经济数据自己找资料做 benchmark 后给出判断",
         expected_intent="dynamic_flow",
-        expected_route="dynamic_swarm",
+        expected_route="dynamic",
     ),
     EvalCase(
         case_id="route_need_inputs",
@@ -80,7 +80,7 @@ SEED_EVAL_CASES: tuple[EvalCase, ...] = (
         description="Queries with external-domain signals (合规) and no local data route to dynamic.",
         query="请说明审批口径和合规规则",
         expected_intent="dynamic_flow",
-        expected_route="dynamic_swarm",
+        expected_route="dynamic",
     ),
     EvalCase(
         case_id="route_hybrid_with_known_rules",

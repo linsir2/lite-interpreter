@@ -440,16 +440,13 @@ def test_execute_task_flow_reuses_completed_node_checkpoints():
             workspace_id="ws-checkpoint",
             control={
                 "node_checkpoints": {
-                    "router": {
-                        "status": "completed",
-                        "output_patch": {
-                            "next_actions": ["analyst"],
-                            "execution_intent": {"intent": "static_flow", "destinations": ["analyst"]},
-                        },
-                    },
-                    "analyst": {
+                    "analyst:r0": {
                         "status": "completed",
                         "output_patch": {"execution_strategy": {}, "next_actions": ["coder"]},
+                    },
+                    "coder:r0": {
+                        "status": "completed",
+                        "output_patch": {"generated_code": "print('ok')"},
                     },
                 }
             },
@@ -457,8 +454,8 @@ def test_execute_task_flow_reuses_completed_node_checkpoints():
     )
     execution_blackboard.persist(tenant_id, task_id)
 
-    router = Mock(side_effect=AssertionError("router should not rerun"))
     analyst = Mock(side_effect=AssertionError("analyst should not rerun"))
+    coder = Mock(side_effect=AssertionError("coder should not rerun"))
 
     result = execute_task_flow(
         {
@@ -468,24 +465,34 @@ def test_execute_task_flow_reuses_completed_node_checkpoints():
             "input_query": "继续执行",
         },
         nodes={
-            "router": router,
-            "dynamic_swarm": lambda state: {},
+            "dynamic": lambda state: {},
             "skill_harvester": lambda state: {},
             "summarizer": lambda state: {"final_response": {"mode": "static"}},
             "data_inspector": lambda state: {},
             "kag_retriever": lambda state: {},
             "context_builder": lambda state: {},
             "analyst": analyst,
-            "coder": lambda state: {"generated_code": "print('ok')", "next_actions": ["auditor"]},
-            "auditor": lambda state: {"audit_result": {"safe": True}, "next_actions": ["skill_harvester"]},
+            "coder": coder,
+            "auditor": lambda state: {"next_actions": ["executor"]},
             "debugger": lambda state: {},
-            "executor": lambda state: {},
+            "executor": lambda state: {
+                "execution_record": {
+                    "session_id": "sess-checkpoint",
+                    "tenant_id": tenant_id,
+                    "workspace_id": "ws-checkpoint",
+                    "task_id": task_id,
+                    "trace_id": "trace-checkpoint",
+                    "duration_seconds": 0.1,
+                    "success": True,
+                    "output": "ok",
+                }
+            },
         },
     )
 
     assert result["terminal_status"] == "success"
-    assert router.call_count == 0
     assert analyst.call_count == 0
+    assert coder.call_count == 0
 
 
 def test_execute_task_flow_stops_when_task_lease_is_lost(monkeypatch):
@@ -505,7 +512,7 @@ def test_execute_task_flow_stops_when_task_lease_is_lost(monkeypatch):
         },
         nodes={
             "router": router,
-            "dynamic_swarm": lambda state: {},
+            "dynamic": lambda state: {},
             "skill_harvester": lambda state: {},
             "summarizer": lambda state: {"final_response": {"mode": "static"}},
             "data_inspector": lambda state: {},
@@ -538,8 +545,8 @@ def test_execute_task_flow_fails_when_task_lease_status_is_unknown(monkeypatch):
             "lease_owner_id": "owner-a",
         },
         nodes={
-            "router": lambda state: {"next_actions": ["dynamic_swarm"]},
-            "dynamic_swarm": lambda state: {"dynamic_status": "completed", "dynamic_summary": "ok"},
+            "router": lambda state: {"next_actions": ["dynamic"]},
+            "dynamic": lambda state: {"dynamic_status": "completed", "dynamic_summary": "ok"},
             "skill_harvester": lambda state: {},
             "summarizer": lambda state: {"final_response": {"mode": "dynamic"}},
             "data_inspector": lambda state: {},

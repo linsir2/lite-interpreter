@@ -97,7 +97,7 @@ class HarnessGovernor:
 
         risk_level = "high" if risk_score >= high_threshold else "medium" if risk_score >= 0.35 else "low"
         return GovernanceDecision(
-            action="dynamic_swarm",
+            action="dynamic",
             profile=profile_name,
             mode=mode,
             allowed=allowed,

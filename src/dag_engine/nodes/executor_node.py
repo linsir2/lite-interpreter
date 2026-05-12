@@ -9,7 +9,7 @@ from src.blackboard.execution_blackboard import execution_blackboard
 from src.blackboard.global_blackboard import global_blackboard
 from src.blackboard.schema import GlobalStatus
 from src.common import get_logger
-from src.common.contracts import ExecutionRecord
+from src.common.contracts import ExecutionRecord, IterationMode
 from src.common.control_plane import ensure_execution_strategy
 from src.common.task_lease_runtime import ensure_task_lease_owned
 from src.dag_engine.graphstate import DagGraphState
@@ -68,9 +68,20 @@ def executor_node(state: DagGraphState) -> dict[str, Any]:
     task_id = state["task_id"]
 
     exec_data = execution_blackboard.read(tenant_id, task_id)
+    round_idx = int(state.get("round_index", 0))
     if not exec_data or not exec_data.static.generated_code:
         logger.warning(f"[Executor] 任务 {task_id} 没有可执行代码")
-        return {"next_actions": ["skill_harvester"], "execution_record": None}
+        return {
+            "execution_record": None,
+            "round_output": {
+                "round_index": round_idx,
+                "key_findings": "",
+                "artifacts_produced": [],
+                "additional_rounds": 0,
+                "requires_dynamic": False,
+                "termination_reason": "no_generated_code",
+            },
+        }
     prepared = _prepare_execution_run(state, exec_data)
 
     ensure_task_lease_owned(task_id, prepared.lease_owner_id)
@@ -108,18 +119,29 @@ def executor_node(state: DagGraphState) -> dict[str, Any]:
     execution_blackboard.write(tenant_id, task_id, exec_data)
     execution_blackboard.persist(tenant_id, task_id)
 
-    if not artifact_verification.passed:
+    is_multi_round = execution_strategy.iteration_mode == IterationMode.MULTI_ROUND
+    passed = artifact_verification.passed
+    round_output = {
+        "round_index": round_idx,
+        "key_findings": (getattr(execution_record, "summary", None) or execution_record.output) if execution_record else "",
+        "artifacts_produced": list(artifact_verification.verified_artifact_keys) if passed else [],
+        "additional_rounds": 1 if is_multi_round and passed else 0,
+        "requires_dynamic": False,
+        "termination_reason": "" if passed else "verification_failed",
+    }
+
+    if not passed:
         exec_data.static.latest_error_traceback = "; ".join(artifact_verification.failure_reasons)
         execution_blackboard.write(tenant_id, task_id, exec_data)
         execution_blackboard.persist(tenant_id, task_id)
         return {
             "execution_record": execution_record.model_dump(mode="json") if execution_record else None,
             "artifact_verification": artifact_verification.model_dump(mode="json"),
-            "next_actions": ["debugger"],
+            "round_output": round_output,
         }
 
     return {
         "execution_record": execution_record.model_dump(mode="json") if execution_record else None,
         "artifact_verification": artifact_verification.model_dump(mode="json"),
-        "next_actions": ["skill_harvester"],
+        "round_output": round_output,
     }

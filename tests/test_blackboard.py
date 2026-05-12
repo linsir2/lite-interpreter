@@ -224,6 +224,7 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
         static={
             "execution_strategy": {
                 "analysis_mode": "hybrid_analysis",
+                "network_mode": "bounded",
                 "research_mode": "single_pass",
                 "strategy_family": "hybrid_reconciliation",
                 "generator_id": "hybrid_reconciliation_generator",
@@ -290,6 +291,7 @@ def test_execution_data_coerces_strategy_and_artifact_contract_fields():
     )
     assert execution.static.execution_strategy is not None
     assert execution.static.execution_strategy.strategy_family == "hybrid_reconciliation"
+    assert execution.static.execution_strategy.network_mode.value == "bounded"
     assert execution.static.execution_strategy.research_mode == "single_pass"
     assert execution.static.execution_strategy.evidence_plan.search_queries == ["行业平均增速"]
     assert execution.static.program_spec is not None
